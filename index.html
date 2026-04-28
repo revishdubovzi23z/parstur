@@ -304,11 +304,17 @@
 
                             <!-- 2.0 REPROCESS -->
                             <div class="relative group">
-                                <button @click="startFix('reprocess_db')" :disabled="statuses.reprocess === 'running'" 
-                                        :class="['w-full text-left px-4 py-3 rounded-xl font-bold text-sm transition-all shadow-md', statuses.reprocess === 'running' ? 'bg-emerald-600 text-white animate-pulse shadow-emerald-200' : 'bg-slate-100 text-slate-700 hover:bg-slate-200']">
-                                    ♻️ 2.0 ОБНОВЛЕНИЕ БАЗЫ
-                                    <span v-if="statuses.reprocess === 'running'" class="block text-[9px] opacity-70">ПРОЦЕСС ИДЕТ...</span>
-                                </button>
+                                <div class="flex flex-col gap-1">
+                                    <button @click="startFix('reprocess_db')" :disabled="statuses.reprocess === 'running'" 
+                                            :class="['w-full text-left px-4 py-3 rounded-xl font-bold text-sm transition-all shadow-md', statuses.reprocess === 'running' ? 'bg-emerald-600 text-white animate-pulse shadow-emerald-200' : 'bg-slate-100 text-slate-700 hover:bg-slate-200']">
+                                        ♻️ 2.0 ОБНОВЛЕНИЕ БАЗЫ
+                                        <span v-if="statuses.reprocess === 'running'" class="block text-[9px] opacity-70">ПРОЦЕСС ИДЕТ...</span>
+                                    </button>
+                                    <label class="flex items-center gap-2 px-2 py-1 cursor-pointer group/label">
+                                        <input type="checkbox" v-model="recheckAll" class="w-3 h-3 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500">
+                                        <span class="text-[10px] font-bold text-slate-500 group-hover/label:text-slate-700 transition-colors uppercase tracking-tighter">Включить проверенные</span>
+                                    </label>
+                                </div>
                                 <button v-if="statuses.reprocess === 'running'" @click="stopProcess('reprocess')" 
                                         class="absolute right-2 top-2 bg-red-500 hover:bg-red-600 text-white w-8 h-8 rounded-lg flex items-center justify-center text-xs shadow-lg transition-transform hover:scale-110">✕</button>
                             </div>
@@ -359,16 +365,7 @@
                                         class="absolute right-2 top-2 bg-red-500 hover:bg-red-600 text-white w-8 h-8 rounded-lg flex items-center justify-center text-xs shadow-lg transition-transform hover:scale-110">✕</button>
                             </div>
 
-                            <!-- 2.4 FIX TITLES -->
-                            <div class="relative group">
-                                <button @click="startFixTitles" :disabled="statuses.fix_titles === 'running'" 
-                                        :class="['w-full text-left px-4 py-3 rounded-xl font-bold text-sm transition-all shadow-md', statuses.fix_titles === 'running' ? 'bg-amber-600 text-white animate-pulse shadow-amber-200' : 'bg-slate-100 text-slate-700 hover:bg-slate-200']">
-                                    🔧 2.4 ВОССТАНОВИТЬ ИМЕНА
-                                    <span v-if="statuses.fix_titles === 'running'" class="block text-[9px] opacity-70">ПРОЦЕСС ИДЕТ...</span>
-                                </button>
-                                <button v-if="statuses.fix_titles === 'running'" @click="stopProcess('fix_titles')" 
-                                        class="absolute right-2 top-2 bg-red-500 hover:bg-red-600 text-white w-8 h-8 rounded-lg flex items-center justify-center text-xs shadow-lg transition-transform hover:scale-110">✕</button>
-                            </div>
+
                         </div>
 
                         <div class="relative group mt-2">
@@ -527,13 +524,14 @@
                     syncLogs: '', selectedLogType: 'reprocess',
                     syncMinYear: 2023, syncMaxYear: 2026,
                     syncMinDate: '',
+                    recheckAll: false,
                     collections: [], selectedCollectionId: null,
                     showCollectionsList: localStorage.getItem('showCollectionsList') === 'false' ? false : true,
                     showAddCollection: false, newCollectionName: '',
                     sortableInstance: null,
                     activeCollectionMenuId: null, itemCollections: {},
-                    logTypes: { 'reprocess': 'Обновление', 'video': 'Видео', 'other': 'Остальное', 'fix': 'Поиск', 'rezka': 'Rezka', 'user': 'CSV', 'cleanup': 'Чистка', 'fix_titles': 'Имена' },
-                    statuses: { sync_video: 'idle', sync_other: 'idle', reprocess: 'idle', poiskkino: 'idle', rezka: 'idle', user: 'idle', cleanup: 'idle', fix_titles: 'idle' },
+                    logTypes: { 'reprocess': 'Обновление', 'video': 'Видео', 'other': 'Остальное', 'fix': 'Поиск', 'rezka': 'Rezka', 'user': 'CSV', 'cleanup': 'Чистка' },
+                    statuses: { sync_video: 'idle', sync_other: 'idle', reprocess: 'idle', poiskkino: 'idle', rezka: 'idle', user: 'idle', cleanup: 'idle' },
                     userSelectedLog: false,
                     hideWatched: localStorage.getItem('hideWatched') === 'true',
                     hideCollected: localStorage.getItem('hideCollected') === 'true',
@@ -543,11 +541,11 @@
             },
             computed: {
                 currentLogFilename() {
-                    const maps = { 'reprocess': 'reprocess_log.txt', 'video': 'sync_video_log.txt', 'other': 'sync_other_log.txt', 'fix': 'fix_log.txt', 'rezka': 'sync_rezka_log.txt', 'user': 'user_sync_log.txt', 'cleanup': 'cleanup_log.txt', 'fix_titles': 'fix_titles_log.txt' };
+                    const maps = { 'reprocess': 'reprocess_log.txt', 'video': 'sync_video_log.txt', 'other': 'sync_other_log.txt', 'fix': 'fix_log.txt', 'rezka': 'sync_rezka_log.txt', 'user': 'user_sync_log.txt', 'cleanup': 'cleanup_log.txt' };
                     return maps[this.selectedLogType] || 'log.txt';
                 },
                 currentStatusKey() {
-                    const maps = { 'video': 'sync_video', 'other': 'sync_other', 'reprocess': 'reprocess', 'fix': 'poiskkino', 'rezka': 'rezka', 'user': 'user', 'cleanup': 'cleanup', 'fix_titles': 'fix_titles' };
+                    const maps = { 'video': 'sync_video', 'other': 'sync_other', 'reprocess': 'reprocess', 'fix': 'poiskkino', 'rezka': 'rezka', 'user': 'user', 'cleanup': 'cleanup' };
                     return maps[this.selectedLogType] || '';
                 }
             },
@@ -868,6 +866,7 @@
                 },
                 async startFix(type) {
                     let url = '/api/start_reprocess';
+                    if (type === 'reprocess_db' && this.recheckAll) url += '?force=true';
                     if (type === 'poiskkino') url = '/api/start_fix_poisk';
                     if (type === 'legacy') url = '/api/start_fix';
                     this.syncLogs = 'Запуск...';
@@ -886,14 +885,7 @@
                         this.startLogPolling();
                     } catch (e) { alert("Ошибка запуска синхронизации Rezka"); }
                 },
-                async startFixTitles() {
-                    try {
-                        await fetch('/api/start_fix_titles', { method: 'POST' });
-                        this.showLogs = true;
-                        this.switchLog('fix_titles');
-                        this.startLogPolling();
-                    } catch (e) { alert("Ошибка запуска восстановления имен"); }
-                },
+
                 async stopProcess(key) { 
                     try {
                         await fetch(`/api/stop/${key}`, { method: 'POST' });

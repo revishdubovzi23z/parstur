@@ -17,6 +17,45 @@ class KinopoiskClient:
         }
         self.is_limited = False # Флаг превышения лимита на сегодня
 
+    def get_by_id(self, kp_id):
+        """
+        Получает данные фильма по ID Кинопоиска (через /v2.2/films/{id})
+        """
+        if self.is_limited or not self.api_key:
+            return None
+
+        url = f"{self.base_url}/v2.2/films/{kp_id}"
+        
+        try:
+            time.sleep(0.3)
+            response = requests.get(url, headers=self.headers, timeout=20)
+            
+            if response.status_code == 402:
+                self.is_limited = True
+                return None
+
+            if response.status_code == 429:
+                time.sleep(5)
+                return self.get_by_id(kp_id)
+
+            response.raise_for_status()
+            result = response.json()
+            
+            if result:
+                return {
+                    "kp_rating": float(result.get("ratingKinopoisk", 0) or 0.0),
+                    "imdb_rating": float(result.get("ratingImdb", 0) or 0.0),
+                    "poster_url": result.get("posterUrlPreview", ""),
+                    "description": result.get("description", "") or result.get("shortDescription", ""),
+                    "release_date": str(result.get("year", "")),
+                    "title": result.get("nameRu", "") or result.get("nameEn", ""),
+                    "imdb_id": result.get("imdbId", "")
+                }
+        except Exception as e:
+            print(f"Ошибка Kinopoisk Tech get_by_id ({kp_id}): {e}")
+            
+        return None
+
     def search_movie(self, title, year=None, max_retries=3):
         """
         Ищет фильм/сериал по названию и году.

@@ -88,7 +88,7 @@ def merge_duplicates():
     merged_total = 0
     
     # --- Функция для слияния списка дубликатов ---
-    def do_merge(items_to_merge):
+    def do_merge(items_to_merge, reason):
         nonlocal merged_total
         if len(items_to_merge) < 2: return
         
@@ -99,12 +99,23 @@ def merge_duplicates():
         
         if master_id in merged_ids: return # Уже был поглощен или стал мастером
 
+        from difflib import SequenceMatcher
+        
         for i in range(1, len(items_to_merge)):
             dup = items_to_merge[i]
             dup_id = dup['id']
             if dup_id == master_id or dup_id in merged_ids: continue
             
-            print(f"  [СЛИЯНИЕ] '{dup['title']}' ({dup['year']}) -> '{master['title']}' ({master['year']})")
+            # Проверка на схожесть названий (если слияние не по жестким ID)
+            if reason not in ["Kinopoisk ID", "IMDb ID"]:
+                t1 = clean_t(master['title'])
+                t2 = clean_t(dup['title'])
+                similarity = SequenceMatcher(None, t1, t2).ratio()
+                if similarity < 0.6:
+                    # Слишком разные названия, пропускаем
+                    continue
+
+            print(f"  [СЛИЯНИЕ ({reason})] '{dup['title']}' ({dup['year']}) -> '{master['title']}' ({master['year']})")
             
             # 1. Переносим раздачи
             cursor.execute("UPDATE releases SET item_id = ? WHERE item_id = ?", (master_id, dup_id))
@@ -127,15 +138,15 @@ def merge_duplicates():
     # Сначала сливаем по жестким ID (это 100% дубликаты)
     print("--- Поиск по Kinopoisk ID ---")
     for kp, items in kp_groups.items():
-        do_merge(items)
+        do_merge(items, "Kinopoisk ID")
         
     print("--- Поиск по IMDb ID ---")
     for imdb, items in imdb_groups.items():
-        do_merge(items)
+        do_merge(items, "IMDb ID")
         
     print("--- Поиск по Rezka URL ---")
     for url, items in rezka_groups.items():
-        do_merge(items)
+        do_merge(items, "Rezka URL")
 
     # Затем по названию и году (как раньше)
     print("--- Поиск по названию и году ---")
@@ -164,7 +175,7 @@ def merge_duplicates():
         
         for master, duplicates in master_list:
             if duplicates:
-                do_merge([master] + duplicates)
+                do_merge([master] + duplicates, "Название/Год")
 
     conn.commit()
     conn.close()
@@ -174,3 +185,4 @@ def merge_duplicates():
 
 if __name__ == "__main__":
     merge_duplicates()
+

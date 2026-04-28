@@ -15,9 +15,11 @@ class TMDBClient:
         self.headers = {
             "accept": "application/json"
         }
+        self.is_limited = False
 
     def get_external_ids(self, media_type, tmdb_id):
         """Получает внешние ID (IMDb) для объекта"""
+        if self.is_limited: return None
         url = f"{self.base_url}/{media_type}/{tmdb_id}/external_ids"
         params = {"api_key": self.api_key}
         try:
@@ -31,7 +33,7 @@ class TMDBClient:
 
     def find_by_imdb_id(self, imdb_id):
         """Находит объект в TMDB по IMDb ID"""
-        if not imdb_id: return None
+        if not imdb_id or self.is_limited: return None
         url = f"{self.base_url}/find/{imdb_id}"
         params = {
             "api_key": self.api_key,
@@ -40,9 +42,12 @@ class TMDBClient:
         }
         try:
             time.sleep(0.1)
-            resp = requests.get(url, params=params, timeout=10)
-            if resp.status_code == 200:
-                data = resp.json()
+            response = requests.get(url, params=params, timeout=10)
+            if response.status_code in [401, 403]:
+                self.is_limited = True
+                return None
+            if response.status_code == 200:
+                data = response.json()
                 # find возвращает списки: movie_results, tv_results и т.д.
                 results = data.get("movie_results") or data.get("tv_results") or []
                 if results:
@@ -64,7 +69,7 @@ class TMDBClient:
         return None
 
     def search_movie(self, title, year=None, max_retries=3):
-        if not self.api_key or self.api_key == "ТВОЙ_КЛЮЧ_СЮДА":
+        if not self.api_key or self.api_key == "ТВОЙ_КЛЮЧ_СЮДА" or self.is_limited:
             print("ВНИМАНИЕ: Ключ TMDB не установлен!")
             return None
 

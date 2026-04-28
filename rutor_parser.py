@@ -24,7 +24,7 @@ class RutorParser:
         year_str = f" ({year_match.group(1)})" if year_match else ""
         
         # Отсекаем всё, что начинается с технических тегов качества
-        t = re.split(r'SATRip|Web-DL|WEBRip|WEB-Rip|BDRip|BDRemux|HDTV|Rip|1080p|720p|4K|8K|HDR|SDR|UHD|HEVC|AVC|MVO|DUB|VO|от\s+|\|', t, flags=re.IGNORECASE)[0]
+        t = re.split(r'SATRip|Web-DL|WEBRip|WEB-Rip|BDRip|BDRemux|HDTV|Rip|1080p|720p|4K|8K|HDR|SDR|UHD|HEVC|AVC|MVO|DUB|VO|\|', t, flags=re.IGNORECASE)[0]
         
         # Убираем лишние скобки
         t = re.sub(r'\(.*?\)|\[.*?\]', '', t).strip()

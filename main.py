@@ -32,8 +32,8 @@ def get_icon():
 
 
 # Состояние процессов: храним реальные объекты Popen
-running_processes = {"sync": None, "fix": None, "user": None, "cleanup": None, "rezka": None, "fix_titles": None}
-process_status = {"sync": "idle", "fix": "idle", "user": "idle", "cleanup": "idle", "rezka": "idle", "fix_titles": "idle"}
+running_processes = {"sync": None, "fix": None, "user": None, "cleanup": None, "rezka": None}
+process_status = {"sync": "idle", "fix": "idle", "user": "idle", "cleanup": "idle", "rezka": "idle"}
 
 
 def run_script(script_name, status_key):
@@ -156,16 +156,7 @@ def start_sync_rezka(background_tasks: BackgroundTasks):
     return {"status": "started"}
 
 
-@app.post("/api/start_fix_titles")
-def start_fix_titles(background_tasks: BackgroundTasks):
-    from datetime import datetime
-    log_file = "fix_titles_log.txt"
-    with open(log_file, "w", encoding="utf-8") as f:
-        f.write(f"=== Запуск исправления названий ({datetime.now().strftime('%H:%M:%S')}) ===\n")
-    background_tasks.add_task(
-        run_script, "fix_corrupted_titles.py", "fix_titles"
-    )
-    return {"status": "started"}
+
 
 
 @app.post("/api/start_cleanup")
@@ -232,7 +223,7 @@ def start_fix_poisk(background_tasks: BackgroundTasks):
 
 
 @app.post("/api/start_reprocess")
-def start_reprocess(background_tasks: BackgroundTasks):
+def start_reprocess(background_tasks: BackgroundTasks, force: bool = False):
     from datetime import datetime
 
     log_file = "reprocess_log.txt"
@@ -240,8 +231,13 @@ def start_reprocess(background_tasks: BackgroundTasks):
         f.write(
             f"=== Полное обновление базы {datetime.now().strftime('%H:%M:%S')} ===\n"
         )
+    
+    args = []
+    if force:
+        args.append("--force")
+        
     background_tasks.add_task(
-        run_script_with_args, "reprocess_database.py", [], "reprocess", log_file
+        run_script_with_args, "reprocess_database.py", args, "reprocess", log_file
     )
     return {"status": "started"}
 
@@ -803,7 +799,6 @@ def get_sync_log(log_type: str = "video"):
         "reprocess": "reprocess_log.txt",
         "cleanup": "cleanup_log.txt",
         "rezka": "sync_rezka_log.txt",
-        "fix_titles": "fix_titles_log.txt",
     }
     filename = log_files.get(log_type, "sync_video_log.txt")
 
@@ -827,7 +822,6 @@ def download_log(log_type: str = "video"):
         "reprocess": "reprocess_log.txt",
         "cleanup": "cleanup_log.txt",
         "rezka": "sync_rezka_log.txt",
-        "fix_titles": "fix_titles_log.txt",
     }
     filename = log_files.get(log_type, "sync_video_log.txt")
     if os.path.exists(filename):
@@ -845,7 +839,6 @@ def clear_log(log_type: str = "video"):
         "reprocess": "reprocess_log.txt",
         "cleanup": "cleanup_log.txt",
         "rezka": "sync_rezka_log.txt",
-        "fix_titles": "fix_titles_log.txt",
     }
     filename = log_files.get(log_type, "sync_video_log.txt")
     try:

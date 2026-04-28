@@ -62,7 +62,7 @@ def fix_metadata(api_type="tech"):
         # Исключаем те, которые уже ПРОВЕРЕНЫ именно этим API
         check_col = f"checked_{api_type}"
         cursor.execute(f"""
-            SELECT id, title, year, poster_url, kp_rating, imdb_rating, kp_id, imdb_id
+            SELECT id, title, year, poster_url, kp_rating, imdb_rating, kp_id, imdb_id, description
             FROM items 
             WHERE category_id IN {cats_str} 
             AND (
@@ -112,17 +112,23 @@ def fix_metadata(api_type="tech"):
                     search_title = re.sub(f'(?i){tag}', '', search_title)
                 search_title = search_title.strip()
                 
-                print(f"[{idx}/{len(items)}] Обработка: {search_title} ({year})")
+                print(f"\n[{idx}/{len(items)}] 🎬 {search_title} ({year})")
                 
+                needed = []
+                if not item_data['poster_url']: needed.append("постер")
+                if not item_data['kp_rating']: needed.append("КП")
+                if not item_data['imdb_rating']: needed.append("IMDb")
+                print(f"  📋 Нужно: {', '.join(needed)}")
+
                 data = None
-                # ПРИОРИТЕТ: Если есть KP ID, ищем по нему через PoiskKino
-                if api_type == "poiskkino" and kp_id:
-                    print(f"  🔍 Запрашиваем PoiskKino по KP ID: {kp_id}")
+                # ПРИОРИТЕТ: Если есть KP ID и API поддерживает поиск по ID
+                if kp_id and hasattr(client, 'get_by_id'):
+                    print(f"  🎯 Прямой запрос по ID: {kp_id}")
                     data = client.get_by_id(kp_id)
                 
                 # Если нет ID или поиск по нему не дал результата - ищем по названию
                 if not data:
-                    print(f"  🔍 Поиск через {api_name} по названию...")
+                    print(f"  🔍 Поиск через API по названию: {search_title}...")
                     data = client.search_movie(search_title, year)
                 
                 if data:
@@ -151,15 +157,21 @@ def fix_metadata(api_type="tech"):
                     
                     conn.commit()
                     
-                    found_parts = []
-                    if kp_rating > 0: found_parts.append(f"KP: {kp_rating}")
-                    if imdb_rating > 0: found_parts.append(f"IMDb: {imdb_rating}")
-                    if new_poster: found_parts.append("постер ✅")
+                    conn.commit()
                     
-                    res_str = ", ".join(found_parts) if found_parts else "ничего нового"
-                    print(f"  -> Найдено: {res_str}")
+                    found_parts = []
+                    if kp_rating > 0 and (not item_data['kp_rating']): found_parts.append(f"✨ Рейтинг КП: {kp_rating}")
+                    if imdb_rating > 0 and (not item_data['imdb_rating']): found_parts.append(f"✨ Рейтинг IMDb: {imdb_rating}")
+                    if new_poster and (not item_data['poster_url']): found_parts.append("🖼️ Постер добавлен")
+                    if desc and (not item_data['description']): found_parts.append("📝 Описание получено")
+                    
+                    if found_parts:
+                        for p in found_parts: print(f"    {p}")
+                        print(f"  ✅ Данные обновлены")
+                    else:
+                        print(f"  💎 Новых данных не найдено.")
                 else:
-                    print(f"  -> Данные не найдены.")
+                    print(f"  ❌ API не вернул данных.")
 
                 # В любом случае помечаем, что ЭТОТ API проверил эту карточку
                 if not client.is_limited:
