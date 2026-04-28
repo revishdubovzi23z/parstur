@@ -1,0 +1,31 @@
+# Environments
+.env
+venv/
+ENV/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+.ruff_cache/
+
+# Databases
+*.db
+*.sqlite3
+
+# Logs
+*.log
+*_log.txt
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+pars.zip
+rutor_check_*.html
+rutor_test.html
+temp_csv_head.txt
+IMDBOCENKI.csv
+kinopoiskocenki.csv
