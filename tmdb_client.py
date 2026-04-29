@@ -58,6 +58,7 @@ class TMDBClient:
                     
                     return {
                         "title": result.get("title") or result.get("name") or "",
+                        "original_title": result.get("original_title") or result.get("original_name") or "",
                         "rating": result.get("vote_average", 0.0),
                         "poster_url": poster_url,
                         "description": result.get("overview", ""),
@@ -108,6 +109,7 @@ class TMDBClient:
                     
                     return {
                         "title": result.get("title") or result.get("name") or "",
+                        "original_title": result.get("original_title") or result.get("original_name") or "",
                         "rating": result.get("vote_average", 0.0),
                         "poster_url": poster_url,
                         "description": result.get("overview", ""),

@@ -7,6 +7,7 @@ import time
 import unicodedata
 from dotenv import load_dotenv
 from tmdb_client import TMDBClient
+from app_core import normalize_title
 
 load_dotenv()
 
@@ -99,14 +100,6 @@ class UserSync:
 
             conn.commit()
 
-    def clean_title(self, t):
-        if not t:
-            return None
-        # Очистка для нормализации: удаляем лишнее, но СОХРАНЯЕМ обе части (RU / EN)
-        t = re.sub(r"\(.*?\)", "", t)
-        t = re.sub(r"\[.*?\]", "", t)
-        t = re.sub(r"(?i)SATRip|Web-DL|BDRip|1080p|720p|4K|HDR", "", t)
-        return unicodedata.normalize("NFC", t.strip()).lower()
 
     def lookup_missing_ids(self, title, year, external_id=None):
         """Пытается найти недостающие ID через TMDB"""
@@ -132,7 +125,7 @@ class UserSync:
         merged_data = {} # key: (title_norm, year) or (orig_title_norm, year)
 
         def get_key(title, year):
-            t = self.clean_title(title)
+            t = normalize_title(title)
             if not t or not year: return None
             return (t, year)
 
@@ -159,8 +152,8 @@ class UserSync:
                             "rating": int(float(rating)),
                             "imdb_id": imdb_id,
                             "kp_id": None,
-                            "title_norm": self.clean_title(title),
-                            "orig_norm": self.clean_title(orig_title)
+                            "title_norm": normalize_title(title),
+                            "orig_norm": normalize_title(orig_title)
                         }
                         
                         # Ключи для мерджа
@@ -213,8 +206,8 @@ class UserSync:
                             rating_int = int(float(rating.replace(",", ".")))
                             if rating_int == 0: continue
                             
-                            t_norm = self.clean_title(title)
-                            o_norm = self.clean_title(orig_title)
+                            t_norm = normalize_title(title)
+                            o_norm = normalize_title(orig_title)
                             
                             match = None
                             # Ищем в уже загруженных из IMDb

@@ -290,7 +290,19 @@
                             </div>
                         </div>
 
-                        <div class="flex flex-col gap-2">
+                        <div class="flex flex-col gap-4">
+                            <!-- 🚀 ПОЛНЫЙ ЦИКЛ -->
+                            <div class="mb-2 relative group/full">
+                                <button @click="startFullPipeline" :disabled="statuses.full_pipeline === 'running'"
+                                        :class="['w-full py-4 rounded-2xl font-bold text-lg shadow-xl transition-all flex items-center justify-center gap-3', statuses.full_pipeline === 'running' ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white animate-pulse' : 'bg-gradient-to-r from-indigo-500 to-purple-500 text-white hover:scale-[1.02] active:scale-95']">
+                                    🚀 ПОЛНЫЙ ЦИКЛ (1.1 → 🧹)
+                                    <span v-if="statuses.full_pipeline === 'running'" class="text-xs font-normal opacity-80">(ИДЕТ...)</span>
+                                </button>
+                                <button v-if="statuses.full_pipeline === 'running'" @click="stopProcess('full_pipeline')" 
+                                        class="absolute -right-2 -top-2 bg-red-600 hover:bg-red-700 text-white w-8 h-8 rounded-full flex items-center justify-center text-xs shadow-xl border-2 border-white z-10 transition-transform hover:scale-110">✕</button>
+                            </div>
+                            
+                            <div class="h-px bg-slate-100 my-1"></div>
                             <!-- 1.1 VIDEO -->
                             <div class="relative group">
                                 <button @click="startSync('video')" :disabled="statuses.sync_video === 'running'" 
@@ -298,6 +310,15 @@
                                     🚀 1.1 ПАРСИНГ ВИДЕО
                                     <span v-if="statuses.sync_video === 'running'" class="block text-[9px] opacity-70">ПРОЦЕСС ИДЕТ...</span>
                                 </button>
+                                <div v-if="statuses.sync_video === 'running'" class="mt-1 px-2">
+                                    <div class="h-1 bg-slate-200 rounded-full overflow-hidden">
+                                        <div class="h-full bg-indigo-400 transition-all duration-500" :style="{width: (progress.sync_video.total > 0 ? (progress.sync_video.current / progress.sync_video.total * 100) : 0) + '%'}"></div>
+                                    </div>
+                                    <div class="flex justify-between text-[8px] text-slate-400 mt-0.5">
+                                        <span>{{progress.sync_video.current}} / {{progress.sync_video.total}}</span>
+                                        <span>{{Math.round(progress.sync_video.total > 0 ? (progress.sync_video.current / progress.sync_video.total * 100) : 0)}}%</span>
+                                    </div>
+                                </div>
                                 <button v-if="statuses.sync_video === 'running'" @click="stopProcess('sync_video')" 
                                         class="absolute right-2 top-2 bg-red-500 hover:bg-red-600 text-white w-8 h-8 rounded-lg flex items-center justify-center text-xs shadow-lg transition-transform hover:scale-110">✕</button>
                             </div>
@@ -310,9 +331,18 @@
                                         ♻️ 2.0 ОБНОВЛЕНИЕ БАЗЫ
                                         <span v-if="statuses.reprocess === 'running'" class="block text-[9px] opacity-70">ПРОЦЕСС ИДЕТ...</span>
                                     </button>
+                                    <div v-if="statuses.reprocess === 'running'" class="mt-1 px-2">
+                                        <div class="h-1 bg-slate-200 rounded-full overflow-hidden">
+                                            <div class="h-full bg-emerald-400 transition-all duration-500" :style="{width: (progress.reprocess.total > 0 ? (progress.reprocess.current / progress.reprocess.total * 100) : 0) + '%'}"></div>
+                                        </div>
+                                        <div class="flex justify-between text-[8px] text-slate-400 mt-0.5">
+                                            <span>{{progress.reprocess.current}} / {{progress.reprocess.total}}</span>
+                                            <span>{{Math.round(progress.reprocess.total > 0 ? (progress.reprocess.current / progress.reprocess.total * 100) : 0)}}%</span>
+                                        </div>
+                                    </div>
                                     <label class="flex items-center gap-2 px-2 py-1 cursor-pointer group/label">
                                         <input type="checkbox" v-model="recheckAll" class="w-3 h-3 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500">
-                                        <span class="text-[10px] font-bold text-slate-500 group-hover/label:text-slate-700 transition-colors uppercase tracking-tighter">Включить проверенные</span>
+                                        <span class="text-[10px] font-bold text-slate-500 group-hover/label:text-slate-700 transition-colors uppercase tracking-tighter">Перепроверить все элементы (включая уже обработанные)</span>
                                     </label>
                                 </div>
                                 <button v-if="statuses.reprocess === 'running'" @click="stopProcess('reprocess')" 
@@ -326,6 +356,16 @@
                                     📦 1.2 ПАРСИНГ ИГРЫ / СОФТ
                                     <span v-if="statuses.sync_other === 'running'" class="block text-[9px] opacity-70 text-slate-300">ПРОЦЕСС ИДЕТ...</span>
                                 </button>
+                                <div v-if="statuses.sync_other === 'running'" class="mt-1 px-2">
+                                    <div class="h-1 bg-slate-700 rounded-full overflow-hidden">
+                                        <div class="h-full bg-slate-500 transition-all duration-500" :style="{width: (progress.sync_other.total > 0 ? (progress.sync_other.current / progress.sync_other.total * 100) : 0) + '%'}"></div>
+                                    </div>
+                                    <div class="flex justify-between text-[8px] text-slate-500 mt-0.5">
+                                        <span>{{progress.sync_other.current}} / {{progress.sync_other.total}}</span>
+                                        <span>{{Math.round(progress.sync_other.total > 0 ? (progress.sync_other.current / progress.sync_other.total * 100) : 0)}}%</span>
+                                    </div>
+                                </div>
+
                                 <button v-if="statuses.sync_other === 'running'" @click="stopProcess('sync_other')" 
                                         class="absolute right-2 top-2 bg-red-500 hover:bg-red-600 text-white w-8 h-8 rounded-lg flex items-center justify-center text-xs shadow-lg transition-transform hover:scale-110">✕</button>
                             </div>
@@ -339,6 +379,15 @@
                                     🕵️ 2.1 POISKKINO (DIRECT ID)
                                     <span v-if="statuses.poiskkino === 'running'" class="block text-[9px] opacity-70">ПРОЦЕСС ИДЕТ...</span>
                                 </button>
+                                <div v-if="statuses.poiskkino === 'running'" class="mt-1 px-2">
+                                    <div class="h-1 bg-slate-200 rounded-full overflow-hidden">
+                                        <div class="h-full bg-orange-400 transition-all duration-500" :style="{width: (progress.poiskkino.total > 0 ? (progress.poiskkino.current / progress.poiskkino.total * 100) : 0) + '%'}"></div>
+                                    </div>
+                                    <div class="flex justify-between text-[8px] text-slate-400 mt-0.5">
+                                        <span>{{progress.poiskkino.current}} / {{progress.poiskkino.total}}</span>
+                                        <span>{{Math.round(progress.poiskkino.total > 0 ? (progress.poiskkino.current / progress.poiskkino.total * 100) : 0)}}%</span>
+                                    </div>
+                                </div>
                                 <button v-if="statuses.poiskkino === 'running'" @click="stopProcess('poiskkino')" 
                                         class="absolute right-2 top-2 bg-red-500 hover:bg-red-600 text-white w-8 h-8 rounded-lg flex items-center justify-center text-xs shadow-lg transition-transform hover:scale-110">✕</button>
                             </div>
@@ -350,6 +399,15 @@
                                     📡 2.2 LEGACY API (TECH)
                                     <span v-if="statuses.fix === 'running'" class="block text-[9px] opacity-70">ПРОЦЕСС ИДЕТ...</span>
                                 </button>
+                                <div v-if="statuses.fix === 'running'" class="mt-1 px-2">
+                                    <div class="h-1 bg-slate-200 rounded-full overflow-hidden">
+                                        <div class="h-full bg-slate-400 transition-all duration-500" :style="{width: (progress.fix.total > 0 ? (progress.fix.current / progress.fix.total * 100) : 0) + '%'}"></div>
+                                    </div>
+                                    <div class="flex justify-between text-[8px] text-slate-400 mt-0.5">
+                                        <span>{{progress.fix.current}} / {{progress.fix.total}}</span>
+                                        <span>{{Math.round(progress.fix.total > 0 ? (progress.fix.current / progress.fix.total * 100) : 0)}}%</span>
+                                    </div>
+                                </div>
                                 <button v-if="statuses.fix === 'running'" @click="stopProcess('fix')" 
                                         class="absolute right-2 top-2 bg-red-500 hover:bg-red-600 text-white w-8 h-8 rounded-lg flex items-center justify-center text-xs shadow-lg transition-transform hover:scale-110">✕</button>
                             </div>
@@ -361,6 +419,15 @@
                                     🎬 2.3 REZKA.AG (ID & LINKS)
                                     <span v-if="statuses.rezka === 'running'" class="block text-[9px] opacity-70">ПРОЦЕСС ИДЕТ...</span>
                                 </button>
+                                <div v-if="statuses.rezka === 'running'" class="mt-1 px-2">
+                                    <div class="h-1 bg-slate-200 rounded-full overflow-hidden">
+                                        <div class="h-full bg-purple-400 transition-all duration-500" :style="{width: (progress.rezka.total > 0 ? (progress.rezka.current / progress.rezka.total * 100) : 0) + '%'}"></div>
+                                    </div>
+                                    <div class="flex justify-between text-[8px] text-slate-400 mt-0.5">
+                                        <span>{{progress.rezka.current}} / {{progress.rezka.total}}</span>
+                                        <span>{{Math.round(progress.rezka.total > 0 ? (progress.rezka.current / progress.rezka.total * 100) : 0)}}%</span>
+                                    </div>
+                                </div>
                                 <button v-if="statuses.rezka === 'running'" @click="stopProcess('rezka')" 
                                         class="absolute right-2 top-2 bg-red-500 hover:bg-red-600 text-white w-8 h-8 rounded-lg flex items-center justify-center text-xs shadow-lg transition-transform hover:scale-110">✕</button>
                             </div>
@@ -462,7 +529,37 @@
                                 </div>
                             </div>
 
-                            <button @click="ignoreItem(item.id)" class="absolute top-2 right-2 z-40 bg-black/50 hover:bg-red-600 text-white w-7 h-7 rounded-full flex items-center justify-center transition-all opacity-0 group-hover:opacity-100">✕</button>
+                            <!-- Меню сброса метаданных -->
+                            <div v-if="activeResetMenuId === item.id" class="absolute inset-0 z-[65] bg-slate-900/95 backdrop-blur-md flex flex-col p-4 animate-in slide-in-from-left-4 duration-200 text-white">
+                                <div class="flex justify-between items-center mb-4">
+                                    <p class="text-[10px] font-black uppercase tracking-widest text-orange-400">СБРОС ДАННЫХ</p>
+                                    <button @click.stop="activeResetMenuId = null" class="text-slate-400 hover:text-white text-lg">✕</button>
+                                </div>
+                                <div class="flex-1 flex flex-col gap-2 overflow-y-auto custom-scrollbar pr-1">
+                                    <label v-for="(label, key) in {poster:'Постер', description:'Описание', kp_id:'KP ID', imdb_id:'IMDb ID', rezka_url:'Rezka URL', ratings:'Рейтинги'}" 
+                                           :key="key" class="flex items-center gap-3 p-2 rounded-lg hover:bg-white/10 cursor-pointer transition-all group">
+                                        <input type="checkbox" :value="key" v-model="selectedResetFields" class="w-4 h-4 rounded border-slate-600 bg-transparent text-orange-500 focus:ring-orange-500">
+                                        <span class="text-xs font-bold text-slate-300 group-hover:text-white">{{ label }}</span>
+                                    </label>
+                                </div>
+                                <div class="mt-4 pt-4 border-t border-white/10 flex gap-2">
+                                    <button @click.stop="confirmReset(item.id)" 
+                                            :disabled="selectedResetFields.length === 0"
+                                            class="flex-1 py-2 bg-orange-600 disabled:bg-slate-700 text-white text-[10px] font-black uppercase tracking-widest rounded-xl hover:bg-orange-700 transition-all">
+                                        СБРОСИТЬ
+                                    </button>
+                                </div>
+                            </div>
+
+                            <button @click="ignoreItem(item.id)" class="absolute top-2 right-2 z-40 bg-black/50 hover:bg-red-600 text-white w-7 h-7 rounded-full flex items-center justify-center transition-all opacity-0 group-hover:opacity-100" title="Игнорировать">✕</button>
+                            <!-- Кнопка обновления метаданных -->
+                            <button @click="reprocessItem(item.id)" class="absolute top-2 left-2 z-40 bg-black/50 hover:bg-emerald-600 text-white w-7 h-7 rounded-full flex items-center justify-center transition-all opacity-0 group-hover:opacity-100" title="Обновить метаданные">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                            </button>
+                            <!-- Кнопка сброса метаданных -->
+                            <button @click.stop="toggleResetMenu(item.id)" class="absolute top-10 left-2 z-40 bg-black/50 hover:bg-orange-600 text-white w-7 h-7 rounded-full flex items-center justify-center transition-all opacity-0 group-hover:opacity-100" title="Сбросить данные">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                            </button>
                         </div>
 
                         <div class="p-4 flex flex-col flex-1">
@@ -484,8 +581,9 @@
                                 <a v-if="item.releases && item.releases.length > 0" :href="item.releases[0].link" target="_blank" class="flex-1 bg-red-600 text-white text-[10px] font-bold py-1.5 rounded text-center shadow-sm hover:bg-red-700 transition-colors">RUTOR</a>
                                 <a v-if="item.kp_id" :href="'https://www.kinopoisk.ru/film/' + item.kp_id + '/'" target="_blank" class="flex-1 bg-orange-50 text-orange-700 text-[10px] font-bold py-1.5 rounded text-center">КП</a>
                                 <a :href="item.rezka_url || 'https://ru.kinorium.com/search/?q=' + encodeURIComponent(item.title)" target="_blank" 
-                                   :class="['flex-1 text-[10px] font-bold py-1.5 rounded text-center', item.rezka_url ? 'bg-purple-100 text-purple-700 border border-purple-200' : 'bg-indigo-50 text-indigo-700']">
+                                   :class="['flex-1 text-[10px] font-bold py-1.5 rounded text-center relative', item.rezka_url ? 'bg-purple-100 text-purple-700 border border-purple-200' : 'bg-indigo-50 text-indigo-700']">
                                     {{ item.rezka_url ? 'REZKA' : 'КИНОРИУМ' }}
+                                    <span v-if="item.checked_rezka === 0" class="absolute -top-1 -right-1 w-2.5 h-2.5 bg-orange-500 rounded-full border-2 border-white shadow-sm" title="Ожидает проверки Rezka"></span>
                                 </a>
                                 <a v-if="item.imdb_id" :href="'https://www.imdb.com/title/' + item.imdb_id + '/'" target="_blank" class="w-12 bg-slate-100 text-slate-600 text-[10px] font-bold py-1.5 rounded text-center">IMDB</a>
                             </div>
@@ -510,6 +608,105 @@
                 </div>
             </div>
         </main>
+
+        <!-- Дашборд / Статистика -->
+        <transition name="fade">
+            <div v-if="showDashboard" @click="showDashboard = false" class="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-[100] flex items-center justify-center p-4">
+                <div @click.stop class="bg-white w-full max-w-4xl max-h-[90vh] rounded-[2rem] shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-300">
+                    <!-- Шапка дашборда -->
+                    <div class="p-8 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+                        <div>
+                            <h2 class="text-3xl font-black text-slate-900 tracking-tighter">DASHBOARD</h2>
+                            <p class="text-xs font-bold text-slate-400 uppercase tracking-widest mt-1">Аналитика и история системы</p>
+                        </div>
+                        <button @click="showDashboard = false" class="w-12 h-12 flex items-center justify-center rounded-2xl bg-white shadow-sm border border-slate-200 text-slate-400 hover:text-slate-900 transition-all">✕</button>
+                    </div>
+
+                    <div class="flex-1 overflow-y-auto p-8 custom-scrollbar">
+                        <!-- Основные показатели -->
+                        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-10">
+                            <div class="bg-slate-900 p-6 rounded-3xl text-white shadow-xl shadow-slate-200">
+                                <p class="text-[10px] font-black uppercase tracking-widest opacity-50 mb-1">Всего видео</p>
+                                <p class="text-4xl font-black">{{ stats.total_video }}</p>
+                            </div>
+                            <div class="bg-indigo-50 p-6 rounded-3xl border border-indigo-100">
+                                <p class="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-1">Без постеров</p>
+                                <p class="text-4xl font-black text-indigo-600">{{ stats.no_poster }}</p>
+                            </div>
+                            <div class="bg-orange-50 p-6 rounded-3xl border border-orange-100">
+                                <p class="text-[10px] font-black text-orange-400 uppercase tracking-widest mb-1">Без рейтингов</p>
+                                <p class="text-4xl font-black text-orange-600">{{ stats.no_ratings }}</p>
+                            </div>
+                            <div class="bg-purple-50 p-6 rounded-3xl border border-purple-100">
+                                <p class="text-[10px] font-black text-purple-400 uppercase tracking-widest mb-1">Без Rezka-ссылок</p>
+                                <p class="text-4xl font-black text-purple-600">{{ stats.no_rezka }}</p>
+                            </div>
+                        </div>
+
+                        <!-- Рекомендация -->
+                        <div v-if="stats.no_poster > 0 || stats.no_ratings > 0 || stats.no_rezka > 0" 
+                             class="bg-gradient-to-r from-indigo-600 to-purple-600 p-8 rounded-[2rem] text-white flex flex-col md:flex-row justify-between items-center gap-6 mb-12 shadow-2xl shadow-indigo-200">
+                            <div class="text-center md:text-left">
+                                <h3 class="text-xl font-black tracking-tight mb-2">Нужно обогащение данных!</h3>
+                                <p class="text-sm font-medium opacity-80 max-w-md">Обнаружено {{ stats.no_poster }} элементов без постера и {{ stats.no_ratings }} без рейтинга. Запустить автоматическое обновление?</p>
+                            </div>
+                            <button @click="showDashboard = false; startFullPipeline()" class="whitespace-nowrap bg-white text-indigo-600 px-8 py-4 rounded-2xl font-black uppercase tracking-widest text-sm hover:scale-105 active:scale-95 transition-all shadow-xl">
+                                🚀 ЗАПУСТИТЬ ОБОГАЩЕНИЕ
+                            </button>
+                        </div>
+
+                        <!-- Таблица истории -->
+                        <div>
+                            <div class="flex justify-between items-center mb-6">
+                                <h3 class="text-xl font-black text-slate-900">История запусков</h3>
+                                <span class="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Последние 10 задач</span>
+                            </div>
+                            
+                            <div class="bg-white border border-slate-100 rounded-3xl overflow-hidden shadow-sm">
+                                <table class="w-full text-left border-collapse">
+                                    <thead>
+                                        <tr class="bg-slate-50/50 border-b border-slate-100">
+                                            <th class="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Процесс</th>
+                                            <th class="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Старт</th>
+                                            <th class="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Время</th>
+                                            <th class="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">Элементов</th>
+                                            <th class="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest text-right">Статус</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y divide-slate-50">
+                                        <tr v-for="job in jobHistory" :key="job.id" class="hover:bg-slate-50/50 transition-colors">
+                                            <td class="px-6 py-4">
+                                                <span class="text-xs font-black text-slate-900 uppercase">{{ logTypes[job.job_type.replace('sync_', '')] || job.job_type }}</span>
+                                            </td>
+                                            <td class="px-6 py-4">
+                                                <span class="text-xs font-bold text-slate-500">{{ formatDate(job.start_time) }}</span>
+                                            </td>
+                                            <td class="px-6 py-4">
+                                                <span class="text-xs font-bold text-slate-500">{{ formatDuration(job.duration) }}</span>
+                                            </td>
+                                            <td class="px-6 py-4 text-center">
+                                                <span class="text-xs font-black text-slate-700">{{ job.items_processed }}</span>
+                                                <span v-if="job.total_items > 0" class="text-[10px] text-slate-300 font-bold ml-1">/ {{ job.total_items }}</span>
+                                            </td>
+                                            <td class="px-6 py-4 text-right">
+                                                <span :class="['text-[10px] font-black px-3 py-1 rounded-full uppercase tracking-widest', 
+                                                    job.status === 'completed' ? 'bg-emerald-100 text-emerald-700' : 
+                                                    (job.status === 'error' ? 'bg-red-100 text-red-700' : 'bg-slate-100 text-slate-600')]">
+                                                    {{ job.status === 'completed' ? 'Успешно' : (job.status === 'error' ? 'Ошибка' : 'Стоп') }}
+                                                </span>
+                                            </td>
+                                        </tr>
+                                        <tr v-if="jobHistory.length === 0">
+                                            <td colspan="5" class="px-6 py-12 text-center text-sm font-bold text-slate-400 italic">История пуста</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </transition>
     </div>
 
     <script>
@@ -530,22 +727,39 @@
                     showAddCollection: false, newCollectionName: '',
                     sortableInstance: null,
                     activeCollectionMenuId: null, itemCollections: {},
-                    logTypes: { 'reprocess': 'Обновление', 'video': 'Видео', 'other': 'Остальное', 'fix': 'Поиск', 'rezka': 'Rezka', 'user': 'CSV', 'cleanup': 'Чистка' },
-                    statuses: { sync_video: 'idle', sync_other: 'idle', reprocess: 'idle', poiskkino: 'idle', rezka: 'idle', user: 'idle', cleanup: 'idle' },
+                    activeResetMenuId: null, selectedResetFields: [],
+                    logTypes: { 'reprocess': 'Обновление', 'video': 'Видео', 'other': 'Остальное', 'fix': 'Поиск', 'fix_uz': 'Поиск UZ', 'fix_poiskkino': 'PoiskKino', 'rezka': 'Rezka', 'user': 'CSV', 'cleanup': 'Чистка', 'single_update': 'Карточка' },
+                    statuses: { sync_video: 'idle', sync_other: 'idle', reprocess: 'idle', poiskkino: 'idle', rezka: 'idle', user: 'idle', cleanup: 'idle', full_pipeline: 'idle', single_update: 'idle' },
+                    progress: { sync_video: {current:0, total:0}, sync_other: {current:0, total:0}, reprocess: {current:0, total:0}, poiskkino: {current:0, total:0}, rezka: {current:0, total:0}, user: {current:0, total:0}, cleanup: {current:0, total:0}, full_pipeline: {current:0, total:0}, single_update: {current:0, total:0} },
                     userSelectedLog: false,
                     hideWatched: localStorage.getItem('hideWatched') === 'true',
                     hideCollected: localStorage.getItem('hideCollected') === 'true',
                     toast: { show: false, message: '', lastId: null, timer: null },
-                    isInitialized: false
+                    isInitialized: false,
+                    showDashboard: false,
+                    stats: { no_poster: 0, no_ratings: 0, no_rezka: 0, no_ids: 0, total_video: 0, last_runs: {} },
+                    jobHistory: []
                 }
             },
             computed: {
                 currentLogFilename() {
-                    const maps = { 'reprocess': 'reprocess_log.txt', 'video': 'sync_video_log.txt', 'other': 'sync_other_log.txt', 'fix': 'fix_log.txt', 'rezka': 'sync_rezka_log.txt', 'user': 'user_sync_log.txt', 'cleanup': 'cleanup_log.txt' };
+                    const maps = { 'reprocess': 'reprocess_log.txt', 'video': 'sync_video_log.txt', 'other': 'sync_other_log.txt', 'fix': 'fix_tech_log.txt', 'fix_uz': 'fix_uz_log.txt', 'fix_poiskkino': 'fix_poiskkino_log.txt', 'rezka': 'sync_rezka_log.txt', 'user': 'user_sync_log.txt', 'cleanup': 'cleanup_log.txt', 'single_update': 'single_update_log.txt' };
                     return maps[this.selectedLogType] || 'log.txt';
                 },
                 currentStatusKey() {
-                    const maps = { 'video': 'sync_video', 'other': 'sync_other', 'reprocess': 'reprocess', 'fix': 'poiskkino', 'rezka': 'rezka', 'user': 'user', 'cleanup': 'cleanup' };
+                    const maps = { 
+                        'video': 'sync_video', 
+                        'other': 'sync_other', 
+                        'reprocess': 'reprocess', 
+                        'fix': 'fix', 
+                        'fix_uz': 'fix',
+                        'fix_poiskkino': 'poiskkino', 
+                        'rezka': 'rezka', 
+                        'user': 'user', 
+                        'cleanup': 'cleanup', 
+                        'full_pipeline': 'full_pipeline', 
+                        'single_update': 'single_update' 
+                    };
                     return maps[this.selectedLogType] || '';
                 }
             },
@@ -705,6 +919,7 @@
                     this.fetchFeed();
                 },
                 resetFilters() {
+                    // Используем реализацию в конце файла
                     this.search = '';
                     this.selectedCategory = -1;
                     this.minYear = null;
@@ -712,7 +927,9 @@
                     this.dateFrom = null;
                     this.dateTo = null;
                     this.minKp = 0;
+                    this.maxKp = 10;
                     this.minImdb = 0;
+                    this.maxImdb = 10;
                 },
                 async createCollection() {
                     if (!this.newCollectionName.trim()) return;
@@ -789,7 +1006,7 @@
                     } 
                 },
                 async fetchLogs() {
-                    const res = await fetch(`/api/sync_log?log_type=${this.selectedLogType}`);
+                    const res = await fetch(`/api/sync_log?log_type=${this.selectedLogType}&t=${Date.now()}`);
                     const data = await res.json();
                     const logContainer = document.getElementById('log-container');
                     const wasAtBottom = logContainer ? (logContainer.scrollHeight - logContainer.scrollTop - logContainer.clientHeight < 50) : true;
@@ -810,11 +1027,23 @@
                     try {
                         const res = await fetch('/api/process_status');
                         const data = await res.json();
-                        this.statuses = data;
+                        this.statuses = data.statuses;
+                        this.progress = data.progress;
+                        
                         if (!this.userSelectedLog && (this.syncLogs === '' || this.syncLogs === 'Запуск...' || this.syncLogs === 'Запуск процесса...')) {
                             for (let key in this.statuses) {
                                 if (this.statuses[key] === 'running') {
-                                    const logMap = { 'sync_video': 'video', 'sync_other': 'other', 'reprocess': 'reprocess', 'poiskkino': 'fix', 'user': 'user', 'cleanup': 'cleanup' };
+                                    const logMap = { 
+                                        'sync_video': 'video', 
+                                        'sync_other': 'other', 
+                                        'reprocess': 'reprocess', 
+                                        'fix': 'fix', 
+                                        'poiskkino': 'fix_poiskkino', 
+                                        'rezka': 'rezka',
+                                        'user': 'user', 
+                                        'cleanup': 'cleanup',
+                                        'single_update': 'single_update'
+                                    };
                                     if (logMap[key]) {
                                         this.selectedLogType = logMap[key];
                                         if (this.showLogs) this.fetchLogs();
@@ -858,7 +1087,12 @@
                     if (params.length > 0) url += '?' + params.join('&');
                     this.syncLogs = 'Запуск процесса...';
                     try {
-                        await fetch(url, { method: 'POST' });
+                        const res = await fetch(url, { method: 'POST' });
+                        if (res.status === 400) {
+                            const data = await res.json();
+                            this.showToast(data.detail);
+                            return;
+                        }
                         this.showLogs = true;
                         this.switchLog(mode === 'video' ? 'video' : 'other');
                         this.startLogPolling();
@@ -871,19 +1105,44 @@
                     if (type === 'legacy') url = '/api/start_fix';
                     this.syncLogs = 'Запуск...';
                     try {
-                        await fetch(url, { method: 'POST' });
+                        const res = await fetch(url, { method: 'POST' });
+                        if (res.status === 400) {
+                            const data = await res.json();
+                            this.showToast(data.detail);
+                            return;
+                        }
                         this.showLogs = true;
-                        this.switchLog(type === 'reprocess_db' ? 'reprocess' : (type === 'poiskkino' ? 'fix' : 'fix'));
+                        if (type === 'reprocess_db') this.switchLog('reprocess');
+                        else if (type === 'poiskkino') this.switchLog('fix_poiskkino');
+                        else if (type === 'legacy') this.switchLog('fix');
                         this.startLogPolling();
                     } catch (e) { alert("Ошибка запуска"); }
                 },
                 async startRezkaSync() {
                     try {
-                        await fetch('/api/start_sync_rezka', { method: 'POST' });
+                        const res = await fetch('/api/start_sync_rezka', { method: 'POST' });
+                        if (res.status === 400) {
+                            const data = await res.json();
+                            this.showToast(data.detail);
+                            return;
+                        }
                         this.showLogs = true;
                         this.switchLog('rezka');
                         this.startLogPolling();
                     } catch (e) { alert("Ошибка запуска синхронизации Rezka"); }
+                },
+                async startFullPipeline() {
+                    try {
+                        const res = await fetch('/api/start_full_pipeline', { method: 'POST' });
+                        if (res.status === 400) {
+                            const data = await res.json();
+                            alert(data.detail);
+                            return;
+                        }
+                        this.showLogs = true;
+                        this.switchLog('video');
+                        this.startLogPolling();
+                    } catch (e) { alert("Ошибка запуска полного цикла"); }
                 },
 
                 async stopProcess(key) { 
@@ -897,9 +1156,33 @@
                     if (this.showLogs) { this.startLogPolling(); setTimeout(() => this.fetchLogs(), 100); }
                 },
                 async fetchStats() {
-                    const res = await fetch('/api/stats');
-                    const data = await res.json();
-                    alert(`📊 СТАТИСТИКА:\n• Всего: ${data.total_video}\n• Без постера: ${data.no_poster}\n• Без рейтинга: ${data.no_ratings}`);
+                    try {
+                        const res = await fetch('/api/stats');
+                        if (!res.ok) throw new Error("Stats fetch failed");
+                        this.stats = await res.json();
+                        
+                        const resHistory = await fetch('/api/job_history?limit=10');
+                        if (resHistory.ok) {
+                            this.jobHistory = await resHistory.json();
+                        }
+                        
+                        this.showDashboard = true;
+                    } catch (e) {
+                        console.error("Dashboard error:", e);
+                        alert("Не удалось загрузить статистику");
+                    }
+                },
+                formatDate(dateStr) {
+                    if (!dateStr) return '—';
+                    const d = new Date(dateStr);
+                    return d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+                },
+                formatDuration(seconds) {
+                    if (!seconds) return '—';
+                    if (seconds < 60) return Math.round(seconds) + 'с';
+                    const min = Math.floor(seconds / 60);
+                    const sec = Math.round(seconds % 60);
+                    return `${min}м ${sec}с`;
                 },
                 async clearLogFile() {
                     if(!confirm("Очистить лог?")) return;
@@ -926,15 +1209,77 @@
                 },
                 async ignoreItem(id) {
                     await fetch(`/api/ignore/${id}`, { method: 'POST' });
-                    // Скрываем локально сразу, чтобы не было прыжка
-                    this.items = this.items.filter(item => item.id !== id);
+                    this.showToast('Добавлено в игнорируемые');
+                    this.toast.lastId = id;
                     
+                    this.items = this.items.filter(item => item.id !== id);
                     if (this.items.length === 0 && this.page > 1) {
                         this.page -= 1;
                         this.fetchFeed();
                     } else {
                         this.fetchFeed('silent');
                     }
+                    this.fetchCategories();
+                },
+                async reprocessItem(id) {
+                    try {
+                        const res = await fetch(`/api/reprocess_item/${id}`, { method: 'POST' });
+                        if (res.status === 400) {
+                            const data = await res.json();
+                            this.showToast(data.detail);
+                            return;
+                        }
+                        this.showToast('Запущено обновление карточки...');
+                        this.showLogs = true;
+                        this.switchLog('single_update');
+                        this.startLogPolling();
+                    } catch (e) {
+                        this.showToast('Ошибка при запуске обновления');
+                    }
+                },
+                toggleResetMenu(itemId) {
+                    if (this.activeResetMenuId === itemId) {
+                        this.activeResetMenuId = null;
+                        this.selectedResetFields = [];
+                    } else {
+                        this.activeResetMenuId = itemId;
+                        this.selectedResetFields = ['poster', 'description', 'kp_id', 'imdb_id', 'rezka_url', 'ratings'];
+                    }
+                },
+                async confirmReset(itemId) {
+                    if (this.selectedResetFields.length === 0) return;
+                    if (!confirm("Вы уверены, что хотите сбросить выбранные поля?")) return;
+                    
+                    try {
+                        const res = await fetch(`/api/reset_item/${itemId}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ fields: this.selectedResetFields })
+                        });
+                        if (res.ok) {
+                            this.showToast('Данные сброшены');
+                            this.activeResetMenuId = null;
+                            this.selectedResetFields = [];
+                            // Обновляем текущий элемент в списке
+                            const item = this.items.find(i => i.id === itemId);
+                            if (item) {
+                                this.selectedResetFields.forEach(f => {
+                                    if (f === 'ratings') { item.kp_rating = 0; item.imdb_rating = 0; }
+                                    else if (f === 'poster') item.poster_url = null;
+                                    else item[f] = null;
+                                });
+                            }
+                        }
+                    } catch (e) {
+                        this.showToast('Ошибка при сбросе данных');
+                    }
+                },
+                async undoIgnore() {
+                    if (!this.toast.lastId) return;
+                    await fetch(`/api/ignore/${this.toast.lastId}`, { method: 'POST' });
+                    this.toast.show = false;
+                    this.toast.lastId = null;
+                    this.fetchFeed();
                     this.fetchCategories();
                 },
                 resetFilters() {

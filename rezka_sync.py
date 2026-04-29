@@ -5,9 +5,18 @@ import datetime
 import re
 import sys
 import os
+import json
 from HdRezkaApi import HdRezkaApi, HdRezkaSearch
+from app_core import normalize_title
+
+def report_progress(current, total, status_key="rezka"):
+    try:
+        with open(f"progress_{status_key}.json", "w") as f:
+            json.dump({"current": current, "total": total}, f)
+    except: pass
 
 def get_db():
+
     conn = sqlite3.connect('app_data.db')
     conn.row_factory = sqlite3.Row
     return conn
@@ -36,83 +45,137 @@ def search_rezka_metadata():
     items = cursor.fetchall()
     
     total_count = len(items)
-    print(f"=== ЗАПУСК REZKA SYNC (Всего к обработке: {total_count}) ===")
+    print(f"=== REZKA SYNC (Total: {total_count}) ===")
     
     searcher = HdRezkaSearch("https://rezka.ag")
     
     for idx, row in enumerate(items, 1):
         try:
+            report_progress(idx, total_count)
             item_id = row['id']
+
             title = row['title']
             year = row['year']
             kp_id = row['kp_id']
             imdb_id = row['imdb_id']
             kp_rating = row['kp_rating']
             imdb_rating = row['imdb_rating']
-            rezka_url = row['rezka_url']
+               # --- ПОДГОТОВКА ПОИСКОВЫХ ЗАПРОСОВ ---
+            # Разделяем название на части (русское / английское)
+            parts = [p.strip() for p in title.split('/')]
+            clean_parts = []
+            for p in parts:
+                # Убираем год в скобках и лишние пробелы
+                p_clean = re.sub(r'\(.*?\)', '', p).strip()
+                if p_clean and len(p_clean) > 1:
+                    clean_parts.append(p_clean)
             
-            # Чистим название
-            # Чистим название от мусора (скобки, технические пометки)
-            search_title = title.split(' / ')[0].split('/')[0]
-            search_title = re.sub(r'\(.*?\)', '', search_title)
-            search_title = re.sub(r'\[.*?\]', '', search_title)
-            # Удаляем технические термины Rutor (UHD, BDRemux и т.д.)
-            search_title = re.sub(r'(?i)\b(UHD|BDRemu[xх]|BDRip|Web-DL|Blu-Ray|Remux|1080p|720p|4K|HDR|HEVC)\b', '', search_title)
-            search_title = search_title.strip()
+            # Приоритет поиска: Английское название (обычно точнее), потом Русское
+            search_queries = sorted(clean_parts, key=lambda x: (not x.isascii(), len(x)), reverse=True)
             
-            print(f"\n[{idx}/{total_count}] 🎬 {title} ({year})", flush=True)
+            print(f"\n[{idx}/{total_count}] TITLE: {title} ({year})", flush=True)
             if kp_id or imdb_id:
                 print(f"    📋 Имеем ID: KP:{kp_id or '-'}, IMDb:{imdb_id or '-'}", flush=True)
-            print(f"    🔍 Поиск: {search_title}", flush=True)
-            
-            results = []
-            # Сначала ищем с годом для точности
-            try:
-                results = searcher.fast_search(f"{search_title} {year}")
-            except Exception as e:
-                print(f"  ⚠️ Ошибка поиска: {e}")
-                time.sleep(2)
+
+            all_results = []
+            seen_urls = set()
+
+            for s_title in search_queries:
+                try:
+                    # 1. Пробуем с годом
+                    res_with_year = searcher.fast_search(f"{s_title} {year}")
+                    
+                    # 2. Сразу же добавляем результаты без года, если их мало или если результаты с годом не точные
+                    # (Но чтобы не спамить лишними запросами, сначала проверим качество результатов с годом)
+                    need_no_year = True
+                    if res_with_year:
+                        # Если хотя бы один результат с годом имеет точное совпадение названия
+                        for r in res_with_year:
+                            res_name_norm = normalize_title(re.sub(r'\(.*?\)', '', r['title']))
+                            if any(res_name_norm == db_norm for db_norm in [normalize_title(p) for p in clean_parts]):
+                                need_no_year = False
+                                break
+                    
+                    res_no_year = []
+                    if need_no_year:
+                        res_no_year = searcher.fast_search(s_title)
+                    
+                    for r in res_with_year + res_no_year:
+                        if r['url'] not in seen_urls:
+                            all_results.append(r)
+                            seen_urls.add(r['url'])
+                except Exception as e:
+                    print(f"    ⚠️ Ошибка поиска по '{s_title}': {e}")
+
+            if not all_results:
+                # Если совсем ничего не нашли, пробуем самый агрессивный поиск по первой части названия
+                if clean_parts:
+                    try:
+                        print(f"    [?] Trying fallback search for '{clean_parts[0]}'...")
+                        res_fallback = searcher.fast_search(clean_parts[0])
+                        for r in res_fallback:
+                            if r['url'] not in seen_urls:
+                                all_results.append(r)
+                                seen_urls.add(r['url'])
+                    except: pass
+
+            if not all_results:
+                print(f"  [-] Nothing found on Rezka.")
+                cursor.execute("UPDATE items SET checked_rezka = 1 WHERE id = ?", (item_id,))
+                conn.commit()
                 continue
             
-            # Если ничего не нашли с годом, пробуем просто по названию
-            if not results:
-                try:
-                    results = searcher.fast_search(search_title)
-                except: pass
-                
-            def normalize_title(t):
-                t = (t or "").lower()
-                t = t.replace('x', 'х')
-                t = re.sub(r'[^a-zа-я0-9\s]', '', t)
-                return ' '.join(t.split())
+            print(f"    [*] Found {len(all_results)} results in search.")
 
-            norm_search = normalize_title(search_title)
-            
-            # Сортируем результаты по баллам
             results_with_scores = []
-            for res in results:
+            norm_db_titles = [normalize_title(p) for p in clean_parts]
+
+            for res in all_results:
                 res_name = res['title']
                 res_url = res['url']
-                res_clean_name = re.sub(r'\(.*?\)', '', res_name).strip()
-                norm_res = normalize_title(res_clean_name)
                 
+                # Извлекаем год из названия Резки "Название (Год)" или из URL
                 year_match = re.search(r'\((\d{4})\)', res_name)
-                if not year_match: year_match = re.search(r'-(\d{4})\.html', res_url)
+                if not year_match: 
+                    # Ищем год в URL: ищем 4 цифры после дефиса
+                    year_match = re.search(r'-(\d{4})', res_url)
                 res_year = int(year_match.group(1)) if year_match else None
                 
-                score = 0
-                if norm_search == norm_res: score += 100
-                elif norm_search in norm_res or norm_res in norm_search: score += 50
+                # Нормализуем название результата для сравнения
+                res_clean_name = re.sub(r'\(.*?\)', '', res_name).replace(' / ', '/').strip()
+                res_parts = [normalize_title(p.strip()) for p in res_clean_name.split('/')]
                 
+                score = 0
+                # Проверка совпадения названия (любая часть)
+                match_found = False
+                exact_name_match = False
+                for db_norm in norm_db_titles:
+                    for res_norm in res_parts:
+                        if db_norm == res_norm:
+                            score += 130 # Увеличиваем за точное совпадение
+                            match_found = True
+                            exact_name_match = True
+                            break
+                        elif (len(db_norm) > 4 and db_norm in res_norm) or (len(res_norm) > 4 and res_norm in db_norm):
+                            score += 50
+                            match_found = True
+                    if match_found: break
+
+                # Проверка года (базовая по результатам поиска)
                 if year and res_year:
                     diff = abs(year - res_year)
-                    if diff == 0: score += 50
-                    elif diff == 1: score += 20
-                    elif diff >= 2: score -= 200
+                    if diff == 0: score += 60
+                    elif diff == 1: score += 50 # Для сериалов разброс в 1 год - это норма
+                    elif diff <= 3: score -= 40 # Небольшой штраф за малый разброс
+                    else: score -= 150 # Другой год - большой штраф
                 
-                results_with_scores.append({'res': res, 'score': score, 'year': res_year})
+                results_with_scores.append({
+                    'res': res, 
+                    'score': score, 
+                    'year': res_year,
+                    'exact_name_match': exact_name_match
+                })
             
-            # Сортируем: сначала самые высокие баллы
             results_with_scores.sort(key=lambda x: x['score'], reverse=True)
             
             final_res = None
@@ -121,17 +184,49 @@ def search_rezka_metadata():
             for item in results_with_scores:
                 res = item['res']
                 score = item['score']
-                res_year = item['year']
+                exact_name_match = item.get('exact_name_match', False)
                 
-                if score < 80: continue # Слишком слабое совпадение
+                # Если название совпало точно, заходим даже при плохом годе (чтобы проверить ID)
+                if score < 70 and not exact_name_match: continue 
                 
-                print(f"    🔎 Проверяю: {res['title']} (Score: {score})")
-                rezka = HdRezkaApi(res['url'])
-                soup = rezka.soup
+                print(f"    [?] Checking: {res['title']} (Score: {score})")
+                try:
+                    rezka = HdRezkaApi(res['url'])
+                    soup = rezka.soup
+                except:
+                    print(f"      [!] Page load error.")
+                    continue
                 
-                # 1. СБОР ВСЕХ ВОЗМОЖНЫХ ID СО СТРАНИЦЫ
+                # 1. СБОР ID И ГОДА СО СТРАНИЦЫ
                 page_kp_id = None
                 page_imdb_id = None
+                page_year = item.get('year') # Год из результатов поиска
+                
+                # Дополнительно ищем год на самой странице (в th или li)
+                if not page_year:
+                    # Ищем во всех тегах, содержащих "Год" или "Дата выхода"
+                    year_label = soup.find(lambda tag: tag.name in ['th', 'b', 'span', 'h2'] and tag.text and any(x in tag.text for x in ['Год', 'Дата выхода']))
+                    if year_label:
+                        container = year_label.find_next_sibling(['td', 'span']) or year_label.parent
+                        if container:
+                            y_m = re.search(r'(\d{4})', container.text)
+                            if y_m: page_year = int(y_m.group(1))
+                    
+                    if not page_year:
+                        y_m = re.search(r'(?:Год|Дата выхода):.*?(\d{4})', str(soup), re.S | re.I)
+                        if y_m: page_year = int(y_m.group(1))
+                
+                if page_year:
+                    print(f"      [*] Year on page: {page_year}")
+
+                # Пересчитываем score с учетом уточненного года
+                current_score = score
+                if not item.get('year') and page_year and year:
+                    diff = abs(year - page_year)
+                    if diff == 0: current_score += 60
+                    elif diff == 1: current_score += 50
+                    elif diff <= 3: current_score -= 40
+                    else: current_score -= 150
                 
                 # А) Из кнопок рейтинга
                 rate_blocks = soup.find_all(class_=re.compile(r'b-post__info_rates'))
@@ -146,60 +241,93 @@ def search_rezka_metadata():
                         imdb_m = re.search(r'/title/(tt\d+)', imdb_link['href'])
                         if imdb_m: page_imdb_id = imdb_m.group(1)
 
-                # Б) Из скрытых ссылок (Base64)
+                # Б) Из скрытых ссылок
                 links = soup.find_all('a', href=re.compile(r'/help/'))
                 import base64
+                from urllib.parse import unquote
                 for link in links:
                     try:
-                        b64_url = link['href'].split('/help/')[1].split('.html')[0]
+                        href = link['href']
+                        if '/help/' not in href: continue
+                        b64_url = href.split('/help/')[1].split('.html')[0].strip('/')
+                        b64_url = unquote(b64_url)
+                        # Чистим от возможных лишних символов
+                        b64_url = re.sub(r'[^a-zA-Z0-9+/=]', '', b64_url)
                         missing_padding = len(b64_url) % 4
                         if missing_padding: b64_url += '=' * (4 - missing_padding)
-                        real_url = base64.b64decode(b64_url).decode('utf-8')
+                        
+                        real_url = base64.b64decode(b64_url).decode('utf-8', errors='ignore')
+                        real_url = unquote(real_url) # Разкодируем URL-encoded символы типа %3A
+                        
                         if 'kinopoisk.ru' in real_url:
-                            kp_m = re.search(r'/film/(\d+)|/series/(\d+)|/(\d+)/', real_url)
+                            kp_m = re.search(r'/(?:film|series)/(\d+)|/(\d+)/', real_url)
                             if kp_m and not page_kp_id: page_kp_id = next(g for g in kp_m.groups() if g)
                         elif 'imdb.com' in real_url:
                             imdb_m = re.search(r'/title/(tt\d+)', real_url)
-                            if imdb_m and not page_imdb_id: page_imdb_id = imdb_m.group(1)
+                            if imdb_m and not page_imdb_id: imdb_m = imdb_m.group(1)
                     except: pass
 
-                # 2. ВЕРИФИКАЦИЯ
-                is_valid = True
-                print(f"      🔎 Проверка ID: База({kp_id or '-'}) vs Резка({page_kp_id or '-'})", flush=True)
+                # --- ЖЕЛЕЗНАЯ ВЕРИФИКАЦИЯ ПО ID ---
+                id_match = False
+                id_conflict = False
                 
-                # Если оба ID есть и они РАЗНЫЕ - это точно не наш фильм
-                if kp_id and page_kp_id and str(kp_id) != str(page_kp_id):
-                    print(f"      ❌ ОТКЛОНЕНО: Несовпадение KP ID ({kp_id} != {page_kp_id})")
-                    is_valid = False
+                print(f"      [?] ID Check: DB({kp_id or '-'}, {imdb_id or '-'}) vs Rezka({page_kp_id or '-'}, {page_imdb_id or '-'})")
                 
-                if imdb_id and page_imdb_id and str(imdb_id) != str(page_imdb_id):
-                    print(f"      ❌ ОТКЛОНЕНО: Несовпадение IMDb ID ({imdb_id} != {page_imdb_id})")
-                    is_valid = False
-                
-                # Если у нас есть ID, а на Резке НЕТ - доверяем только идеальному совпадению (score > 140)
-                if (kp_id or imdb_id) and not (page_kp_id or page_imdb_id) and score < 140:
-                    print(f"      ❌ ОТКЛОНЕНО: У нас есть ID, на Резке нет, а совпадение слабое (Score: {score})")
-                    is_valid = False
+                if kp_id and page_kp_id:
+                    if str(kp_id) == str(page_kp_id):
+                        print(f"      [+] MATCH KP ID: {kp_id}")
+                        id_match = True
+                    else:
+                        print(f"      [-] CONFLICT KP ID: {kp_id} != {page_kp_id}")
+                        id_conflict = True
 
+                if imdb_id and page_imdb_id:
+                    if str(imdb_id) == str(page_imdb_id):
+                        print(f"      [+] MATCH IMDb ID: {imdb_id}")
+                        id_match = True
+                    else:
+                        print(f"      [-] CONFLICT IMDb ID: {imdb_id} != {page_imdb_id}")
+                        id_conflict = True
+
+                if id_conflict: continue # Если ID не совпали - это точно другой фильм
+
+                # --- ИТОГОВОЕ РЕШЕНИЕ ---
+                is_valid = False
+                if id_match:
+                    is_valid = True # Если ID совпали - берем 100%
+                elif (kp_id or imdb_id) and not (page_kp_id or page_imdb_id):
+                    # Если в базе ID есть, а на резке нет - доверяем при Score >= 90
+                    # (Например: совпадение названия, даже если год чуть отличается)
+                    if current_score >= 90:
+                        print(f"      [+] Trusting by title (Score: {current_score})")
+                        is_valid = True
+                    else:
+                        print(f"      [-] Not enough data (Score: {current_score})")
+                elif not (kp_id or imdb_id) and current_score >= 90:
+                    # Если ID нет нигде - доверяем названию (снижаем порог)
+                    is_valid = True
+                
+                # Специальный случай: Если у нас нет ID в базе, но они есть на Резке - принимаем при хорошем Score
+                if not (kp_id or imdb_id) and (page_kp_id or page_imdb_id) and current_score >= 110:
+                    is_valid = True
+                
                 if is_valid:
                     final_res = res
                     final_data = {
                         'kp_id': page_kp_id or kp_id,
                         'imdb_id': page_imdb_id or imdb_id,
-                        'score': score,
+                        'score': current_score,
                         'soup': soup
                     }
                     break
-                else:
-                    print(f"      ❌ Отклонено: не прошел верификацию ID или года.")
 
             if not final_res:
-                print(f"  ❌ Подходящих результатов не найдено.")
+                print(f"  [-] No suitable results found.")
                 cursor.execute("UPDATE items SET checked_rezka = 1 WHERE id = ?", (item_id,))
                 conn.commit()
                 continue
 
-            print(f"  ✅ ПОДТВЕРЖДЕНО: {final_res['title']} (Score: {final_data['score']})")
+            print(f"  [+] CONFIRMED: {final_res['title']} (Score: {final_data['score']})")
             soup = final_data['soup']
             
             # Собираем данные
@@ -233,20 +361,23 @@ def search_rezka_metadata():
             # Обновляем
             cursor.execute("""
                 UPDATE items 
-                SET rezka_url = ?, kp_rating = ?, imdb_rating = ?, 
-                    kp_id = COALESCE(kp_id, ?), imdb_id = COALESCE(imdb_id, ?),
-                    poster_url = COALESCE(poster_url, ?),
+                SET rezka_url = ?, 
+                    kp_rating = CASE WHEN kp_rating IS NULL OR kp_rating = 0 THEN ? ELSE kp_rating END, 
+                    imdb_rating = CASE WHEN imdb_rating IS NULL OR imdb_rating = 0 THEN ? ELSE imdb_rating END, 
+                    kp_id = COALESCE(kp_id, ?), 
+                    imdb_id = COALESCE(imdb_id, ?),
+                    poster_url = CASE WHEN poster_url IS NULL OR poster_url = '' THEN ? ELSE poster_url END,
                     checked_rezka = 1
                 WHERE id = ?
             """, (final_res['url'], found_kp_rating, found_imdb_rating, final_data['kp_id'], final_data['imdb_id'], found_poster, item_id))
             conn.commit()
             
-            print(f"    📊 Успех! Рейтинги: KP: {found_kp_rating or '-'}, IMDb: {found_imdb_rating or '-'}")
-            if found_poster: print(f"    🖼️ Постер подтянут.")
+            print(f"    [*] Success! Ratings: KP: {found_kp_rating or '-'}, IMDb: {found_imdb_rating or '-'}")
+            if found_poster: print(f"    [*] Poster updated.")
                 
         except Exception as e:
 
-            print(f"  ❌ Ошибка обработки {item_id}: {e}")
+            print(f"  [-] Error processing {item_id}: {e}")
         
         time.sleep(0.5)
         

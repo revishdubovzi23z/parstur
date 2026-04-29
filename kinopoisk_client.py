@@ -16,6 +16,7 @@ class KinopoiskClient:
             "Content-Type": "application/json",
         }
         self.is_limited = False # Флаг превышения лимита на сегодня
+        self.network_error = False # Флаг сетевой ошибки (для retry логики)
 
     def get_by_id(self, kp_id):
         """
@@ -27,6 +28,7 @@ class KinopoiskClient:
         url = f"{self.base_url}/v2.2/films/{kp_id}"
         
         try:
+            self.network_error = False
             time.sleep(0.3)
             response = requests.get(url, headers=self.headers, timeout=20)
             
@@ -53,6 +55,7 @@ class KinopoiskClient:
                 }
         except Exception as e:
             print(f"Ошибка Kinopoisk Tech get_by_id ({kp_id}): {e}")
+            self.network_error = True
             
         return None
 
@@ -77,6 +80,7 @@ class KinopoiskClient:
 
         for attempt in range(max_retries):
             try:
+                self.network_error = False
                 # API разрешает до 20 запросов в секунду, но лучше делать паузы
                 time.sleep(0.3)
                 
@@ -118,7 +122,8 @@ class KinopoiskClient:
                     }
                 return None
             except Exception as e:
-                print(f"Ошибка при запросе к Kinopoisk API: {e}")
+                print(f"Ошибка при запросе к Kinopoisk API (поиск): {e}")
+                self.network_error = True
                 time.sleep(1)
                 
         return None

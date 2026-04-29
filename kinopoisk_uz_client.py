@@ -17,6 +17,7 @@ class KinopoiskUzClient:
             "Content-Type": "application/json",
         }
         self.is_limited = False
+        self.network_error = False
 
     def search_movie(self, title, year=None, max_retries=3):
         """
@@ -37,6 +38,7 @@ class KinopoiskUzClient:
 
         for attempt in range(max_retries):
             try:
+                self.network_error = False
                 time.sleep(0.3)
                 response = requests.get(url, headers=self.headers, params=params, timeout=10)
                 
@@ -79,6 +81,7 @@ class KinopoiskUzClient:
                 return None
             except Exception as e:
                 print(f"Ошибка при запросе к Kinopoisk UZ API: {e}")
+                self.network_error = True
                 time.sleep(1)
                 
         return None

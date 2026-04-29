@@ -16,6 +16,7 @@ class PoiskKinoClient:
             "Content-Type": "application/json",
         }
         self.is_limited = False
+        self.network_error = False
 
     def get_by_id(self, kp_id):
         """
@@ -27,6 +28,7 @@ class PoiskKinoClient:
         url = f"{self.base_url}/movie/{kp_id}"
         
         try:
+            self.network_error = False
             time.sleep(0.3)
             response = requests.get(url, headers=self.headers, timeout=20)
             
@@ -53,6 +55,7 @@ class PoiskKinoClient:
                 }
         except Exception as e:
             print(f"Ошибка PoiskKino get_by_id ({kp_id}): {e}")
+            self.network_error = True
             
         return None
 
@@ -73,6 +76,7 @@ class PoiskKinoClient:
 
         for attempt in range(max_retries):
             try:
+                self.network_error = False
                 time.sleep(0.3)
                 response = requests.get(url, headers=self.headers, params=params, timeout=20)
                 
@@ -112,6 +116,7 @@ class PoiskKinoClient:
                 return None
             except Exception as e:
                 print(f"Ошибка при запросе к PoiskKino API: {e}")
+                self.network_error = True
                 time.sleep(1)
                 
         return None

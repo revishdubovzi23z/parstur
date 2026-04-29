@@ -6,10 +6,18 @@ import re
 import sys
 import os
 import unicodedata
+import json
 from rutor_parser import RutorParser
 from tmdb_client import TMDBClient
 from kinopoisk_client import KinopoiskClient
-from app_core import RUTOR_CATEGORIES, VIDEO_CATEGORY_IDS
+from app_core import RUTOR_CATEGORIES, VIDEO_CATEGORY_IDS, normalize_title
+
+def report_progress(current, total, status_key):
+    try:
+        with open(f"progress_{status_key}.json", "w") as f:
+            json.dump({"current": current, "total": total}, f)
+    except: pass
+
 
 # Настройки фильтрации года
 MIN_YEAR = int(os.getenv("SYNC_MIN_YEAR", 1900))
@@ -100,22 +108,14 @@ CATEGORIES_TO_SYNC = [
 for c in CATEGORIES_TO_SYNC:
     c["name"] = RUTOR_CATEGORIES.get(c["id"], f"Unknown {c['id']}")
 
-def clean_title(t):
-    # Глубокая очистка для объединения дублей - СОХРАНЯЕМ обе части (RU / EN)
-    t = re.sub(r'\(.*?\)', '', t)
-    t = re.sub(r'\[.*?\]', '', t)
-    t = re.sub(r'(?i)\b(UHD|BDRemu[xх]|BDRip|Web-DL|Blu-Ray|Remux|1080p|720p|4K|HDR|HEVC|SATRip)\b', '', t)
-    return t.strip().lower()
-
 def deduplicate_releases(raw_list):
     """
     Группирует раздачи по чистому названию и году.
     """
     groups = {}
     for r in raw_list:
-        # Используем "чистое" название для ключа группировки
-        c_title = clean_title(r["parsed_title"])
-        key = (c_title, r["year"])
+        # Используем нормализованное название для ключа группировки
+        key = (normalize_title(r["parsed_title"]), r["year"])
         
         if key not in groups:
             groups[key] = {
@@ -128,6 +128,7 @@ def deduplicate_releases(raw_list):
 
 def run_sync(mode="video", manual_min_date=None):
     app = TrackerAppCore()
+    status_key = "sync_video" if mode == "video" else "sync_other"
     # Если передана ручная дата — используем её, иначе берем из базы
     if manual_min_date:
         target_date = manual_min_date
@@ -184,11 +185,16 @@ def run_sync(mode="video", manual_min_date=None):
                     break
                 time.sleep(0.3)
             
-            if not all_raw_releases: continue
+            if not all_raw_releases: 
+                report_progress(1, 1, status_key)
+                continue
             
             unique_movies = deduplicate_releases(all_raw_releases)
-            for key, movie_data in unique_movies.items():
+            total_m = len(unique_movies)
+            for idx, (key, movie_data) in enumerate(unique_movies.items(), 1):
+                report_progress(idx, total_m, status_key)
                 clean_t_key, year = key
+
                 display_title = movie_data["display_title"]
                 
                 # Ищем существующий фильм УМНЫМ способом (сначала точно, потом по чистому названию)
@@ -197,7 +203,7 @@ def run_sync(mode="video", manual_min_date=None):
                 
                 item_id = None
                 for p_id, p_title in potential_matches:
-                    if clean_title(p_title) == clean_t_key:
+                    if normalize_title(p_title) == clean_t_key:
                         item_id = p_id
                         break
                 

@@ -1,5 +1,35 @@
 import datetime
 import sqlite3
+import re
+import unicodedata
+
+def normalize_title(title):
+    """
+    Универсальная нормализация названия для сравнения и поиска (без пробелов и спецсимволов).
+    """
+    if not title:
+        return ""
+    t = str(title).lower()
+    t = t.replace('x', 'х') # латинская x на русскую х
+    t = re.sub(r'\(.*?\)', '', t)
+    t = re.sub(r'\[.*?\]', '', t)
+    # Оставляем только буквы и цифры
+    t = re.sub(r'[^a-zа-яё0-9]', '', t)
+    t = unicodedata.normalize('NFC', t)
+    return t.strip()
+
+def clean_title_for_search(title):
+    """
+    Очистка названия для поисковых запросов (сохраняет пробелы).
+    """
+    if not title:
+        return ""
+    t = str(title).lower()
+    t = re.sub(r'\(.*?\)', '', t)
+    t = re.sub(r'\[.*?\]', '', t)
+    t = re.sub(r'[^a-zа-яё0-9\s]', ' ', t)
+    t = " ".join(t.split())
+    return t.strip()
 
 # Категории точно как на Rutor
 RUTOR_CATEGORIES = {
@@ -50,16 +80,40 @@ class TrackerAppCore:
                     category_id INTEGER,
                     title TEXT,
                     year INTEGER,
-                    kp_rating REAL,
-                    imdb_rating REAL,
+                    kp_rating REAL DEFAULT 0,
+                    imdb_rating REAL DEFAULT 0,
                     description TEXT,
                     poster_url TEXT,
                     is_ignored BOOLEAN DEFAULT 0,
                     is_metadata_fixed BOOLEAN DEFAULT 0,
+                    user_rating INTEGER,
+                    original_title TEXT,
+                    imdb_id TEXT,
+                    kinorium_id TEXT,
+                    kp_id TEXT,
+                    title_norm TEXT,
                     checked_tech INTEGER DEFAULT 0,
                     checked_uz INTEGER DEFAULT 0,
                     checked_poiskkino INTEGER DEFAULT 0,
+                    rezka_url TEXT,
+                    checked_rezka INTEGER DEFAULT 0,
+                    ignored_at TEXT,
+                    is_reprocessed INTEGER DEFAULT 0,
                     UNIQUE(title, year, category_id)
+                )
+            ''')
+
+            # Таблица истории запусков
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS job_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    job_type TEXT,
+                    start_time TEXT,
+                    end_time TEXT,
+                    duration REAL,
+                    items_processed INTEGER DEFAULT 0,
+                    total_items INTEGER DEFAULT 0,
+                    status TEXT
                 )
             ''')
             # Таблица для конкретных раздач (торрентов)
