@@ -209,6 +209,14 @@
                             </button>
                         </div>
 
+                        <div class="flex items-center justify-between bg-slate-50 p-4 rounded-xl border border-slate-100 mb-2">
+                            <label class="text-xs font-bold text-slate-700">Только новое</label>
+                            <button @click="toggleNewOnly" 
+                                    :class="['relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none', showNewOnly ? 'bg-orange-500' : 'bg-slate-200']">
+                                <span :class="['inline-block h-4 w-4 transform rounded-full bg-white transition-transform', showNewOnly ? 'translate-x-6' : 'translate-x-1']"></span>
+                            </button>
+                        </div>
+
                         <div class="mt-2">
                             <button @click="resetFilters" class="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-500 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all">
                                 🔄 Сбросить фильтры
@@ -447,19 +455,21 @@
                     </div>
 
                     <!-- Доп кнопки -->
-                    <div class="mt-auto grid grid-cols-2 gap-2">
-                        <button @click="fetchStats" class="px-4 py-3 bg-slate-100 text-slate-600 rounded-xl font-bold text-xs hover:bg-slate-200">📊 СТАТИСТИКА</button>
-                        <button @click="toggleLogs" class="px-4 py-3 bg-slate-800 text-white rounded-xl font-bold text-xs hover:bg-black shadow-lg transition-all flex items-center justify-center gap-2">📜 ЛОГИ</button>
-                        <div class="col-span-2 relative group">
-                            <button @click="startCleanup" :disabled="statuses.cleanup === 'running'" 
-                                    :class="['w-full px-4 py-3 rounded-xl font-bold text-xs transition-all', statuses.cleanup === 'running' ? 'bg-indigo-600 text-white animate-pulse' : 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100']">
-                                🧹 ОЧИСТКА ДУБЛИКАТОВ
-                                <span v-if="statuses.cleanup === 'running'" class="block text-[9px] opacity-70">ПРОЦЕСС ИДЕТ...</span>
-                            </button>
-                            <button v-if="statuses.cleanup === 'running'" @click="stopProcess('cleanup')" 
-                                    class="absolute right-2 top-2 bg-red-500 hover:bg-red-600 text-white w-8 h-8 rounded-lg flex items-center justify-center text-xs shadow-lg transition-transform hover:scale-110">✕</button>
-                        </div>
-                    </div>
+                     <div class="mt-auto grid grid-cols-2 gap-2">
+                         <button @click="fetchStats" class="px-4 py-3 bg-slate-100 text-slate-600 rounded-xl font-bold text-xs hover:bg-slate-200">📊 СТАТИСТИКА</button>
+                         <button @click="toggleLogs" class="px-4 py-3 bg-slate-800 text-white rounded-xl font-bold text-xs hover:bg-black shadow-lg transition-all flex items-center justify-center gap-2">📜 ЛОГИ</button>
+                         <div class="col-span-2 relative group">
+                             <button @click="startCleanup" :disabled="statuses.cleanup === 'running'" 
+                                     :class="['w-full px-4 py-3 rounded-xl font-bold text-xs transition-all', statuses.cleanup === 'running' ? 'bg-indigo-600 text-white animate-pulse' : 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100']">
+                                 🧹 ОЧИСТКА ДУБЛИКАТОВ
+                                 <span v-if="statuses.cleanup === 'running'" class="block text-[9px] opacity-70">ПРОЦЕСС ИДЕТ...</span>
+                             </button>
+                             <button v-if="statuses.cleanup === 'running'" @click="stopProcess('cleanup')" 
+                                     class="absolute right-2 top-2 bg-red-500 hover:bg-red-600 text-white w-8 h-8 rounded-lg flex items-center justify-center text-xs shadow-lg transition-transform hover:scale-110">✕</button>
+                         </div>
+                         <a :href="'/api/export?fmt=json&category_id=' + selectedCategory" download class="px-4 py-3 bg-emerald-50 text-emerald-700 rounded-xl font-bold text-xs hover:bg-emerald-100 text-center transition-all">📥 JSON</a>
+                         <a :href="'/api/export?fmt=csv&category_id=' + selectedCategory" download class="px-4 py-3 bg-teal-50 text-teal-700 rounded-xl font-bold text-xs hover:bg-teal-100 text-center transition-all">📥 CSV</a>
+                     </div>
                 </div>
             </div>
         </transition>
@@ -488,6 +498,10 @@
                             <div class="absolute top-3 left-3 flex flex-col gap-1 z-20">
                                 <div v-if="item.kp_rating > 0" class="bg-white/90 px-2 py-0.5 rounded text-[10px] font-black border border-orange-200">KP {{ item.kp_rating.toFixed(1) }}</div>
                                 <div v-if="item.imdb_rating > 0" class="bg-white/90 px-2 py-0.5 rounded text-[10px] font-black border border-yellow-300">IMDB {{ item.imdb_rating.toFixed(1) }}</div>
+                            </div>
+                            <!-- NEW badge -->
+                            <div v-if="isNewItem(item)" class="absolute top-3 right-12 z-20">
+                                <span class="bg-orange-500 text-white text-[8px] font-black px-1.5 py-0.5 rounded-full shadow-lg animate-pulse">NEW</span>
                             </div>
                             
                             <!-- Центрированная кнопка "ЗАКЛАДКИ" при наведении -->
@@ -552,6 +566,9 @@
                             </div>
 
                             <button @click="ignoreItem(item.id)" class="absolute top-2 right-2 z-40 bg-black/50 hover:bg-red-600 text-white w-7 h-7 rounded-full flex items-center justify-center transition-all opacity-0 group-hover:opacity-100" title="Игнорировать">✕</button>
+                            <button @click.stop="openIdEditor(item)" class="absolute top-10 right-2 z-40 bg-black/50 hover:bg-blue-600 text-white w-7 h-7 rounded-full flex items-center justify-center transition-all opacity-0 group-hover:opacity-100" title="Редактировать ID">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V8a2 2 0 00-2-2h-5m-4 0V4a2 2 0 114 0v2m-4 0a2 2 0 104 0m-5 8a2.5 2.5 0 11-5 0 2.5 2.5 0 015 0zm8.5 0a2.5 2.5 0 11-5 0 2.5 2.5 0 015 0z"></path></svg>
+                            </button>
                             <!-- Кнопка обновления метаданных -->
                             <button @click="reprocessItem(item.id)" class="absolute top-2 left-2 z-40 bg-black/50 hover:bg-emerald-600 text-white w-7 h-7 rounded-full flex items-center justify-center transition-all opacity-0 group-hover:opacity-100" title="Обновить метаданные">
                                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
@@ -608,6 +625,33 @@
                 </div>
             </div>
         </main>
+
+        <!-- Модал редактирования ID -->
+        <transition name="fade">
+            <div v-if="showIdEditor" @click="showIdEditor = false" class="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-[100] flex items-center justify-center p-4">
+                <div @click.stop class="bg-white w-full max-w-md rounded-2xl shadow-2xl p-8">
+                    <div class="flex justify-between items-center mb-6">
+                        <h3 class="text-lg font-black text-slate-900">Редактировать ID</h3>
+                        <button @click="showIdEditor = false" class="text-slate-400 hover:text-slate-900 text-xl">✕</button>
+                    </div>
+                    <p class="text-xs text-slate-500 mb-4 font-medium">{{ editingItem?.title }}</p>
+                    <div class="flex flex-col gap-4">
+                        <div>
+                            <label class="text-[10px] font-black text-slate-400 uppercase block mb-1">Кинопоиск ID</label>
+                            <input type="text" v-model="editKpId" placeholder="Например: 12345" class="w-full bg-slate-100 border-none rounded-xl px-4 py-3 text-sm font-medium focus:ring-2 focus:ring-slate-900">
+                        </div>
+                        <div>
+                            <label class="text-[10px] font-black text-slate-400 uppercase block mb-1">IMDb ID</label>
+                            <input type="text" v-model="editImdbId" placeholder="Например: tt1234567" class="w-full bg-slate-100 border-none rounded-xl px-4 py-3 text-sm font-medium focus:ring-2 focus:ring-slate-900">
+                        </div>
+                    </div>
+                    <div class="flex gap-3 mt-6">
+                        <button @click="showIdEditor = false" class="flex-1 py-3 bg-slate-100 text-slate-600 rounded-xl font-bold text-sm hover:bg-slate-200">Отмена</button>
+                        <button @click="saveIds" class="flex-1 py-3 bg-slate-900 text-white rounded-xl font-bold text-sm hover:bg-black">Сохранить</button>
+                    </div>
+                </div>
+            </div>
+        </transition>
 
         <!-- Дашборд / Статистика -->
         <transition name="fade">
@@ -728,7 +772,7 @@
                     sortableInstance: null,
                     activeCollectionMenuId: null, itemCollections: {},
                     activeResetMenuId: null, selectedResetFields: [],
-                    logTypes: { 'reprocess': 'Обновление', 'video': 'Видео', 'other': 'Остальное', 'fix': 'Поиск', 'fix_uz': 'Поиск UZ', 'fix_poiskkino': 'PoiskKino', 'rezka': 'Rezka', 'user': 'CSV', 'cleanup': 'Чистка', 'single_update': 'Карточка' },
+                    logTypes: { 'reprocess': 'Обновление', 'video': 'Видео', 'other': 'Остальное', 'fix': 'Поиск', 'fix_poiskkino': 'PoiskKino', 'rezka': 'Rezka', 'user': 'CSV', 'cleanup': 'Чистка', 'single_update': 'Карточка' },
                     statuses: { sync_video: 'idle', sync_other: 'idle', reprocess: 'idle', poiskkino: 'idle', rezka: 'idle', user: 'idle', cleanup: 'idle', full_pipeline: 'idle', single_update: 'idle' },
                     progress: { sync_video: {current:0, total:0}, sync_other: {current:0, total:0}, reprocess: {current:0, total:0}, poiskkino: {current:0, total:0}, rezka: {current:0, total:0}, user: {current:0, total:0}, cleanup: {current:0, total:0}, full_pipeline: {current:0, total:0}, single_update: {current:0, total:0} },
                     userSelectedLog: false,
@@ -738,12 +782,18 @@
                     isInitialized: false,
                     showDashboard: false,
                     stats: { no_poster: 0, no_ratings: 0, no_rezka: 0, no_ids: 0, total_video: 0, last_runs: {} },
-                    jobHistory: []
+                    jobHistory: [],
+                    showNewOnly: localStorage.getItem('showNewOnly') === 'true',
+                    lastVisit: null,
+                    showIdEditor: false,
+                    editingItem: null,
+                    editKpId: '',
+                    editImdbId: ''
                 }
             },
             computed: {
                 currentLogFilename() {
-                    const maps = { 'reprocess': 'reprocess_log.txt', 'video': 'sync_video_log.txt', 'other': 'sync_other_log.txt', 'fix': 'fix_tech_log.txt', 'fix_uz': 'fix_uz_log.txt', 'fix_poiskkino': 'fix_poiskkino_log.txt', 'rezka': 'sync_rezka_log.txt', 'user': 'user_sync_log.txt', 'cleanup': 'cleanup_log.txt', 'single_update': 'single_update_log.txt' };
+                    const maps = { 'reprocess': 'reprocess_log.txt', 'video': 'sync_video_log.txt', 'other': 'sync_other_log.txt', 'fix': 'fix_tech_log.txt', 'fix_poiskkino': 'fix_poiskkino_log.txt', 'rezka': 'sync_rezka_log.txt', 'user': 'user_sync_log.txt', 'cleanup': 'cleanup_log.txt', 'single_update': 'single_update_log.txt' };
                     return maps[this.selectedLogType] || 'log.txt';
                 },
                 currentStatusKey() {
@@ -752,7 +802,6 @@
                         'other': 'sync_other', 
                         'reprocess': 'reprocess', 
                         'fix': 'fix', 
-                        'fix_uz': 'fix',
                         'fix_poiskkino': 'poiskkino', 
                         'rezka': 'rezka', 
                         'user': 'user', 
@@ -787,12 +836,14 @@
                 this.loadFilters();
                 this.fetchCategories(); 
                 this.fetchCollections();
+                this.fetchLastVisit();
                 this.fetchFeed().then(() => {
                     this.restoreScroll();
                 }); 
                 this.startStatusPolling(); 
                 document.addEventListener('click', () => { this.activeCollectionMenuId = null; });
                 window.addEventListener('scroll', this.saveScroll);
+                window.addEventListener('beforeunload', () => { this.markVisited(); });
             },
             methods: {
                 loadFilters() {
@@ -852,6 +903,7 @@
                         if (this.maxImdb < 10) url += `&max_imdb=${this.maxImdb}`;
                         if (this.hideWatched) url += `&hide_rated=true`;
                         if (this.hideCollected) url += `&hide_collected=true`;
+                        if (this.showNewOnly && this.lastVisit) url += `&min_date=${this.lastVisit.split(' ')[0]}`;
                         const res = await fetch(url);
                         const data = await res.json();
                         this.items = data.items;
@@ -1295,6 +1347,60 @@
                     this.maxImdb = 10;
                     sessionStorage.setItem('scroll_pos', 0);
                     this.applyFilter();
+                },
+                async fetchLastVisit() {
+                    try {
+                        const res = await fetch('/api/last_visit');
+                        const data = await res.json();
+                        this.lastVisit = data.last_visit;
+                    } catch(e) {}
+                },
+                isNewItem(item) {
+                    if (!this.lastVisit || !item.latest_release) return false;
+                    return new Date(item.latest_release) > new Date(this.lastVisit);
+                },
+                toggleNewOnly() {
+                    this.showNewOnly = !this.showNewOnly;
+                    localStorage.setItem('showNewOnly', this.showNewOnly);
+                    if (this.showNewOnly) {
+                        this.fetchLastVisit();
+                    }
+                    this.page = 1;
+                    this.fetchFeed();
+                },
+                async markVisited() {
+                    try { await fetch('/api/mark_visited', { method: 'POST' }); } catch(e) {}
+                },
+                openIdEditor(item) {
+                    this.editingItem = item;
+                    this.editKpId = item.kp_id || '';
+                    this.editImdbId = item.imdb_id || '';
+                    this.showIdEditor = true;
+                },
+                async saveIds() {
+                    if (!this.editingItem) return;
+                    try {
+                        const payload = {};
+                        if (this.editKpId !== (this.editingItem.kp_id || '')) payload.kp_id = this.editKpId;
+                        if (this.editImdbId !== (this.editingItem.imdb_id || '')) payload.imdb_id = this.editImdbId;
+                        if (Object.keys(payload).length === 0) {
+                            this.showIdEditor = false;
+                            return;
+                        }
+                        const res = await fetch(`/api/set_ids/${this.editingItem.id}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+                        if (res.ok) {
+                            if (payload.kp_id !== undefined) this.editingItem.kp_id = this.editKpId || null;
+                            if (payload.imdb_id !== undefined) this.editingItem.imdb_id = this.editImdbId || null;
+                            this.showToast('ID обновлены');
+                            this.showIdEditor = false;
+                        }
+                    } catch(e) {
+                        this.showToast('Ошибка сохранения ID');
+                    }
                 },
                 showToast(msg) { this.toast.message = msg; this.toast.show = true; setTimeout(() => this.toast.show = false, 3000); }
             }
