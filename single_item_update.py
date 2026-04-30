@@ -133,6 +133,7 @@ def update_single_item(item_id):
             kp_rating=r["kp_rating"],
             imdb_rating=r["imdb_rating"],
             poster_url=r["poster_url"],
+            description=r["description"],
         )
         conn.commit()
         if not kp_id and r["kp_id"]:

@@ -281,7 +281,12 @@ def _extract_ratings_and_poster(soup, kp_rating, imdb_rating):
     if found_poster and found_poster.startswith("//"):
         found_poster = "https:" + found_poster
 
-    return found_kp_rating, found_imdb_rating, found_poster
+    found_description = ""
+    desc_div = soup.find("div", class_="b-post__description_text")
+    if desc_div:
+        found_description = desc_div.get_text().strip()
+
+    return found_kp_rating, found_imdb_rating, found_poster, found_description
 
 
 def _sync_search(query):
@@ -339,6 +344,7 @@ def search_rezka_for_item(
         "kp_rating": None,
         "imdb_rating": None,
         "poster_url": None,
+        "description": None,
         "score": 0,
     }
 
@@ -428,7 +434,7 @@ def search_rezka_for_item(
         )
 
         if is_valid:
-            kp_r, imdb_r, poster = _extract_ratings_and_poster(
+            kp_r, imdb_r, poster, desc = _extract_ratings_and_poster(
                 soup, kp_rating, imdb_rating
             )
             final_res = res
@@ -439,6 +445,7 @@ def search_rezka_for_item(
                 "kp_rating": kp_r,
                 "imdb_rating": imdb_r,
                 "poster_url": poster,
+                "description": desc,
             }
             break
         elif reason == "conflict":
@@ -457,6 +464,7 @@ def search_rezka_for_item(
     result["kp_rating"] = final_data["kp_rating"]
     result["imdb_rating"] = final_data["imdb_rating"]
     result["poster_url"] = final_data["poster_url"]
+    result["description"] = final_data["description"]
     result["score"] = final_data["score"]
     return result
 
@@ -745,7 +753,7 @@ async def _search_rezka_batch(items, db, conn):
                     )
 
                     if is_valid:
-                        kp_r, imdb_r, poster = _extract_ratings_and_poster(
+                        kp_r, imdb_r, poster, desc = _extract_ratings_and_poster(
                             soup, row["kp_rating"] or 0, row["imdb_rating"] or 0
                         )
                         item_results[idx] = {
@@ -756,6 +764,7 @@ async def _search_rezka_batch(items, db, conn):
                             "kp_rating": kp_r,
                             "imdb_rating": imdb_r,
                             "poster_url": poster,
+                            "description": desc,
                             "score": current_score,
                         }
                         resolved = True
@@ -801,6 +810,7 @@ async def _search_rezka_batch(items, db, conn):
                     kp_id=r["kp_id"],
                     imdb_id=r["imdb_id"],
                     poster_url=r["poster_url"],
+                    description=r["description"],
                     checked_rezka=1,
                 )
                 found_count += 1
