@@ -267,7 +267,7 @@ Vue: `@keydown` на `document`. ~40 строк.
 
 ---
 
-### 15. 🔥 HdRezkaApi — заменить ручной HTML-парсинг на готовую библиотеку
+### 15. 🔥 ✅ HdRezkaApi — заменить ручной HTML-парсинг на готовую библиотеку — ВЫПОЛНЕНО (частично)
 
 **Библиотека:** [HdRezkaApi](https://github.com/SuperZombi/HdRezkaApi) (`pip install HdRezkaApi`)
 
@@ -358,11 +358,22 @@ rezka.translators_names # {name: {id, premium}}
 
 ---
 
+**Реализация (частично):**
+
+- ✅ **A. Замена ручного HTML-парсинга** — `rezka_sync.py` и `rezka_collections_sync.py` используют HdRezkaApi для загрузки страниц (`name`, `origName`, `releaseYear`, `description`, `thumbnailHQ`, `rating`, `type`, `category`). KP/IMDb ID и рейтинги извлекаются из `rezka.soup` через общие `_extract_kp_imdb_ids()` и `_extract_ratings_from_soup()` (библиотека их не даёт).
+- ✅ **E. HdRezkaSession** — логин один раз при старте сервера (`_init_rezka_session()` в `main.py`). Toggle-эндпоинт использует глобальную сессию + кеш папок, не логинится каждый раз.
+- ✅ **D. HdRezkaSearch** — `_sync_search()` в `rezka_sync.py` и `_search_rezka_url()` в `rezka_collections_sync.py` используют `HdRezkaSearch` вместо ручного POST + BS4.
+- ❌ **B. Прямые ссылки на видео (getStream)** — не реализовано. Кнопка "СМОТРЕТЬ" пока не добавлена.
+- ❌ **C. Информация о сезонах/сериях** — не реализовано. `seriesInfo`/`episodesInfo` не используются.
+- ❌ **F. Переводчики (озвучки)** — не реализовано. `translators` не отображаются.
+
+---
+
 ## ПРИОРИТЕТ РЕАЛИЗАЦИИ
 
 | # | Что | Время | Влияние |
 |---|------|-------|---------|
-| 15 | 🔥 HdRezkaApi интеграция | 5-7ч | Кнопка "СМОТРЕТЬ", стабильный парсинг, сессии, озвучки, серии |
+| 15 | ✅ HdRezkaApi (парсинг + сессии + поиск) | Выполнено частично | Стабильный парсинг, сессии, поиск |
 | 4 | Прокси постеров | 1ч | Офлайн, скорость, надёжность |
 | 2 | ✅ FTS5 поиск | Выполнено | Качество поиска x10 |
 | 12 | Кешированный counts | 30мин | Нагрузка -15x |

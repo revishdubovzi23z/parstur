@@ -27,30 +27,22 @@ REZKA_PATH_TO_CATEGORY = {
 
 
 def _login():
-    import requests
+    from HdRezkaApi import HdRezkaSession
 
-    r = requests.post(
-        f"{REZKA_ORIGIN}/ajax/login/",
-        data={"login_name": REZKA_EMAIL, "login_password": REZKA_PASSWORD},
-        headers=REZKA_PAGE_HEADERS,
-        timeout=15,
-    )
-    data = r.json()
-    if not data.get("success"):
-        raise Exception(f"Rezka login failed: {data.get('message', 'unknown')}")
-    cookies = r.cookies.get_dict()
+    session = HdRezkaSession(REZKA_ORIGIN)
+    session.login(REZKA_EMAIL, REZKA_PASSWORD)
     print(f"  [+] Rezka login OK")
-    return cookies
+    return session
 
 
-def _get_folders(cookies):
+def _get_folders(session):
     import requests
     from bs4 import BeautifulSoup
 
     r = requests.get(
         f"{REZKA_ORIGIN}/favorites/",
         headers=REZKA_PAGE_HEADERS,
-        cookies=cookies,
+        cookies=session.cookies,
         timeout=20,
     )
     soup = BeautifulSoup(r.content, "html.parser")
@@ -76,7 +68,7 @@ def _get_folders(cookies):
     return folders
 
 
-def _get_folder_items(url, cookies):
+def _get_folder_items(url, session):
     import requests
     from bs4 import BeautifulSoup
 
@@ -87,7 +79,7 @@ def _get_folder_items(url, cookies):
         r = requests.get(
             page_url,
             headers=REZKA_PAGE_HEADERS,
-            cookies=cookies,
+            cookies=session.cookies,
             timeout=20,
         )
         if r.status_code != 200:
@@ -107,14 +99,14 @@ def _get_folder_items(url, cookies):
     return all_urls
 
 
-def _add_to_rezka_folder(post_id, cat_id, cookies):
+def _add_to_rezka_folder(post_id, cat_id, session):
     import requests
 
     r = requests.post(
         f"{REZKA_ORIGIN}/ajax/favorites/",
         data={"post_id": str(post_id), "cat_id": str(cat_id), "action": "add_post"},
         headers=REZKA_HEADERS,
-        cookies=cookies,
+        cookies=session.cookies,
         timeout=10,
     )
     return r.json().get("success", False)
@@ -134,65 +126,30 @@ def _infer_category_from_url(url):
     return 1
 
 
-def _parse_rezka_page(url, cookies):
-    import requests
-    from bs4 import BeautifulSoup
-
-    r = requests.get(url, headers=REZKA_PAGE_HEADERS, cookies=cookies, timeout=20)
-    if r.status_code != 200:
-        return None
-    soup = BeautifulSoup(r.content, "html.parser")
-
-    title_el = soup.find(class_="b-post__title")
-    title = title_el.get_text().strip() if title_el else ""
-
-    orig_el = soup.find(class_="b-post__origtitle")
-    original_title = orig_el.get_text().strip() if orig_el else ""
-
-    desc_el = soup.find(class_="b-post__description_text")
-    description = desc_el.get_text().strip() if desc_el else ""
-
-    poster = None
-    og_image = soup.find("meta", property="og:image")
-    if og_image and og_image.get("content"):
-        poster = og_image["content"]
-    if not poster:
-        sidecover = soup.find(class_="b-sidecover")
-        if sidecover:
-            img = sidecover.find("img")
-            if img:
-                poster = img.get("src") or img.get("data-src")
-    if poster and poster.startswith("//"):
-        poster = "https:" + poster
-
-    year = None
-    year_link = soup.select_one('.b-content__main .b-post__info a[href*="/year/"]')
-    if year_link:
-        ym = re.search(r"\d{4}", year_link.get("href", ""))
-        if ym:
-            year = int(ym.group(0))
+def _extract_kp_imdb_ids(soup):
+    import base64
+    from urllib.parse import unquote
 
     kp_id, imdb_id = None, None
     rate_blocks = soup.find_all(class_=re.compile(r"b-post__info_rates"))
     for block in rate_blocks:
         kp_link = block.find("a", href=re.compile(r"kinopoisk\.ru"))
         if kp_link:
-            kp_m = re.search(r"/film/(\d+)|/series/(\d+)|/(\d+)/", kp_link["href"])
+            kp_m = re.search(
+                r"/film/(\d+)|/series/(\d+)|/(\d+)/", str(kp_link.get("href", ""))
+            )
             if kp_m:
-                kp_id = next(g for g in kp_m.groups() if g)
+                kp_id = next((g for g in kp_m.groups() if g), None)
         imdb_link = block.find("a", href=re.compile(r"imdb\.com"))
         if imdb_link:
-            imdb_m = re.search(r"/title/(tt\d+)", imdb_link["href"])
+            imdb_m = re.search(r"/title/(tt\d+)", str(imdb_link.get("href", "")))
             if imdb_m:
                 imdb_id = imdb_m.group(1)
 
     links = soup.find_all("a", href=re.compile(r"/help/"))
     for link in links:
         try:
-            import base64
-            from urllib.parse import unquote
-
-            href = link["href"]
+            href = str(link.get("href", ""))
             if "/help/" not in href:
                 continue
             b64_url = href.split("/help/")[1].split(".html")[0].strip("/")
@@ -206,15 +163,19 @@ def _parse_rezka_page(url, cookies):
             if "kinopoisk.ru" in real_url and not kp_id:
                 kp_m = re.search(r"/(?:film|series)/(\d+)|/(\d+)/", real_url)
                 if kp_m:
-                    kp_id = next(g for g in kp_m.groups() if g)
+                    kp_id = next((g for g in kp_m.groups() if g), None)
             elif "imdb.com" in real_url and not imdb_id:
                 imdb_m = re.search(r"/title/(tt\d+)", real_url)
                 if imdb_m:
                     imdb_id = imdb_m.group(1)
         except Exception:
             pass
+    return kp_id, imdb_id
 
+
+def _extract_ratings_from_soup(soup):
     kp_rating, imdb_rating = 0.0, 0.0
+    rate_blocks = soup.find_all(class_=re.compile(r"b-post__info_rates"))
     for block in rate_blocks:
         block_text = block.text.lower()
         val_tag = block.find(["span", "b"], class_=["num", "bold"])
@@ -229,6 +190,35 @@ def _parse_rezka_page(url, cookies):
                     imdb_rating = val
             except Exception:
                 pass
+    return kp_rating, imdb_rating
+
+
+def _parse_rezka_page(url, session):
+    try:
+        rezka = session.get(url)
+        if not rezka or not rezka.ok:
+            return None
+    except Exception:
+        return None
+
+    title = rezka.name or ""
+    original_title = rezka.origName or ""
+    description = rezka.description or ""
+    poster = rezka.thumbnailHQ or rezka.thumbnail or None
+    if poster and str(poster).startswith("//"):
+        poster = "https:" + str(poster)
+    year = rezka.releaseYear
+    if year:
+        try:
+            year = int(year)
+        except (ValueError, TypeError):
+            year = None
+
+    kp_id, imdb_id = None, None
+    kp_rating, imdb_rating = 0.0, 0.0
+    if rezka.soup:
+        kp_id, imdb_id = _extract_kp_imdb_ids(rezka.soup)
+        kp_rating, imdb_rating = _extract_ratings_from_soup(rezka.soup)
 
     category_id = _infer_category_from_url(url)
 
@@ -256,10 +246,7 @@ def _parse_rezka_page(url, cookies):
     }
 
 
-def _search_rezka_url(title, year, cookies):
-    import requests
-    from bs4 import BeautifulSoup
-
+def _search_rezka_url(title, year, session):
     from app_core import clean_title_for_search
 
     parts = [p.strip() for p in title.split("/")]
@@ -276,23 +263,10 @@ def _search_rezka_url(title, year, cookies):
     for q in search_queries:
         for suffix in [f" {year}", ""]:
             try:
-                r = requests.post(
-                    f"{REZKA_ORIGIN}/engine/ajax/search.php",
-                    data={"q": q + suffix},
-                    headers=REZKA_PAGE_HEADERS,
-                    cookies=cookies,
-                    timeout=15,
-                )
-                if not r.ok:
-                    continue
-                soup = BeautifulSoup(r.content, "html.parser")
-                for item in soup.select(".b-search__section_list li"):
-                    title_el = item.find("span", class_="enty")
-                    link_el = item.find("a")
-                    if not title_el or not link_el:
-                        continue
-                    res_title = title_el.get_text().strip()
-                    res_url = link_el["href"]
+                results = session.search(q + suffix)
+                for result in results:
+                    res_title = result.get("title", "")
+                    res_url = result.get("url", "")
 
                     res_year_m = re.search(r"\((\d{4})\)", res_title)
                     res_year = int(res_year_m.group(1)) if res_year_m else None
@@ -340,8 +314,8 @@ def sync_rezka_collections():
 
     print("=== REZKA COLLECTIONS BIDIRECTIONAL SYNC ===")
 
-    cookies = _login()
-    folders = _get_folders(cookies)
+    session = _login()
+    folders = _get_folders(session)
 
     if not folders:
         print("[-] No folders found on Rezka")
@@ -401,7 +375,7 @@ def sync_rezka_collections():
         print(f"\n  [sync] '{label}' (cat_id={cat_id}, coll_id={coll_id})")
 
         rezka_urls = (
-            _get_folder_items(folder["url"], cookies) if folder["count"] > 0 else []
+            _get_folder_items(folder["url"], session) if folder["count"] > 0 else []
         )
         rezka_item_ids = set()
         new_items_from_rezka = []
@@ -420,7 +394,7 @@ def sync_rezka_collections():
 
         for rz_url in new_items_from_rezka:
             print(f"    [new] Parsing Rezka page to create card: {rz_url}")
-            parsed = _parse_rezka_page(rz_url, cookies)
+            parsed = _parse_rezka_page(rz_url, session)
             if not parsed:
                 print(f"      [-] Failed to parse page")
                 continue
@@ -465,7 +439,7 @@ def sync_rezka_collections():
                 print(
                     f"    [search] Looking for Rezka URL: {info['title']} ({info['year']})"
                 )
-                rz_url = _search_rezka_url(info["title"], info["year"], cookies)
+                rz_url = _search_rezka_url(info["title"], info["year"], session)
                 if rz_url:
                     db.fill_item_metadata(
                         item_id, conn=conn, rezka_url=rz_url, checked_rezka=1
@@ -482,7 +456,7 @@ def sync_rezka_collections():
 
             post_id = _extract_post_id(rz_url)
             if post_id:
-                ok = _add_to_rezka_folder(post_id, cat_id, cookies)
+                ok = _add_to_rezka_folder(post_id, cat_id, session)
                 if ok:
                     pushed += 1
                 else:

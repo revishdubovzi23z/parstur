@@ -1,13 +1,10 @@
 import asyncio
 import aiohttp
-import requests as sync_requests
 import re
 import os
 import json
 import time
-import base64
 from collections import defaultdict
-from urllib.parse import unquote
 from bs4 import BeautifulSoup
 from app_core import normalize_title, clean_title_for_search
 from script_utils import load_config, should_stop, clear_stop_flag
@@ -15,10 +12,8 @@ from db import Database
 from logger import setup_tee_logger
 
 _config = load_config()
-REZKA_REQUEST_DELAY = _config.get("rezka", {}).get("request_delay", 0.5)
 REZKA_CONCURRENCY = _config.get("rezka", {}).get("concurrency", 3)
 STATUS_KEY = os.getenv("STATUS_KEY", "rezka")
-
 REZKA_ORIGIN = "https://rezka.ag"
 REZKA_SEARCH_URL = f"{REZKA_ORIGIN}/engine/ajax/search.php"
 REZKA_HEADERS = {
@@ -111,48 +106,30 @@ def _score_candidates(all_results, clean_parts, year):
     return results_with_scores
 
 
-def _extract_year_from_soup(soup):
-    year_label = soup.find(
-        lambda tag: (
-            tag.name in ["th", "b", "span", "h2"]
-            and tag.text
-            and any(x in tag.text for x in ["Год", "Дата выхода"])
-        )
-    )
-    if year_label:
-        container = year_label.find_next_sibling(["td", "span"]) or year_label.parent
-        if container:
-            y_m = re.search(r"(\d{4})", container.text)
-            if y_m:
-                return int(y_m.group(1))
-    y_m = re.search(r"(?:Год|Дата выхода):.*?(\d{4})", str(soup), re.S | re.I)
-    if y_m:
-        return int(y_m.group(1))
-    return None
+def _extract_kp_imdb_ids(soup):
+    import base64
+    from urllib.parse import unquote
 
-
-def _extract_ids_from_soup(soup):
-    page_kp_id = None
-    page_imdb_id = None
-
+    kp_id, imdb_id = None, None
     rate_blocks = soup.find_all(class_=re.compile(r"b-post__info_rates"))
     for block in rate_blocks:
         kp_link = block.find("a", href=re.compile(r"kinopoisk\.ru"))
         if kp_link:
-            kp_m = re.search(r"/film/(\d+)|/series/(\d+)|/(\d+)/", kp_link["href"])
+            kp_m = re.search(
+                r"/film/(\d+)|/series/(\d+)|/(\d+)/", str(kp_link.get("href", ""))
+            )
             if kp_m:
-                page_kp_id = next(g for g in kp_m.groups() if g)
-
+                kp_id = next((g for g in kp_m.groups() if g), None)
         imdb_link = block.find("a", href=re.compile(r"imdb\.com"))
         if imdb_link:
-            imdb_m = re.search(r"/title/(tt\d+)", imdb_link["href"])
+            imdb_m = re.search(r"/title/(tt\d+)", str(imdb_link.get("href", "")))
             if imdb_m:
-                page_imdb_id = imdb_m.group(1)
+                imdb_id = imdb_m.group(1)
 
     links = soup.find_all("a", href=re.compile(r"/help/"))
     for link in links:
         try:
-            href = link["href"]
+            href = str(link.get("href", ""))
             if "/help/" not in href:
                 continue
             b64_url = href.split("/help/")[1].split(".html")[0].strip("/")
@@ -163,27 +140,154 @@ def _extract_ids_from_soup(soup):
                 b64_url += "=" * (4 - missing_padding)
             real_url = base64.b64decode(b64_url).decode("utf-8", errors="ignore")
             real_url = unquote(real_url)
-            if "kinopoisk.ru" in real_url:
+            if "kinopoisk.ru" in real_url and not kp_id:
                 kp_m = re.search(r"/(?:film|series)/(\d+)|/(\d+)/", real_url)
-                if kp_m and not page_kp_id:
-                    page_kp_id = next(g for g in kp_m.groups() if g)
-            elif "imdb.com" in real_url:
+                if kp_m:
+                    kp_id = next((g for g in kp_m.groups() if g), None)
+            elif "imdb.com" in real_url and not imdb_id:
                 imdb_m = re.search(r"/title/(tt\d+)", real_url)
-                if imdb_m and not page_imdb_id:
-                    page_imdb_id = imdb_m.group(1)
+                if imdb_m:
+                    imdb_id = imdb_m.group(1)
         except Exception:
             pass
+    return kp_id, imdb_id
 
-    return page_kp_id, page_imdb_id
+
+def _extract_ratings_from_soup(soup):
+    kp_rating, imdb_rating = 0.0, 0.0
+    rate_blocks = soup.find_all(class_=re.compile(r"b-post__info_rates"))
+    for block in rate_blocks:
+        block_text = block.text.lower()
+        val_tag = block.find(["span", "b"], class_=["num", "bold"])
+        if not val_tag:
+            val_tag = block.find("b")
+        if val_tag:
+            try:
+                val = float(val_tag.text.strip().replace(",", "."))
+                if "кинопоиск" in block_text or "kp" in block_text:
+                    kp_rating = val
+                elif "imdb" in block_text:
+                    imdb_rating = val
+            except Exception:
+                pass
+    return kp_rating, imdb_rating
 
 
-def _verify_candidate(soup, scored_item, year, kp_id, imdb_id):
-    score = scored_item["score"]
-    page_kp_id, page_imdb_id = _extract_ids_from_soup(soup)
+def _verify_candidate_soup(soup, scored_item, year, kp_id, imdb_id):
+    page_kp_id, page_imdb_id = _extract_kp_imdb_ids(soup)
 
     page_year = scored_item.get("year")
     if not page_year:
-        page_year = _extract_year_from_soup(soup)
+        y_m = re.search(r"(?:Год|Дата выхода):.*?(\d{4})", str(soup), re.S | re.I)
+        if y_m:
+            page_year = int(y_m.group(1))
+        else:
+            year_link = soup.select_one(
+                '.b-content__main .b-post__info a[href*="/year/"]'
+            )
+            if year_link:
+                ym2 = re.search(r"\d{4}", str(year_link.get("href", "")))
+                if ym2:
+                    page_year = int(ym2.group(0))
+
+    score = scored_item["score"]
+    current_score = score
+    if not scored_item.get("year") and page_year and year:
+        diff = abs(year - page_year)
+        if diff == 0:
+            current_score += 60
+        elif diff == 1:
+            current_score += 50
+        elif diff <= 3:
+            current_score -= 40
+        else:
+            current_score -= 150
+
+    if page_year:
+        print(f"      [*] Год на странице: {page_year}")
+
+    id_match = False
+    id_conflict = False
+
+    if kp_id and page_kp_id:
+        if str(kp_id) == str(page_kp_id):
+            print(f"      [+] MATCH KP ID: {kp_id}")
+            id_match = True
+        else:
+            print(f"      [-] CONFLICT KP ID: {kp_id} != {page_kp_id}")
+            id_conflict = True
+
+    if imdb_id and page_imdb_id:
+        if str(imdb_id) == str(page_imdb_id):
+            print(f"      [+] MATCH IMDb ID: {imdb_id}")
+            id_match = True
+        else:
+            print(f"      [-] CONFLICT IMDb ID: {imdb_id} != {page_imdb_id}")
+            id_conflict = True
+
+    if id_conflict:
+        return False, page_kp_id, page_imdb_id, current_score, "conflict"
+
+    is_valid = False
+    reason = ""
+    if id_match:
+        is_valid = True
+        reason = "id_match"
+    elif (kp_id or imdb_id) and not (page_kp_id or page_imdb_id):
+        if current_score >= 90:
+            is_valid = True
+            reason = "trust_by_title"
+    elif not (kp_id or imdb_id) and current_score >= 90:
+        is_valid = True
+        reason = "high_score"
+
+    if not (kp_id or imdb_id) and (page_kp_id or page_imdb_id) and current_score >= 110:
+        is_valid = True
+        reason = "page_ids_high_score"
+
+    return is_valid, page_kp_id, page_imdb_id, current_score, reason
+
+
+def _extract_metadata_from_soup(soup, kp_rating, imdb_rating):
+    kp_r, imdb_r = _extract_ratings_from_soup(soup)
+    if kp_r == 0.0:
+        kp_r = kp_rating
+    if imdb_r == 0.0:
+        imdb_r = imdb_rating
+
+    found_poster = None
+    og_image = soup.find("meta", property="og:image")
+    if og_image and og_image.get("content"):
+        found_poster = str(og_image["content"])
+    if not found_poster:
+        itemprop_img = soup.find("img", itemprop="image")
+        if itemprop_img:
+            found_poster = itemprop_img.get("src") or itemprop_img.get("data-src")
+    if found_poster and str(found_poster).startswith("//"):
+        found_poster = "https:" + str(found_poster)
+
+    found_description = ""
+    desc_div = soup.find("div", class_="b-post__description_text")
+    if desc_div:
+        found_description = desc_div.get_text().strip()
+
+    return kp_r, imdb_r, found_poster, found_description
+
+
+def _verify_candidate(rezka_obj, scored_item, year, kp_id, imdb_id):
+    score = scored_item["score"]
+    page_kp_id, page_imdb_id = None, None
+    if rezka_obj.soup:
+        page_kp_id, page_imdb_id = _extract_kp_imdb_ids(rezka_obj.soup)
+
+    page_year = None
+    if rezka_obj.releaseYear:
+        try:
+            page_year = int(rezka_obj.releaseYear)
+        except (ValueError, TypeError):
+            pass
+    if not page_year:
+        page_year = scored_item.get("year")
 
     current_score = score
     if not scored_item.get("year") and page_year and year:
@@ -249,85 +353,50 @@ def _verify_candidate(soup, scored_item, year, kp_id, imdb_id):
     return is_valid, page_kp_id, page_imdb_id, current_score, reason
 
 
-def _extract_ratings_and_poster(soup, kp_rating, imdb_rating):
+def _extract_metadata_from_rezka(rezka_obj, kp_rating, imdb_rating):
     found_kp_rating = kp_rating
     found_imdb_rating = imdb_rating
-
-    rate_blocks = soup.find_all(class_=re.compile(r"b-post__info_rates"))
-    for block in rate_blocks:
-        block_text = block.text.lower()
-        val_tag = block.find(["span", "b"], class_=["num", "bold"])
-        if not val_tag:
-            val_tag = block.find("b")
-        if val_tag:
-            try:
-                val = float(val_tag.text.strip().replace(",", "."))
-                if "кинопоиск" in block_text or "kp" in block_text:
-                    found_kp_rating = val
-                elif "imdb" in block_text:
-                    found_imdb_rating = val
-            except Exception:
-                pass
+    if rezka_obj.soup:
+        found_kp_rating, found_imdb_rating = _extract_ratings_from_soup(rezka_obj.soup)
 
     found_poster = None
-    og_image = soup.find("meta", property="og:image")
-    if og_image and og_image.get("content"):
-        found_poster = og_image["content"]
-    if not found_poster:
-        itemprop_img = soup.find("img", itemprop="image")
-        if itemprop_img:
-            found_poster = itemprop_img.get("src") or itemprop_img.get("data-src")
-
+    if rezka_obj.thumbnailHQ:
+        found_poster = str(rezka_obj.thumbnailHQ)
+    elif rezka_obj.thumbnail:
+        found_poster = str(rezka_obj.thumbnail)
     if found_poster and found_poster.startswith("//"):
         found_poster = "https:" + found_poster
 
-    found_description = ""
-    desc_div = soup.find("div", class_="b-post__description_text")
-    if desc_div:
-        found_description = desc_div.get_text().strip()
+    found_description = rezka_obj.description or ""
 
     return found_kp_rating, found_imdb_rating, found_poster, found_description
 
 
 def _sync_search(query):
+    from HdRezkaApi.search import HdRezkaSearch
+
     try:
-        r = sync_requests.post(
-            REZKA_SEARCH_URL,
-            data={"q": query},
-            headers=REZKA_HEADERS,
-            cookies=REZKA_COOKIES,
-            timeout=15,
-        )
-        if r.ok:
-            soup = BeautifulSoup(r.content, "html.parser")
-            results = []
-            for item in soup.select(".b-search__section_list li"):
-                title_el = item.find("span", class_="enty")
-                link_el = item.find("a")
-                if not title_el or not link_el:
-                    continue
-                title = title_el.get_text().strip()
-                url = link_el.attrs["href"]
-                rating_span = item.find("span", class_="rating")
-                rating = float(rating_span.get_text()) if rating_span else None
-                results.append({"title": title, "url": url, "rating": rating})
-            return results
+        results = HdRezkaSearch(REZKA_ORIGIN)(query)
+        return [
+            {
+                "title": r.get("title", ""),
+                "url": r.get("url", ""),
+                "rating": r.get("rating"),
+            }
+            for r in results
+        ]
     except Exception:
         pass
     return []
 
 
-def _sync_load_page(url):
+def _sync_load_rezka(url):
+    from HdRezkaApi import HdRezkaApi
+
     try:
-        r = sync_requests.get(
-            url,
-            headers=REZKA_HEADERS,
-            cookies=REZKA_COOKIES,
-            timeout=20,
-            allow_redirects=True,
-        )
-        if r.ok:
-            return BeautifulSoup(r.content, "html.parser")
+        rezka = HdRezkaApi(url)
+        if rezka.ok:
+            return rezka
     except Exception:
         pass
     return None
@@ -424,18 +493,18 @@ def search_rezka_for_item(
         res = scored_item["res"]
         print(f"    [?] Проверка: {res['title']} (Score: {score})")
 
-        soup = _sync_load_page(res["url"])
-        if not soup:
+        rezka_obj = _sync_load_rezka(res["url"])
+        if not rezka_obj:
             print(f"      [!] Ошибка загрузки страницы.")
             continue
 
         is_valid, page_kp_id, page_imdb_id, current_score, reason = _verify_candidate(
-            soup, scored_item, year, kp_id, imdb_id
+            rezka_obj, scored_item, year, kp_id, imdb_id
         )
 
         if is_valid:
-            kp_r, imdb_r, poster, desc = _extract_ratings_and_poster(
-                soup, kp_rating, imdb_rating
+            kp_r, imdb_r, poster, desc = _extract_metadata_from_rezka(
+                rezka_obj, kp_rating, imdb_rating
             )
             final_res = res
             final_data = {
@@ -747,13 +816,13 @@ async def _search_rezka_batch(items, db, conn):
                     )
 
                     is_valid, page_kp_id, page_imdb_id, current_score, reason = (
-                        _verify_candidate(
+                        _verify_candidate_soup(
                             soup, candidate, row["year"], row["kp_id"], row["imdb_id"]
                         )
                     )
 
                     if is_valid:
-                        kp_r, imdb_r, poster, desc = _extract_ratings_and_poster(
+                        kp_r, imdb_r, poster, desc = _extract_metadata_from_soup(
                             soup, row["kp_rating"] or 0, row["imdb_rating"] or 0
                         )
                         item_results[idx] = {

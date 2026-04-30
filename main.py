@@ -128,6 +128,69 @@ class ConnectionManager:
 
 ws_manager = ConnectionManager()
 
+rezka_session = None
+rezka_session_folders_cache = None
+
+
+def _init_rezka_session():
+    global rezka_session, rezka_session_folders_cache
+    rezka_email = os.getenv("REZKA_EMAIL", "")
+    rezka_password = os.getenv("REZKA_PASSWORD", "")
+    if not rezka_email or not rezka_password:
+        print("[REZKA] No credentials, session skipped", flush=True)
+        return
+    try:
+        from HdRezkaApi import HdRezkaSession as _Session
+
+        rezka_session = _Session("https://rezka.ag/")
+        rezka_session.login(rezka_email, rezka_password)
+        _refresh_rezka_folders_cache()
+        print(
+            f"[REZKA] Session initialized, cookies: {list(rezka_session.cookies.keys())}",
+            flush=True,
+        )
+    except Exception as e:
+        print(f"[REZKA] Session init failed: {e}", flush=True)
+        rezka_session = None
+
+
+def _refresh_rezka_folders_cache():
+    global rezka_session_folders_cache
+    if not rezka_session:
+        return
+    try:
+        import re as _re
+        import requests as _req
+        from bs4 import BeautifulSoup as _BS
+        from app_core import normalize_title
+
+        resp = _req.get(
+            "https://rezka.ag/favorites/",
+            headers={"User-Agent": "Mozilla/5.0"},
+            cookies=rezka_session.cookies,
+            timeout=15,
+        )
+        soup = _BS(resp.content, "html.parser")
+        sidebar = soup.find(
+            "div", class_="b-favorites_content__sidebarbar"
+        ) or soup.find("div", class_="b-favorites_content__sidebar")
+        folders = {}
+        if sidebar:
+            for a in sidebar.find_all("a", href=True):
+                href = a.get("href", "")
+                if "javascript" in href:
+                    continue
+                text = a.text.strip()
+                name = _re.sub(r"\s*\(\d+\)", "", text).strip()
+                m = _re.search(r"/favorites/(\d+)/", href)
+                if m:
+                    folders[normalize_title(name)] = m.group(1)
+        rezka_session_folders_cache = folders
+        print(f"[REZKA] Folders cache refreshed: {len(folders)} folders")
+    except Exception as e:
+        print(f"[REZKA] Folders cache refresh failed: {e}")
+        rezka_session_folders_cache = None
+
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
@@ -205,6 +268,8 @@ async def startup_event():
         db.ensure_fts_indexed()
     except Exception as e:
         print(f"[FTS5] Index init skipped: {e}")
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _init_rezka_session)
 
 
 @app.on_event("shutdown")
@@ -932,33 +997,24 @@ class CollectionItemRequest(BaseModel):
 
 def _sync_rezka_folder(action, collection_id, item_id):
     try:
-        import requests as req
-        from db import Database as _DB
-        import re as _re
-        from bs4 import BeautifulSoup as _BS
+        import requests as _req
         from app_core import normalize_title
 
-        rezka_email = os.getenv("REZKA_EMAIL", "")
-        rezka_password = os.getenv("REZKA_PASSWORD", "")
-        if not rezka_email or not rezka_password:
+        if not rezka_session:
             return
 
-        _db = _DB()
-        _conn = _db.get_connection()
-        _c = _conn.cursor()
-
+        _c = db.get_connection().cursor()
         _c.execute("SELECT name FROM collections WHERE id = ?", (collection_id,))
         _coll = _c.fetchone()
         if not _coll:
-            _conn.close()
             return
 
         _c.execute("SELECT rezka_url FROM items WHERE id = ?", (item_id,))
         _item = _c.fetchone()
-        _conn.close()
-
         if not _item or not _item["rezka_url"]:
             return
+
+        import re as _re
 
         rezka_url = _item["rezka_url"]
         _m = _re.search(
@@ -969,73 +1025,39 @@ def _sync_rezka_folder(action, collection_id, item_id):
             return
         post_id = _m.group(1)
 
-        _r = req.post(
-            "https://rezka.ag/ajax/login/",
-            data={"login_name": rezka_email, "login_password": rezka_password},
-            headers={"User-Agent": "Mozilla/5.0"},
-            timeout=10,
-        )
-        _cookies = _r.cookies.get_dict()
-        if not _r.json().get("success"):
-            return
-
-        _folders_resp = req.get(
-            "https://rezka.ag/favorites/",
-            headers={"User-Agent": "Mozilla/5.0"},
-            cookies=_cookies,
-            timeout=15,
-        )
-        _soup = _BS(_folders_resp.content, "html.parser")
-        _sidebar = _soup.find(
-            "div", class_="b-favorites_content__sidebarbar"
-        ) or _soup.find("div", class_="b-favorites_content__sidebar")
+        coll_norm = normalize_title(_coll["name"])
         cat_id = None
-        if _sidebar:
-            coll_norm = normalize_title(_coll["name"])
-            for _a in _sidebar.find_all("a", href=True):
-                _href = _a.get("href", "")
-                if "javascript" in _href:
-                    continue
-                _text = _a.text.strip()
-                _fname = _re.sub(r"\s*\(\d+\)", "", _text).strip()
-                if normalize_title(_fname) == coll_norm:
-                    _m2 = _re.search(r"/favorites/(\d+)/", _href)
-                    if _m2:
-                        cat_id = _m2.group(1)
-                    break
+        if rezka_session_folders_cache and coll_norm in rezka_session_folders_cache:
+            cat_id = rezka_session_folders_cache[coll_norm]
+        else:
+            _refresh_rezka_folders_cache()
+            if rezka_session_folders_cache and coll_norm in rezka_session_folders_cache:
+                cat_id = rezka_session_folders_cache[coll_norm]
 
         if not cat_id:
             return
 
-        if action == "added":
-            req.post(
-                "https://rezka.ag/ajax/favorites/",
-                data={"post_id": post_id, "cat_id": cat_id, "action": "add_post"},
-                headers={
-                    "User-Agent": "Mozilla/5.0",
-                    "X-Requested-With": "XMLHttpRequest",
-                },
-                cookies=_cookies,
-                timeout=10,
-            )
-        else:
-            req.post(
-                "https://rezka.ag/ajax/favorites/",
-                data={
-                    "post_id": post_id,
-                    "cat_id": cat_id,
-                    "action": "add_post",
-                    "del": "1",
-                },
-                headers={
-                    "User-Agent": "Mozilla/5.0",
-                    "X-Requested-With": "XMLHttpRequest",
-                },
-                cookies=_cookies,
-                timeout=10,
-            )
+        data = {"post_id": post_id, "cat_id": cat_id, "action": "add_post"}
+        if action == "removed":
+            data["del"] = "1"
+
+        _req.post(
+            "https://rezka.ag/ajax/favorites/",
+            data=data,
+            headers={
+                "User-Agent": "Mozilla/5.0",
+                "X-Requested-With": "XMLHttpRequest",
+            },
+            cookies=rezka_session.cookies,
+            timeout=10,
+        )
+        _refresh_rezka_folders_cache()
     except Exception as e:
         print(f"[REZKA SYNC ERROR] {e}")
+        try:
+            _init_rezka_session()
+        except Exception:
+            pass
 
 
 def _sync_rezka_folder_wrapper(action, collection_id, item_id):
@@ -1064,11 +1086,7 @@ def _sync_rezka_folder_wrapper(action, collection_id, item_id):
 async def toggle_collection_item(collection_id: int, data: CollectionItemRequest):
     action = db.toggle_collection_item(collection_id, data.item_id)
 
-    if (
-        action in ("added", "removed")
-        and os.getenv("REZKA_EMAIL")
-        and os.getenv("REZKA_PASSWORD")
-    ):
+    if action in ("added", "removed") and rezka_session:
         loop = asyncio.get_event_loop()
         loop.run_in_executor(
             None, _sync_rezka_folder_wrapper, action, collection_id, data.item_id
