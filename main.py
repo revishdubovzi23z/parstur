@@ -1,19 +1,31 @@
 from datetime import datetime
+from typing import Optional
 import json
-import sqlite3
 import uvicorn
-import unicodedata
 import asyncio
 import os
 import subprocess
 import sys
 import signal
+import secrets
+import hashlib
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import (
+    FastAPI,
+    Request,
+    HTTPException,
+    Depends,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.responses import HTMLResponse, FileResponse
 from pydantic import BaseModel
 from app_core import RUTOR_CATEGORIES, VIDEO_CATEGORY_IDS
 from script_utils import load_config, clear_stop_flag, clear_checkpoint
+from db import db
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Принудительно устанавливаем ProactorEventLoop для Windows,
 # так как только он поддерживает запуск подпроцессов в asyncio.
@@ -61,13 +73,138 @@ class TaskQueue:
 
 task_queue = TaskQueue()
 
+AUTH_USER = os.getenv("AUTH_USER", "")
+AUTH_PASS = os.getenv("AUTH_PASS", "")
+_auth_enabled = bool(AUTH_USER and AUTH_PASS)
+_session_tokens: dict[str, float] = {}
+
+
+def _check_auth(request: Request) -> bool:
+    if not _auth_enabled:
+        return True
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        token = auth[7:]
+        if token in _session_tokens:
+            return True
+    return False
+
+
+async def require_auth(request: Request):
+    if not _auth_enabled:
+        return
+    if _check_auth(request):
+        return
+    raise HTTPException(
+        status_code=401, detail="Unauthorized", headers={"WWW-Authenticate": "Basic"}
+    )
+
+
 app = FastAPI(title="Tracker Filter")
+
+
+class ConnectionManager:
+    def __init__(self):
+        self.active: list[WebSocket] = []
+
+    async def connect(self, ws: WebSocket):
+        await ws.accept()
+        self.active.append(ws)
+
+    def disconnect(self, ws: WebSocket):
+        if ws in self.active:
+            self.active.remove(ws)
+
+    async def broadcast(self, message: dict):
+        to_remove = []
+        for ws in self.active:
+            try:
+                await ws.send_json(message)
+            except Exception:
+                to_remove.append(ws)
+        for ws in to_remove:
+            self.disconnect(ws)
+
+
+ws_manager = ConnectionManager()
+
+
+@app.websocket("/ws")
+async def websocket_endpoint(ws: WebSocket):
+    await ws_manager.connect(ws)
+    try:
+        progress = {}
+        for key in process_status.keys():
+            progress[key] = _read_progress(key)
+        await ws.send_json(
+            {"type": "status", "statuses": dict(process_status), "progress": progress}
+        )
+        while True:
+            await ws.receive_text()
+    except WebSocketDisconnect:
+        ws_manager.disconnect(ws)
+    except Exception:
+        ws_manager.disconnect(ws)
+
+
+def _read_progress(key):
+    p_file = f"progress_{key}.json"
+    if os.path.exists(p_file):
+        try:
+            with open(p_file, "r") as f:
+                return json.load(f)
+        except Exception:
+            return {"current": 0, "total": 0}
+    return {"current": 0, "total": 0}
+
+
+@app.post("/api/login")
+async def login(request: Request):
+    if not _auth_enabled:
+        return {"token": "none", "auth_enabled": False}
+    body = await request.json()
+    user = body.get("username", "")
+    password = body.get("password", "")
+    if user == AUTH_USER and password == AUTH_PASS:
+        token = secrets.token_hex(32)
+        _session_tokens[token] = True
+        return {"token": token, "auth_enabled": True}
+    raise HTTPException(status_code=401, detail="Invalid credentials")
+
+
+@app.get("/api/auth_status")
+async def auth_status():
+    return {"auth_enabled": _auth_enabled}
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    if not _auth_enabled:
+        return await call_next(request)
+    path = request.url.path
+    if path in (
+        "/api/login",
+        "/api/auth_status",
+        "/",
+        "/manifest.json",
+        "/icon.png",
+        "/sw.js",
+    ):
+        return await call_next(request)
+    if path.startswith("/api/") or path.startswith("/assets/"):
+        if not _check_auth(request):
+            return HTMLResponse(content="Unauthorized", status_code=401)
+    return await call_next(request)
 
 
 @app.on_event("startup")
 async def startup_event():
     print("[SERVER] Startup event triggered")
     task_queue.start()
+    try:
+        db.ensure_fts_indexed()
+    except Exception as e:
+        print(f"[FTS5] Index init skipped: {e}")
 
 
 @app.on_event("shutdown")
@@ -105,6 +242,12 @@ async def debug_queue():
     }
 
 
+@app.post("/api/rebuild_fts")
+def rebuild_fts():
+    count = db.rebuild_fts()
+    return {"status": "ok", "indexed": count}
+
+
 @app.get("/manifest.json")
 def get_manifest():
     return FileResponse("manifest.json")
@@ -140,6 +283,7 @@ process_status = {
     "sync_video": "idle",
     "sync_other": "idle",
     "fix": "idle",
+    "poiskkino": "idle",
     "reprocess": "idle",
     "user": "idle",
     "cleanup": "idle",
@@ -153,12 +297,15 @@ pipeline_stop_requested = False
 async def run_script(script_name, status_key):
     global process_status, running_processes
     process_status[status_key] = "running"
+    await ws_manager.broadcast(
+        {"type": "status", "key": status_key, "value": "running"}
+    )
 
     progress_file = f"progress_{status_key}.json"
     if os.path.exists(progress_file):
         try:
             os.remove(progress_file)
-        except:
+        except Exception:
             pass
 
     script_path = os.path.abspath(script_name)
@@ -189,6 +336,13 @@ async def run_script(script_name, status_key):
         clear_stop_flag(status_key)
         if process_status[status_key] == "completed":
             clear_checkpoint(status_key)
+        await ws_manager.broadcast(
+            {
+                "type": "status",
+                "key": status_key,
+                "value": process_status[status_key],
+            }
+        )
 
 
 def check_any_running():
@@ -317,15 +471,19 @@ async def run_script_with_args(
 ):
     global process_status, running_processes
     process_status[status_key] = "running"
+    await ws_manager.broadcast(
+        {"type": "status", "key": status_key, "value": "running"}
+    )
 
     start_time = datetime.now()
+    last_progress_broadcast = 0
 
     # Очищаем старый файл прогресса
     progress_file = f"progress_{status_key}.json"
     if os.path.exists(progress_file):
         try:
             os.remove(progress_file)
-        except:
+        except Exception:
             pass
 
     # Используем абсолютный путь к скрипту
@@ -375,7 +533,6 @@ async def run_script_with_args(
                     f.flush()
 
                 while True:
-                    # Читаем небольшими порциями, чтобы не ждать новой строки
                     chunk = await proc.stdout.read(1024)
                     if not chunk:
                         break
@@ -383,6 +540,27 @@ async def run_script_with_args(
                     decoded_chunk = chunk.decode("utf-8", errors="replace")
                     f.write(decoded_chunk)
                     f.flush()
+
+                    await ws_manager.broadcast(
+                        {
+                            "type": "log",
+                            "key": status_key,
+                            "data": decoded_chunk,
+                        }
+                    )
+
+                    now = asyncio.get_event_loop().time()
+                    if now - last_progress_broadcast > 1.0:
+                        last_progress_broadcast = now
+                        prog = _read_progress(status_key)
+                        await ws_manager.broadcast(
+                            {
+                                "type": "progress",
+                                "key": status_key,
+                                "current": prog.get("current", 0),
+                                "total": prog.get("total", 0),
+                            }
+                        )
         else:
             await proc.wait()
 
@@ -407,7 +585,7 @@ async def run_script_with_args(
                 with open(log_file, "a", encoding="utf-8") as f:
                     f.write(f"\n[CRITICAL ERROR] Не удалось запустить процесс: {e}\n")
                     f.write(tb)
-            except:
+            except Exception:
                 pass
         status = "error"
     finally:
@@ -419,6 +597,22 @@ async def run_script_with_args(
         clear_stop_flag(status_key)
         if status == "completed":
             clear_checkpoint(status_key)
+
+        await ws_manager.broadcast(
+            {
+                "type": "status",
+                "key": status_key,
+                "value": status,
+            }
+        )
+        await ws_manager.broadcast(
+            {
+                "type": "progress",
+                "key": status_key,
+                "current": _read_progress(status_key).get("current", 0),
+                "total": _read_progress(status_key).get("total", 0),
+            }
+        )
 
         # Записываем историю
         end_time = datetime.now()
@@ -432,29 +626,19 @@ async def run_script_with_args(
                     data = json.load(f)
                     items_processed = data.get("current", 0)
                     total_items = data.get("total", 0)
-            except:
+            except Exception:
                 pass
 
         try:
-            conn = get_db()
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                INSERT INTO job_history (job_type, start_time, end_time, duration, items_processed, total_items, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-                (
-                    status_key,
-                    start_time.strftime("%Y-%m-%d %H:%M:%S"),
-                    end_time.strftime("%Y-%m-%d %H:%M:%S"),
-                    duration,
-                    items_processed,
-                    total_items,
-                    status,
-                ),
+            db.insert_job_history(
+                status_key,
+                start_time.strftime("%Y-%m-%d %H:%M:%S"),
+                end_time.strftime("%Y-%m-%d %H:%M:%S"),
+                duration,
+                items_processed,
+                total_items,
+                status,
             )
-            conn.commit()
-            conn.close()
         except Exception as e:
             print(f"Ошибка записи истории: {e}")
 
@@ -589,27 +773,6 @@ async def start_reprocess(force: bool = False):
     return {"status": "started"}
 
 
-@app.post("/api/reprocess_item/{item_id}")
-async def reprocess_item(item_id: int):
-    # Очищаем лог перед запуском
-    log_file = "single_update_log.txt"
-    with open(log_file, "w", encoding="utf-8") as f:
-        f.write(
-            f"=== Обновление метаданных карточки ID {item_id} ({datetime.now().strftime('%H:%M:%S')}) ===\n"
-        )
-
-    args = ["--force", "--id", str(item_id)]
-    await task_queue.add_task(
-        run_script_with_args,
-        "single_update",
-        "reprocess_database.py",
-        args,
-        "single_update",
-        log_file,
-    )
-    return {"status": "started"}
-
-
 @app.post("/api/update_item/{item_id}")
 async def update_item(item_id: int):
     # Этот процесс можно запускать параллельно, так как он трогает только одну запись
@@ -639,142 +802,12 @@ def get_process_status():
             try:
                 with open(p_file, "r") as f:
                     progress[key] = json.load(f)
-            except:
+            except Exception:
                 progress[key] = {"current": 0, "total": 0}
         else:
             progress[key] = {"current": 0, "total": 0}
 
     return {"statuses": process_status, "progress": progress}
-
-
-def get_db():
-    conn = sqlite3.connect("app_data.db", timeout=30.0)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.row_factory = sqlite3.Row
-
-    def py_lower(x):
-        if x is None:
-            return None
-        return unicodedata.normalize("NFC", str(x)).lower().replace("x", "х").strip()
-
-    conn.create_function("py_lower", 1, py_lower)
-    return conn
-
-
-def get_watched_item_ids(cursor):
-    cursor.execute(
-        "SELECT imdb_id, kp_id, title_norm, original_title_norm, item_year FROM user_ratings"
-    )
-    ratings = cursor.fetchall()
-    if not ratings:
-        return set()
-    rated_imdb_ids = set()
-    rated_kp_ids = set()
-    rated_names = {}
-    for imdb_id, kp_id, title_norm, orig_norm, item_year in ratings:
-        if imdb_id:
-            rated_imdb_ids.add(imdb_id)
-        if kp_id:
-            rated_kp_ids.add(kp_id)
-        for name in [title_norm, orig_norm]:
-            if name:
-                if name not in rated_names:
-                    rated_names[name] = []
-                rated_names[name].append(item_year)
-    watched_ids = set()
-    if rated_imdb_ids:
-        placeholders = ",".join("?" * len(rated_imdb_ids))
-        cursor.execute(
-            f"SELECT id FROM items WHERE imdb_id IN ({placeholders})",
-            list(rated_imdb_ids),
-        )
-        for row in cursor.fetchall():
-            watched_ids.add(row[0])
-    if rated_kp_ids:
-        placeholders = ",".join("?" * len(rated_kp_ids))
-        cursor.execute(
-            f"SELECT id FROM items WHERE kp_id IN ({placeholders})", list(rated_kp_ids)
-        )
-        for row in cursor.fetchall():
-            watched_ids.add(row[0])
-    if rated_names:
-        name_list = list(rated_names.keys())
-        chunk_size = 900
-        for i in range(0, len(name_list), chunk_size):
-            chunk = name_list[i : i + chunk_size]
-            placeholders = ",".join("?" * len(chunk))
-            cursor.execute(
-                f"SELECT sn.item_id FROM item_search_names sn WHERE sn.name_norm IN ({placeholders})",
-                chunk,
-            )
-            for row in cursor.fetchall():
-                watched_ids.add(row[0])
-    return watched_ids
-
-
-@app.get("/api/categories")
-def get_categories(hide_rated: bool = False, hide_collected: bool = False):
-    conn = get_db()
-    cursor = conn.cursor()
-    watched_ids = get_watched_item_ids(cursor) if hide_rated else set()
-
-    def make_filters(alias="i"):
-        clauses = []
-        if watched_ids:
-            ids_str = ",".join(map(str, watched_ids))
-            clauses.append(f"{alias}.id NOT IN ({ids_str})")
-        if hide_collected:
-            clauses.append(f"{alias}.id NOT IN (SELECT item_id FROM collection_items)")
-        return " AND " + " AND ".join(clauses) if clauses else ""
-
-    not_in = make_filters("i")
-    cursor.execute(
-        f"SELECT c.id, c.name, (SELECT COUNT(*) FROM items i WHERE i.category_id = c.id AND i.is_ignored = 0 {not_in}) as count FROM categories c ORDER BY c.name"
-    )
-    cats = [dict(row) for row in cursor.fetchall()]
-    ids_str_cats = ",".join(map(str, VIDEO_CATEGORY_IDS))
-    cursor.execute(
-        f"SELECT COUNT(*) FROM items i WHERE category_id IN ({ids_str_cats}) AND is_ignored = 0 {not_in}"
-    )
-    count_video = cursor.fetchone()[0]
-    cursor.execute(f"SELECT COUNT(*) FROM items i WHERE is_ignored = 0 {not_in}")
-    count_any = cursor.fetchone()[0]
-    cursor.execute(f"SELECT COUNT(*) FROM items i WHERE is_ignored = 1 {not_in}")
-    count_ignored = cursor.fetchone()[0]
-    cursor.execute(
-        f"SELECT COUNT(*) FROM items i WHERE i.category_id IN ({ids_str_cats}) AND i.is_ignored = 0 AND (i.poster_url IS NULL OR i.poster_url = '') {not_in}"
-    )
-    no_poster_count = cursor.fetchone()[0]
-    cursor.execute(
-        f"SELECT COUNT(*) FROM items i WHERE i.category_id IN ({ids_str_cats}) AND i.is_ignored = 0 AND (i.kp_rating = 0 OR i.kp_rating IS NULL OR i.imdb_rating = 0 OR i.imdb_rating IS NULL) {not_in}"
-    )
-    no_ratings_count = cursor.fetchone()[0]
-    cursor.execute(
-        f"SELECT COUNT(*) FROM items i WHERE i.category_id IN ({ids_str_cats}) AND i.is_ignored = 0 AND (i.kp_id IS NULL OR i.kp_id = '') {not_in}"
-    )
-    no_kp_id_count = cursor.fetchone()[0]
-    cursor.execute(
-        f"SELECT COUNT(*) FROM items i WHERE i.category_id IN ({ids_str_cats}) AND i.is_ignored = 0 AND (i.imdb_id IS NULL OR i.imdb_id = '') {not_in}"
-    )
-    no_imdb_id_count = cursor.fetchone()[0]
-    cursor.execute(
-        f"SELECT COUNT(*) FROM items i WHERE i.category_id IN ({ids_str_cats}) AND i.is_ignored = 0 AND (i.kp_id IS NULL OR i.kp_id = '') AND (i.imdb_id IS NULL OR i.imdb_id = '') {not_in}"
-    )
-    no_any_id_count = cursor.fetchone()[0]
-    conn.close()
-    result = [
-        {"id": -1, "name": "Все видео", "count": count_video},
-        {"id": -100, "name": "🖼️ БЕЗ ПОСТЕРОВ", "count": no_poster_count},
-        {"id": -101, "name": "📊 БЕЗ ОЦЕНОК", "count": no_ratings_count},
-        {"id": -102, "name": "🆔 БЕЗ КП ID", "count": no_kp_id_count},
-        {"id": -103, "name": "🆔 БЕЗ IMDb ID", "count": no_imdb_id_count},
-        {"id": -104, "name": "🚫 БЕЗ ID ВООБЩЕ", "count": no_any_id_count},
-        {"id": 0, "name": "Любая категория", "count": count_any},
-    ]
-    result.extend(cats)
-    result.append({"id": -2, "name": "🗑️ ИГНОРИРУЕМЫЕ", "count": count_ignored})
-    return result
 
 
 @app.get("/api/feed")
@@ -794,140 +827,35 @@ def get_feed(
     hide_rated: bool = False,
     hide_collected: bool = False,
     page: int = 1,
-    limit: int = 40,
+    limit: int = None,
 ):
-    conn = get_db()
-    cursor = conn.cursor()
-    where_clauses = ["1=1"]
-    params = []
-    if collection_id:
-        where_clauses.append(
-            "items.id IN (SELECT item_id FROM collection_items WHERE collection_id = ?)"
-        )
-        params.append(collection_id)
-    elif category_id == -2:
-        where_clauses.append("items.is_ignored = 1")
-    else:
-        ids_str = ",".join(map(str, VIDEO_CATEGORY_IDS))
-        if category_id == -1:
-            where_clauses.append(f"items.category_id IN ({ids_str})")
-        elif category_id == -100:
-            where_clauses.append(
-                f"items.category_id IN ({ids_str}) AND (items.poster_url IS NULL OR items.poster_url = '')"
-            )
-        elif category_id == -101:
-            where_clauses.append(
-                f"items.category_id IN ({ids_str}) AND (items.kp_rating = 0 OR items.kp_rating IS NULL OR items.imdb_rating = 0 OR items.imdb_rating IS NULL)"
-            )
-        elif category_id == -102:
-            where_clauses.append(
-                f"items.category_id IN ({ids_str}) AND (items.kp_id IS NULL OR items.kp_id = '')"
-            )
-        elif category_id == -103:
-            where_clauses.append(
-                f"items.category_id IN ({ids_str}) AND (items.imdb_id IS NULL OR items.imdb_id = '')"
-            )
-        elif category_id == -104:
-            where_clauses.append(
-                f"items.category_id IN ({ids_str}) AND (items.kp_id IS NULL OR items.kp_id = '') AND (items.imdb_id IS NULL OR items.imdb_id = '')"
-            )
-        elif category_id != 0:
-            where_clauses.append("items.category_id = ?")
-            params.append(category_id)
-        if hide_ignored:
-            where_clauses.append("items.is_ignored = 0")
-    if search:
-        search_val = f"%{search.lower()}%"
-        where_clauses.append(
-            f"(items.title LIKE ? OR items.title_norm LIKE ? OR EXISTS (SELECT 1 FROM item_search_names sn WHERE sn.item_id = items.id AND sn.name_norm LIKE ?))"
-        )
-        params.extend([f"%{search}%", search_val, search_val])
-    if min_date:
-        where_clauses.append(
-            "items.id IN (SELECT item_id FROM releases WHERE date_added >= ?)"
-        )
-        params.append(min_date)
-    if max_date:
-        where_clauses.append(
-            "items.id IN (SELECT item_id FROM releases WHERE date_added <= ?)"
-        )
-        params.append(max_date)
-    if hide_rated:
-        watched_ids = get_watched_item_ids(cursor)
-        if watched_ids:
-            where_clauses.append(f"items.id NOT IN ({','.join(map(str, watched_ids))})")
-    if hide_collected and not collection_id:
-        where_clauses.append("items.id NOT IN (SELECT item_id FROM collection_items)")
-    if min_kp > 0:
-        where_clauses.append("items.kp_rating >= ?")
-        params.append(min_kp)
-    if max_kp < 10:
-        where_clauses.append("items.kp_rating <= ?")
-        params.append(max_kp)
-    if min_kp == 0 and (min_kp > 0 or max_kp < 10):
-        where_clauses.append("items.kp_rating > 0")
-    if min_imdb > 0:
-        where_clauses.append("items.imdb_rating >= ?")
-        params.append(min_imdb)
-    if max_imdb < 10:
-        where_clauses.append("items.imdb_rating <= ?")
-        params.append(max_imdb)
-    if min_imdb == 0 and (min_imdb > 0 or max_imdb < 10):
-        where_clauses.append("items.imdb_rating > 0")
-    if min_year:
-        where_clauses.append("items.year >= ?")
-        params.append(min_year)
-    if max_year:
-        where_clauses.append("items.year <= ?")
-        params.append(max_year)
-    where_sql = " AND ".join(where_clauses)
-    cursor.execute(
-        f"SELECT COUNT(DISTINCT items.id) FROM items WHERE {where_sql}", params
+    if limit is None:
+        limit = load_config().get("feed", {}).get("default_limit", 20)
+    return db.get_feed(
+        category_id=category_id,
+        collection_id=collection_id,
+        search=search,
+        min_kp=min_kp,
+        max_kp=max_kp,
+        min_imdb=min_imdb,
+        max_imdb=max_imdb,
+        min_year=min_year,
+        max_year=max_year,
+        min_date=min_date,
+        max_date=max_date,
+        hide_ignored=hide_ignored,
+        hide_rated=hide_rated,
+        hide_collected=hide_collected,
+        page=page,
+        limit=limit,
     )
-    total_count = cursor.fetchone()[0]
-    total_pages = (total_count + limit - 1) // limit if total_count > 0 else 1
-    order_by = (
-        "items.ignored_at DESC, latest_release DESC"
-        if category_id == -2
-        else (
-            "ci.added_at DESC, latest_release DESC"
-            if collection_id
-            else "latest_release DESC NULLS LAST"
-        )
-    )
-    query = f"SELECT items.*, (SELECT MAX(date_added) FROM releases WHERE item_id = items.id) as latest_release FROM items {f'JOIN collection_items ci ON items.id = ci.item_id AND ci.collection_id = {collection_id}' if collection_id else ''} WHERE {where_sql} ORDER BY {order_by} LIMIT ? OFFSET ?"
-    params.extend([limit, (page - 1) * limit])
-    cursor.execute(query, params)
-    items = [dict(row) for row in cursor.fetchall()]
-    for item in items:
-        cursor.execute(
-            "SELECT * FROM releases WHERE item_id = ? ORDER BY date_added DESC",
-            (item["id"],),
-        )
-        item["releases"] = [dict(row) for row in cursor.fetchall()]
-    conn.close()
-    return {"items": items, "totalPages": total_pages}
 
 
 @app.post("/api/ignore/{item_id}")
 def ignore_item(item_id: int):
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT is_ignored FROM items WHERE id = ?", (item_id,))
-    row = cursor.fetchone()
-    if not row:
-        conn.close()
+    new_state = db.toggle_ignore(item_id)
+    if new_state < 0:
         return {"status": "error"}
-    new_state = 1 - row["is_ignored"]
-    ignored_at = (
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S") if new_state == 1 else None
-    )
-    cursor.execute(
-        "UPDATE items SET is_ignored = ?, ignored_at = ? WHERE id = ?",
-        (new_state, ignored_at, item_id),
-    )
-    conn.commit()
-    conn.close()
     return {"status": "success"}
 
 
@@ -937,123 +865,28 @@ class ResetFieldsRequest(BaseModel):
 
 @app.post("/api/reset_item/{item_id}")
 def reset_item(item_id: int, data: ResetFieldsRequest):
-    conn = get_db()
-    cursor = conn.cursor()
-
-    field_map = {
-        "poster": "poster_url = NULL",
-        "description": "description = NULL",
-        "kp_id": "kp_id = NULL",
-        "imdb_id": "imdb_id = NULL",
-        "rezka_url": "rezka_url = NULL",
-        "ratings": "kp_rating = 0, imdb_rating = 0",
-        "is_reprocessed": "is_reprocessed = 0",
-        "is_metadata_fixed": "is_metadata_fixed = 0",
-        "checked_poiskkino": "checked_poiskkino = 0",
-        "checked_tech": "checked_tech = 0",
-        "checked_rezka": "checked_rezka = 0",
-    }
-
-    updates = []
-    for f in data.fields:
-        if f in field_map:
-            updates.append(field_map[f])
-
-    if updates:
-        # При сбросе критичных полей сбрасываем и флаги проверки
-        if any(f in ["kp_id", "imdb_id", "poster", "ratings"] for f in data.fields):
-            updates.append("is_reprocessed = 0")
-            updates.append("is_metadata_fixed = 0")
-            updates.append(
-                "checked_rezka = 0"
-            )  # При смене ID нужно перепроверить Резку
-            if "kp_id" in data.fields or "ratings" in data.fields:
-                updates.append("checked_poiskkino = 0")
-                updates.append("checked_tech = 0")
-
-        if "rezka_url" in data.fields:
-            updates.append("checked_rezka = 0")
-
-        # Убираем дубликаты если добавили флаги
-        updates = list(set(updates))
-        sql = f"UPDATE items SET {', '.join(updates)} WHERE id = ?"
-        cursor.execute(sql, (item_id,))
-        conn.commit()
-
-    conn.close()
+    db.reset_item(item_id, data.fields)
     return {"status": "success"}
+
+
+@app.get("/api/categories")
+def get_categories(hide_rated: bool = False, hide_collected: bool = False):
+    return db.get_categories_with_counts(hide_rated, hide_collected)
 
 
 @app.get("/api/stats")
 def get_stats():
-    conn = get_db()
-    cursor = conn.cursor()
-    ids_str = ",".join(map(str, VIDEO_CATEGORY_IDS))
-
-    cursor.execute(
-        f"SELECT COUNT(*) FROM items WHERE category_id IN ({ids_str}) AND is_ignored = 0"
-    )
-    total_video = cursor.fetchone()[0]
-
-    cursor.execute(
-        f"SELECT COUNT(*) FROM items WHERE category_id IN ({ids_str}) AND is_ignored = 0 AND (poster_url IS NULL OR poster_url = '')"
-    )
-    no_poster = cursor.fetchone()[0]
-
-    cursor.execute(
-        f"SELECT COUNT(*) FROM items WHERE category_id IN ({ids_str}) AND is_ignored = 0 AND (kp_rating = 0 OR kp_rating IS NULL OR imdb_rating = 0 OR imdb_rating IS NULL)"
-    )
-    no_ratings = cursor.fetchone()[0]
-
-    cursor.execute(
-        f"SELECT COUNT(*) FROM items WHERE category_id IN ({ids_str}) AND is_ignored = 0 AND (rezka_url IS NULL OR rezka_url = '')"
-    )
-    no_rezka = cursor.fetchone()[0]
-
-    cursor.execute(
-        f"SELECT COUNT(*) FROM items WHERE category_id IN ({ids_str}) AND is_ignored = 0 AND (kp_id IS NULL OR kp_id = '') AND (imdb_id IS NULL OR imdb_id = '')"
-    )
-    no_ids = cursor.fetchone()[0]
-
-    # Последние запуски
-    cursor.execute(
-        "SELECT job_type, MAX(end_time) as last_run FROM job_history GROUP BY job_type"
-    )
-    history = {row["job_type"]: row["last_run"] for row in cursor.fetchall()}
-
-    conn.close()
-    return {
-        "no_poster": no_poster,
-        "no_ratings": no_ratings,
-        "no_rezka": no_rezka,
-        "no_ids": no_ids,
-        "total_video": total_video,
-        "last_runs": history,
-    }
+    return db.get_stats()
 
 
 @app.get("/api/job_history")
 def get_job_history(limit: int = 20):
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT * FROM job_history ORDER BY start_time DESC LIMIT ?", (limit,)
-    )
-    history = [dict(row) for row in cursor.fetchall()]
-    conn.close()
-    return history
+    return db.get_job_history(limit)
 
 
 @app.get("/api/collections")
 def get_collections():
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT c.*, COUNT(ci.item_id) as count FROM collections c LEFT JOIN collection_items ci ON c.id = ci.collection_id GROUP BY c.id ORDER BY c.sort_order ASC, c.name ASC"
-    )
-    collections = [dict(row) for row in cursor.fetchall()]
-    conn.close()
-    return collections
+    return db.get_collections()
 
 
 class CollectionCreate(BaseModel):
@@ -1062,25 +895,16 @@ class CollectionCreate(BaseModel):
 
 @app.post("/api/collections")
 def create_collection(data: CollectionCreate):
-    conn = get_db()
-    cursor = conn.cursor()
     try:
-        cursor.execute("INSERT INTO collections (name) VALUES (?)", (data.name,))
-        conn.commit()
-    except sqlite3.IntegrityError:
+        db.create_collection(data.name)
+    except Exception:
         return {"status": "error", "message": "Коллекция существует"}
-    finally:
-        conn.close()
     return {"status": "success"}
 
 
 @app.delete("/api/collections/{id}")
 def delete_collection(id: int):
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM collections WHERE id = ?", (id,))
-    conn.commit()
-    conn.close()
+    db.delete_collection(id)
     return {"status": "success"}
 
 
@@ -1090,39 +914,13 @@ class CollectionItemRequest(BaseModel):
 
 @app.post("/api/collections/{collection_id}/toggle")
 def toggle_collection_item(collection_id: int, data: CollectionItemRequest):
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT 1 FROM collection_items WHERE collection_id = ? AND item_id = ?",
-        (collection_id, data.item_id),
-    )
-    if cursor.fetchone():
-        cursor.execute(
-            "DELETE FROM collection_items WHERE collection_id = ? AND item_id = ?",
-            (collection_id, data.item_id),
-        )
-        action = "removed"
-    else:
-        cursor.execute(
-            "INSERT INTO collection_items (collection_id, item_id, added_at) VALUES (?, ?, ?)",
-            (collection_id, data.item_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
-        )
-        action = "added"
-    conn.commit()
-    conn.close()
+    action = db.toggle_collection_item(collection_id, data.item_id)
     return {"status": "success", "action": action}
 
 
 @app.get("/api/item_collections/{item_id}")
 def get_item_collections(item_id: int):
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT collection_id FROM collection_items WHERE item_id = ?", (item_id,)
-    )
-    ids = [row[0] for row in cursor.fetchall()]
-    conn.close()
-    return ids
+    return db.get_item_collections(item_id)
 
 
 class SaveOrderRequest(BaseModel):
@@ -1131,14 +929,7 @@ class SaveOrderRequest(BaseModel):
 
 @app.post("/api/collections/save_order")
 def save_collections_order(data: SaveOrderRequest):
-    conn = get_db()
-    cursor = conn.cursor()
-    for i, col_id in enumerate(data.order):
-        cursor.execute(
-            "UPDATE collections SET sort_order = ? WHERE id = ?", (i, col_id)
-        )
-    conn.commit()
-    conn.close()
+    db.save_collections_order(data.order)
     return {"status": "success"}
 
 
@@ -1234,55 +1025,7 @@ import io
 
 @app.get("/api/export")
 def export_data(fmt: str = "json", category_id: int = -1):
-    conn = get_db()
-    cursor = conn.cursor()
-    ids_str = ",".join(map(str, VIDEO_CATEGORY_IDS))
-
-    where_clauses = ["1=1"]
-    params = []
-    if category_id == -1:
-        where_clauses.append(f"items.category_id IN ({ids_str})")
-    elif category_id == -2:
-        where_clauses.append("items.is_ignored = 1")
-    elif category_id > 0:
-        where_clauses.append("items.category_id = ?")
-        params.append(category_id)
-    where_clauses.append("items.is_ignored = 0" if category_id != -2 else "1=1")
-
-    where_sql = " AND ".join(where_clauses)
-    cursor.execute(
-        f"""
-        SELECT items.id, items.title, items.year, items.category_id, items.kp_rating, items.imdb_rating,
-               items.poster_url, items.description, items.imdb_id, items.kp_id, items.rezka_url,
-               items.original_title,
-               (SELECT MAX(date_added) FROM releases WHERE item_id = items.id) as latest_release
-        FROM items WHERE {where_sql}
-        ORDER BY latest_release DESC NULLS LAST
-    """,
-        params,
-    )
-    rows = cursor.fetchall()
-    conn.close()
-
-    items = []
-    for row in rows:
-        items.append(
-            {
-                "id": row[0],
-                "title": row[1],
-                "year": row[2],
-                "category_id": row[3],
-                "kp_rating": row[4],
-                "imdb_rating": row[5],
-                "poster_url": row[6],
-                "description": row[7],
-                "imdb_id": row[8],
-                "kp_id": row[9],
-                "rezka_url": row[10],
-                "original_title": row[11],
-                "latest_release": row[12],
-            }
-        )
+    items = db.export_items(category_id)
 
     if fmt == "csv":
         output = io.StringIO()
@@ -1307,68 +1050,25 @@ def export_data(fmt: str = "json", category_id: int = -1):
 
 
 class SetIdsRequest(BaseModel):
-    kp_id: str = None
-    imdb_id: str = None
+    kp_id: Optional[str] = None
+    imdb_id: Optional[str] = None
 
 
 @app.post("/api/set_ids/{item_id}")
 def set_ids(item_id: int, data: SetIdsRequest):
-    conn = get_db()
-    cursor = conn.cursor()
-    updates = []
-    if data.kp_id is not None:
-        updates.append(f"kp_id = '{data.kp_id}'")
-        updates.append("checked_poiskkino = 0")
-        updates.append("checked_tech = 0")
-        updates.append("checked_rezka = 0")
-    if data.imdb_id is not None:
-        updates.append(f"imdb_id = '{data.imdb_id}'")
-        updates.append("checked_rezka = 0")
-    if not updates:
-        conn.close()
-        return {"status": "error", "message": "No IDs provided"}
-    updates.append("is_metadata_fixed = 0")
-    updates.append("is_reprocessed = 0")
-    sql = f"UPDATE items SET {', '.join(updates)} WHERE id = ?"
-    cursor.execute(sql, (item_id,))
-    conn.commit()
-    conn.close()
+    db.set_ids(item_id, kp_id=data.kp_id, imdb_id=data.imdb_id)
     return {"status": "success"}
 
 
 @app.post("/api/mark_visited")
 def mark_visited():
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS app_state (
-            key TEXT PRIMARY KEY,
-            value TEXT
-        )
-    """)
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    cursor.execute(
-        "INSERT OR REPLACE INTO app_state (key, value) VALUES ('last_visit', ?)", (now,)
-    )
-    conn.commit()
-    conn.close()
+    now = db.mark_visited()
     return {"status": "success", "last_visit": now}
 
 
 @app.get("/api/last_visit")
 def get_last_visit():
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS app_state (
-            key TEXT PRIMARY KEY,
-            value TEXT
-        )
-    """)
-    cursor.execute("SELECT value FROM app_state WHERE key = 'last_visit'")
-    row = cursor.fetchone()
-    conn.close()
-    return {"last_visit": row[0] if row else None}
+    return {"last_visit": db.get_last_visit()}
 
 
 if __name__ == "__main__":

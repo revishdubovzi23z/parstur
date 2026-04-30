@@ -1,41 +1,825 @@
-import sqlite3
-import requests
-import time
-import datetime
+import asyncio
+import aiohttp
+import requests as sync_requests
 import re
-import sys
 import os
 import json
-from HdRezkaApi import HdRezkaApi, HdRezkaSearch
-from app_core import normalize_title
+import time
+import base64
+from collections import defaultdict
+from urllib.parse import unquote
+from bs4 import BeautifulSoup
+from app_core import normalize_title, clean_title_for_search
 from script_utils import load_config, should_stop, clear_stop_flag
+from db import Database
+from logger import setup_tee_logger
 
 _config = load_config()
 REZKA_REQUEST_DELAY = _config.get("rezka", {}).get("request_delay", 0.5)
+REZKA_CONCURRENCY = _config.get("rezka", {}).get("concurrency", 3)
 STATUS_KEY = os.getenv("STATUS_KEY", "rezka")
+
+REZKA_ORIGIN = "https://rezka.ag"
+REZKA_SEARCH_URL = f"{REZKA_ORIGIN}/engine/ajax/search.php"
+REZKA_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.138 Safari/537.36"
+}
+REZKA_COOKIES = {"hdmbbs": "1"}
 
 
 def report_progress(current, total, status_key="rezka"):
     try:
         with open(f"progress_{status_key}.json", "w") as f:
             json.dump({"current": current, "total": total}, f)
-    except:
+    except Exception:
         pass
 
 
-def get_db():
+def _parse_title(title):
+    parts = [p.strip() for p in title.split("/")]
+    clean_parts = []
+    for p in parts:
+        p_clean = re.sub(r"\(.*?\)", "", p).strip()
+        if p_clean and len(p_clean) > 1:
+            clean_parts.append(p_clean)
+    search_queries = []
+    for p in clean_parts:
+        q = clean_title_for_search(p)
+        if q and len(q) > 1:
+            search_queries.append(q)
+    search_queries = sorted(
+        search_queries, key=lambda x: (not x.isascii(), len(x)), reverse=True
+    )
+    return clean_parts, search_queries
 
-    conn = sqlite3.connect("app_data.db")
-    conn.row_factory = sqlite3.Row
-    return conn
+
+def _score_candidates(all_results, clean_parts, year):
+    results_with_scores = []
+    norm_db_titles = [normalize_title(p) for p in clean_parts]
+
+    for res in all_results:
+        res_name = res["title"]
+        res_url = res["url"]
+
+        year_match = re.search(r"\((\d{4})\)", res_name)
+        if not year_match:
+            year_match = re.search(r"-(\d{4})", res_url)
+        res_year = int(year_match.group(1)) if year_match else None
+
+        res_clean_name = re.sub(r"\(.*?\)", "", res_name).replace(" / ", "/").strip()
+        res_parts = [normalize_title(p.strip()) for p in res_clean_name.split("/")]
+
+        score = 0
+        match_found = False
+        exact_name_match = False
+        for db_norm in norm_db_titles:
+            for res_norm in res_parts:
+                if db_norm == res_norm:
+                    score += 130
+                    match_found = True
+                    exact_name_match = True
+                    break
+                elif (len(db_norm) > 4 and db_norm in res_norm) or (
+                    len(res_norm) > 4 and res_norm in db_norm
+                ):
+                    score += 50
+                    match_found = True
+            if match_found:
+                break
+
+        if year and res_year:
+            diff = abs(year - res_year)
+            if diff == 0:
+                score += 60
+            elif diff == 1:
+                score += 50
+            elif diff <= 3:
+                score -= 40
+            else:
+                score -= 150
+
+        results_with_scores.append(
+            {
+                "res": res,
+                "score": score,
+                "year": res_year,
+                "exact_name_match": exact_name_match,
+            }
+        )
+
+    results_with_scores.sort(key=lambda x: x["score"], reverse=True)
+    return results_with_scores
+
+
+def _extract_year_from_soup(soup):
+    year_label = soup.find(
+        lambda tag: (
+            tag.name in ["th", "b", "span", "h2"]
+            and tag.text
+            and any(x in tag.text for x in ["Год", "Дата выхода"])
+        )
+    )
+    if year_label:
+        container = year_label.find_next_sibling(["td", "span"]) or year_label.parent
+        if container:
+            y_m = re.search(r"(\d{4})", container.text)
+            if y_m:
+                return int(y_m.group(1))
+    y_m = re.search(r"(?:Год|Дата выхода):.*?(\d{4})", str(soup), re.S | re.I)
+    if y_m:
+        return int(y_m.group(1))
+    return None
+
+
+def _extract_ids_from_soup(soup):
+    page_kp_id = None
+    page_imdb_id = None
+
+    rate_blocks = soup.find_all(class_=re.compile(r"b-post__info_rates"))
+    for block in rate_blocks:
+        kp_link = block.find("a", href=re.compile(r"kinopoisk\.ru"))
+        if kp_link:
+            kp_m = re.search(r"/film/(\d+)|/series/(\d+)|/(\d+)/", kp_link["href"])
+            if kp_m:
+                page_kp_id = next(g for g in kp_m.groups() if g)
+
+        imdb_link = block.find("a", href=re.compile(r"imdb\.com"))
+        if imdb_link:
+            imdb_m = re.search(r"/title/(tt\d+)", imdb_link["href"])
+            if imdb_m:
+                page_imdb_id = imdb_m.group(1)
+
+    links = soup.find_all("a", href=re.compile(r"/help/"))
+    for link in links:
+        try:
+            href = link["href"]
+            if "/help/" not in href:
+                continue
+            b64_url = href.split("/help/")[1].split(".html")[0].strip("/")
+            b64_url = unquote(b64_url)
+            b64_url = re.sub(r"[^a-zA-Z0-9+/=]", "", b64_url)
+            missing_padding = len(b64_url) % 4
+            if missing_padding:
+                b64_url += "=" * (4 - missing_padding)
+            real_url = base64.b64decode(b64_url).decode("utf-8", errors="ignore")
+            real_url = unquote(real_url)
+            if "kinopoisk.ru" in real_url:
+                kp_m = re.search(r"/(?:film|series)/(\d+)|/(\d+)/", real_url)
+                if kp_m and not page_kp_id:
+                    page_kp_id = next(g for g in kp_m.groups() if g)
+            elif "imdb.com" in real_url:
+                imdb_m = re.search(r"/title/(tt\d+)", real_url)
+                if imdb_m and not page_imdb_id:
+                    page_imdb_id = imdb_m.group(1)
+        except Exception:
+            pass
+
+    return page_kp_id, page_imdb_id
+
+
+def _verify_candidate(soup, scored_item, year, kp_id, imdb_id):
+    score = scored_item["score"]
+    page_kp_id, page_imdb_id = _extract_ids_from_soup(soup)
+
+    page_year = scored_item.get("year")
+    if not page_year:
+        page_year = _extract_year_from_soup(soup)
+
+    current_score = score
+    if not scored_item.get("year") and page_year and year:
+        diff = abs(year - page_year)
+        if diff == 0:
+            current_score += 60
+        elif diff == 1:
+            current_score += 50
+        elif diff <= 3:
+            current_score -= 40
+        else:
+            current_score -= 150
+
+    if page_year:
+        print(f"      [*] Год на странице: {page_year}")
+
+    id_match = False
+    id_conflict = False
+
+    if kp_id and page_kp_id:
+        if str(kp_id) == str(page_kp_id):
+            print(f"      [+] MATCH KP ID: {kp_id}")
+            id_match = True
+        else:
+            print(f"      [-] CONFLICT KP ID: {kp_id} != {page_kp_id}")
+            id_conflict = True
+
+    if imdb_id and page_imdb_id:
+        if str(imdb_id) == str(page_imdb_id):
+            print(f"      [+] MATCH IMDb ID: {imdb_id}")
+            id_match = True
+        else:
+            print(f"      [-] CONFLICT IMDb ID: {imdb_id} != {page_imdb_id}")
+            id_conflict = True
+
+    print(
+        f"      [?] ID Check: DB({kp_id or '-'}, {imdb_id or '-'}) vs Rezka({page_kp_id or '-'}, {page_imdb_id or '-'})"
+    )
+
+    if id_conflict:
+        return False, page_kp_id, page_imdb_id, current_score, "conflict"
+
+    is_valid = False
+    reason = ""
+    if id_match:
+        is_valid = True
+        reason = "id_match"
+    elif (kp_id or imdb_id) and not (page_kp_id or page_imdb_id):
+        if current_score >= 90:
+            print(f"      [+] Trusting by title (Score: {current_score})")
+            is_valid = True
+            reason = "trust_by_title"
+        else:
+            print(f"      [-] Not enough data (Score: {current_score})")
+    elif not (kp_id or imdb_id) and current_score >= 90:
+        is_valid = True
+        reason = "high_score"
+
+    if not (kp_id or imdb_id) and (page_kp_id or page_imdb_id) and current_score >= 110:
+        is_valid = True
+        reason = "page_ids_high_score"
+
+    return is_valid, page_kp_id, page_imdb_id, current_score, reason
+
+
+def _extract_ratings_and_poster(soup, kp_rating, imdb_rating):
+    found_kp_rating = kp_rating
+    found_imdb_rating = imdb_rating
+
+    rate_blocks = soup.find_all(class_=re.compile(r"b-post__info_rates"))
+    for block in rate_blocks:
+        block_text = block.text.lower()
+        val_tag = block.find(["span", "b"], class_=["num", "bold"])
+        if not val_tag:
+            val_tag = block.find("b")
+        if val_tag:
+            try:
+                val = float(val_tag.text.strip().replace(",", "."))
+                if "кинопоиск" in block_text or "kp" in block_text:
+                    found_kp_rating = val
+                elif "imdb" in block_text:
+                    found_imdb_rating = val
+            except Exception:
+                pass
+
+    found_poster = None
+    og_image = soup.find("meta", property="og:image")
+    if og_image and og_image.get("content"):
+        found_poster = og_image["content"]
+    if not found_poster:
+        itemprop_img = soup.find("img", itemprop="image")
+        if itemprop_img:
+            found_poster = itemprop_img.get("src") or itemprop_img.get("data-src")
+
+    if found_poster and found_poster.startswith("//"):
+        found_poster = "https:" + found_poster
+
+    return found_kp_rating, found_imdb_rating, found_poster
+
+
+def _sync_search(query):
+    try:
+        r = sync_requests.post(
+            REZKA_SEARCH_URL,
+            data={"q": query},
+            headers=REZKA_HEADERS,
+            cookies=REZKA_COOKIES,
+            timeout=15,
+        )
+        if r.ok:
+            soup = BeautifulSoup(r.content, "html.parser")
+            results = []
+            for item in soup.select(".b-search__section_list li"):
+                title_el = item.find("span", class_="enty")
+                link_el = item.find("a")
+                if not title_el or not link_el:
+                    continue
+                title = title_el.get_text().strip()
+                url = link_el.attrs["href"]
+                rating_span = item.find("span", class_="rating")
+                rating = float(rating_span.get_text()) if rating_span else None
+                results.append({"title": title, "url": url, "rating": rating})
+            return results
+    except Exception:
+        pass
+    return []
+
+
+def _sync_load_page(url):
+    try:
+        r = sync_requests.get(
+            url,
+            headers=REZKA_HEADERS,
+            cookies=REZKA_COOKIES,
+            timeout=20,
+            allow_redirects=True,
+        )
+        if r.ok:
+            return BeautifulSoup(r.content, "html.parser")
+    except Exception:
+        pass
+    return None
+
+
+def search_rezka_for_item(
+    title, year, kp_id=None, imdb_id=None, kp_rating=0, imdb_rating=0
+):
+    result = {
+        "found": False,
+        "rezka_url": None,
+        "kp_id": None,
+        "imdb_id": None,
+        "kp_rating": None,
+        "imdb_rating": None,
+        "poster_url": None,
+        "score": 0,
+    }
+
+    clean_parts, search_queries = _parse_title(title)
+
+    print(f"    🔍 Поиск на Rezka: {title} ({year})")
+    if kp_id or imdb_id:
+        print(f"    📋 Имеем ID: KP:{kp_id or '-'}, IMDb:{imdb_id or '-'}")
+
+    all_results = []
+    seen_urls = set()
+
+    for s_title in search_queries:
+        try:
+            res_with_year = _sync_search(f"{s_title} {year}")
+
+            need_no_year = True
+            if res_with_year:
+                for r in res_with_year:
+                    res_name_norm = normalize_title(re.sub(r"\(.*?\)", "", r["title"]))
+                    name_match = any(
+                        res_name_norm == db_norm
+                        for db_norm in [normalize_title(p) for p in clean_parts]
+                    )
+                    if name_match:
+                        res_year_m = re.search(r"\((\d{4})\)", r["title"])
+                        if not res_year_m:
+                            res_year_m = re.search(r"-(\d{4})", r["url"])
+                        res_year = int(res_year_m.group(1)) if res_year_m else None
+                        if res_year and res_year == year:
+                            need_no_year = False
+                            break
+
+            res_no_year = []
+            if need_no_year:
+                res_no_year = _sync_search(s_title)
+
+            for r in res_with_year + res_no_year:
+                if r["url"] not in seen_urls:
+                    all_results.append(r)
+                    seen_urls.add(r["url"])
+        except Exception as e:
+            print(f"    ⚠️ Ошибка поиска по '{s_title}': {e}")
+
+    if not all_results and clean_parts:
+        try:
+            print(f"    [?] Fallback search for '{clean_parts[0]}'...")
+            res_fallback = _sync_search(clean_parts[0])
+            for r in res_fallback:
+                if r["url"] not in seen_urls:
+                    all_results.append(r)
+                    seen_urls.add(r["url"])
+        except Exception:
+            pass
+
+    if not all_results:
+        print(f"    [-] Ничего не найдено на Rezka.")
+        return result
+
+    print(f"    [*] Найдено {len(all_results)} результатов.")
+
+    candidates = _score_candidates(all_results, clean_parts, year)
+
+    has_ids = bool(kp_id or imdb_id)
+    min_score = -50 if has_ids else 70
+
+    final_res = None
+    final_data = {}
+
+    for scored_item in candidates:
+        score = scored_item["score"]
+        exact_name_match = scored_item.get("exact_name_match", False)
+
+        if score < min_score and not exact_name_match:
+            continue
+
+        res = scored_item["res"]
+        print(f"    [?] Проверка: {res['title']} (Score: {score})")
+
+        soup = _sync_load_page(res["url"])
+        if not soup:
+            print(f"      [!] Ошибка загрузки страницы.")
+            continue
+
+        is_valid, page_kp_id, page_imdb_id, current_score, reason = _verify_candidate(
+            soup, scored_item, year, kp_id, imdb_id
+        )
+
+        if is_valid:
+            kp_r, imdb_r, poster = _extract_ratings_and_poster(
+                soup, kp_rating, imdb_rating
+            )
+            final_res = res
+            final_data = {
+                "kp_id": page_kp_id or kp_id,
+                "imdb_id": page_imdb_id or imdb_id,
+                "score": current_score,
+                "kp_rating": kp_r,
+                "imdb_rating": imdb_r,
+                "poster_url": poster,
+            }
+            break
+        elif reason == "conflict":
+            continue
+
+    if not final_res:
+        print(f"    [-] Подходящий результат не найден.")
+        return result
+
+    print(f"    [+] ПОДТВЕРЖДЕНО: {final_res['title']} (Score: {final_data['score']})")
+
+    result["found"] = True
+    result["rezka_url"] = final_res["url"]
+    result["kp_id"] = final_data["kp_id"]
+    result["imdb_id"] = final_data["imdb_id"]
+    result["kp_rating"] = final_data["kp_rating"]
+    result["imdb_rating"] = final_data["imdb_rating"]
+    result["poster_url"] = final_data["poster_url"]
+    result["score"] = final_data["score"]
+    return result
+
+
+async def _async_search(session, query, semaphore):
+    async with semaphore:
+        try:
+            async with session.post(
+                REZKA_SEARCH_URL,
+                data={"q": query},
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                if resp.status == 200:
+                    content = await resp.read()
+                    soup = BeautifulSoup(content, "html.parser")
+                    results = []
+                    for item in soup.select(".b-search__section_list li"):
+                        title_el = item.find("span", class_="enty")
+                        link_el = item.find("a")
+                        if not title_el or not link_el:
+                            continue
+                        t = title_el.get_text().strip()
+                        url = link_el.attrs["href"]
+                        rating_span = item.find("span", class_="rating")
+                        rating = float(rating_span.get_text()) if rating_span else None
+                        results.append({"title": t, "url": url, "rating": rating})
+                    return query, results
+                return query, []
+        except Exception:
+            return query, []
+
+
+async def _async_load_page(session, url, semaphore):
+    async with semaphore:
+        try:
+            async with session.get(
+                url,
+                timeout=aiohttp.ClientTimeout(total=20),
+                allow_redirects=True,
+            ) as resp:
+                if resp.status == 200:
+                    content = await resp.read()
+                    soup = BeautifulSoup(content, "html.parser")
+                    return url, soup
+                return url, None
+        except Exception:
+            return url, None
+
+
+async def _search_rezka_batch(items, db, conn):
+    total = len(items)
+    semaphore = asyncio.Semaphore(REZKA_CONCURRENCY)
+
+    async with aiohttp.ClientSession(
+        headers=REZKA_HEADERS,
+        cookies=REZKA_COOKIES,
+    ) as session:
+        item_infos = []
+        for row in items:
+            clean_parts, search_queries = _parse_title(row["title"])
+            item_infos.append(
+                {
+                    "row": row,
+                    "clean_parts": clean_parts,
+                    "search_queries": search_queries,
+                }
+            )
+
+        # ── PHASE 1a: "With year" searches ──
+        with_year_queries = set()
+        for info in item_infos:
+            year = info["row"]["year"]
+            for s_title in info["search_queries"]:
+                with_year_queries.add(f"{s_title} {year}")
+
+        print(
+            f"  [Phase 1a] {len(with_year_queries)} unique 'with year' queries for {total} items"
+        )
+        coros = [_async_search(session, q, semaphore) for q in with_year_queries]
+        raw = await asyncio.gather(*coros)
+        with_year_results = {}
+        for q, results in raw:
+            with_year_results[q] = results
+
+        if should_stop(STATUS_KEY):
+            return 0, 0
+
+        # ── PHASE 1b: Conditional "without year" searches ──
+        item_no_year_queries = defaultdict(list)
+        no_year_queries = set()
+
+        for idx, info in enumerate(item_infos):
+            year = info["row"]["year"]
+            norm_db_titles = [normalize_title(p) for p in info["clean_parts"]]
+
+            for si, s_title in enumerate(info["search_queries"]):
+                q_wy = f"{s_title} {year}"
+                results = with_year_results.get(q_wy, [])
+
+                need_no_year = True
+                for r in results:
+                    res_name_norm = normalize_title(re.sub(r"\(.*?\)", "", r["title"]))
+                    name_match = any(
+                        res_name_norm == db_norm for db_norm in norm_db_titles
+                    )
+                    if name_match:
+                        res_year_m = re.search(r"\((\d{4})\)", r["title"])
+                        if not res_year_m:
+                            res_year_m = re.search(r"-(\d{4})", r["url"])
+                        res_year = int(res_year_m.group(1)) if res_year_m else None
+                        if res_year and res_year == year:
+                            need_no_year = False
+                            break
+
+                if need_no_year:
+                    item_no_year_queries[idx].append((si, s_title))
+                    no_year_queries.add(s_title)
+
+        no_year_results = {}
+        if no_year_queries:
+            print(f"  [Phase 1b] {len(no_year_queries)} unique 'without year' queries")
+            coros = [_async_search(session, q, semaphore) for q in no_year_queries]
+            raw = await asyncio.gather(*coros)
+            for q, results in raw:
+                no_year_results[q] = results
+
+        if should_stop(STATUS_KEY):
+            return 0, 0
+
+        # ── PHASE 1c: Fallback searches ──
+        fallback_queries = set()
+        item_fallback_query = {}
+
+        for idx, info in enumerate(item_infos):
+            year = info["row"]["year"]
+            has_any = False
+
+            for si, s_title in enumerate(info["search_queries"]):
+                q_wy = f"{s_title} {year}"
+                if with_year_results.get(q_wy):
+                    has_any = True
+                    break
+
+            if not has_any:
+                for _, q_ny in item_no_year_queries.get(idx, []):
+                    if no_year_results.get(q_ny):
+                        has_any = True
+                        break
+
+            if not has_any and info["clean_parts"]:
+                q = info["clean_parts"][0]
+                fallback_queries.add(q)
+                item_fallback_query[idx] = q
+
+        fallback_results = {}
+        if fallback_queries:
+            print(f"  [Phase 1c] {len(fallback_queries)} fallback queries")
+            coros = [_async_search(session, q, semaphore) for q in fallback_queries]
+            raw = await asyncio.gather(*coros)
+            for q, results in raw:
+                fallback_results[q] = results
+
+        # ── PHASE 1d: Collect & score ──
+        print(f"  [Phase 1d] Scoring candidates for {total} items...")
+        item_candidates = {}
+
+        for idx, info in enumerate(item_infos):
+            year = info["row"]["year"]
+            clean_parts = info["clean_parts"]
+            all_results = []
+            seen_urls = set()
+
+            for si, s_title in enumerate(info["search_queries"]):
+                q_wy = f"{s_title} {year}"
+                for r in with_year_results.get(q_wy, []):
+                    if r["url"] not in seen_urls:
+                        all_results.append(r)
+                        seen_urls.add(r["url"])
+
+            for _, q_ny in item_no_year_queries.get(idx, []):
+                for r in no_year_results.get(q_ny, []):
+                    if r["url"] not in seen_urls:
+                        all_results.append(r)
+                        seen_urls.add(r["url"])
+
+            if idx in item_fallback_query:
+                q_fb = item_fallback_query[idx]
+                for r in fallback_results.get(q_fb, []):
+                    if r["url"] not in seen_urls:
+                        all_results.append(r)
+                        seen_urls.add(r["url"])
+
+            if all_results:
+                candidates = _score_candidates(all_results, clean_parts, year)
+                has_ids = bool(info["row"]["kp_id"] or info["row"]["imdb_id"])
+                min_score = -50 if has_ids else 70
+                viable = [
+                    c
+                    for c in candidates
+                    if c["score"] >= min_score or c.get("exact_name_match")
+                ]
+                if viable:
+                    item_candidates[idx] = viable
+
+        viable_count = len(item_candidates)
+        print(f"  [*] {viable_count}/{total} items have viable candidates")
+
+        # ── PHASE 2: Load pages & verify ──
+        page_soup_cache = {}
+        item_results = {}
+        item_next_ci = {}
+
+        pending_items = set(item_candidates.keys())
+        for idx in pending_items:
+            item_next_ci[idx] = 0
+
+        retry_round = 0
+        while pending_items:
+            retry_round += 1
+            phase_label = (
+                "Phase 2" if retry_round == 1 else f"Phase 2 (retry {retry_round - 1})"
+            )
+
+            urls_needed = {}
+            for idx in list(pending_items):
+                ci = item_next_ci[idx]
+                candidates = item_candidates[idx]
+                if ci >= len(candidates):
+                    pending_items.discard(idx)
+                    continue
+                while ci < len(candidates):
+                    url = candidates[ci]["res"]["url"]
+                    if url not in page_soup_cache:
+                        if url not in urls_needed:
+                            urls_needed[url] = set()
+                        urls_needed[url].add(idx)
+                    ci += 1
+
+            if not urls_needed:
+                break
+
+            print(f"  [{phase_label}] Loading {len(urls_needed)} candidate pages...")
+            coros = [
+                _async_load_page(session, url, semaphore) for url in urls_needed.keys()
+            ]
+            raw = await asyncio.gather(*coros)
+            for url, soup in raw:
+                page_soup_cache[url] = soup
+
+            if should_stop(STATUS_KEY):
+                return 0, 0
+
+            for idx in list(pending_items):
+                if idx in item_results:
+                    pending_items.discard(idx)
+                    continue
+
+                row = item_infos[idx]["row"]
+                candidates = item_candidates[idx]
+                ci = item_next_ci[idx]
+                resolved = False
+                need_page_load = False
+
+                while ci < len(candidates):
+                    candidate = candidates[ci]
+                    url = candidate["res"]["url"]
+
+                    if url not in page_soup_cache:
+                        need_page_load = True
+                        break
+
+                    soup = page_soup_cache[url]
+                    if soup is None:
+                        print(f"    [!] {row['title']}: page load failed for {url}")
+                        ci += 1
+                        continue
+
+                    print(
+                        f"    [?] {row['title']}: checking {candidate['res']['title']} (Score: {candidate['score']})"
+                    )
+
+                    is_valid, page_kp_id, page_imdb_id, current_score, reason = (
+                        _verify_candidate(
+                            soup, candidate, row["year"], row["kp_id"], row["imdb_id"]
+                        )
+                    )
+
+                    if is_valid:
+                        kp_r, imdb_r, poster = _extract_ratings_and_poster(
+                            soup, row["kp_rating"] or 0, row["imdb_rating"] or 0
+                        )
+                        item_results[idx] = {
+                            "found": True,
+                            "rezka_url": url,
+                            "kp_id": page_kp_id or row["kp_id"],
+                            "imdb_id": page_imdb_id or row["imdb_id"],
+                            "kp_rating": kp_r,
+                            "imdb_rating": imdb_r,
+                            "poster_url": poster,
+                            "score": current_score,
+                        }
+                        resolved = True
+                        print(
+                            f"    [+] {row['title']}: CONFIRMED ({reason}, score: {current_score})"
+                        )
+                        break
+                    elif reason == "conflict":
+                        ci += 1
+                        continue
+                    else:
+                        ci += 1
+                        continue
+
+                if resolved:
+                    pending_items.discard(idx)
+                elif need_page_load:
+                    item_next_ci[idx] = ci
+                else:
+                    pending_items.discard(idx)
+                    print(f"    [-] {row['title']}: no suitable candidate")
+
+            if retry_round > 20:
+                print("  [!] Max retry rounds reached")
+                break
+
+        # ── PHASE 3: Write results ──
+        print(f"\n  [Phase 3] Writing results to database...")
+        found_count = 0
+
+        for idx, row in enumerate(items):
+            item_id = row["id"]
+            report_progress(idx + 1, total)
+
+            if idx in item_results and item_results[idx]["found"]:
+                r = item_results[idx]
+                db.fill_item_metadata(
+                    item_id,
+                    conn=conn,
+                    rezka_url=r["rezka_url"],
+                    kp_rating=r["kp_rating"],
+                    imdb_rating=r["imdb_rating"],
+                    kp_id=r["kp_id"],
+                    imdb_id=r["imdb_id"],
+                    poster_url=r["poster_url"],
+                    checked_rezka=1,
+                )
+                found_count += 1
+            else:
+                db.mark_checked(item_id, "rezka", conn=conn)
+
+        conn.commit()
+        not_found_count = total - found_count
+        print(f"  Found: {found_count}, Not found: {not_found_count}")
+        return found_count, not_found_count
 
 
 def search_rezka_metadata():
+    setup_tee_logger("rezka", "rezka_log.txt")
     clear_stop_flag(STATUS_KEY)
-    conn = get_db()
+    db = Database()
+    conn = db.get_connection()
     cursor = conn.cursor()
 
-    # Ищем тех, у кого не хватает ID или оценок
     video_cats = "(1, 4, 5, 16, 7)"
     cursor.execute(f"""
         SELECT id, title, year, kp_id, imdb_id, kp_rating, imdb_rating, rezka_url, poster_url
@@ -57,440 +841,11 @@ def search_rezka_metadata():
     total_count = len(items)
     print(f"=== REZKA SYNC (Total: {total_count}) ===")
 
-    searcher = HdRezkaSearch("https://rezka.ag")
-
-    for idx, row in enumerate(items, 1):
-        try:
-            if should_stop(STATUS_KEY):
-                print("[STOP] Graceful shutdown requested.")
-                conn.close()
-                return
-
-            report_progress(idx, total_count)
-            item_id = row["id"]
-
-            title = row["title"]
-            year = row["year"]
-            kp_id = row["kp_id"]
-            imdb_id = row["imdb_id"]
-            kp_rating = row["kp_rating"]
-            imdb_rating = row["imdb_rating"]
-            # --- ПОДГОТОВКА ПОИСКОВЫХ ЗАПРОСОВ ---
-            # Разделяем название на части (русское / английское)
-            parts = [p.strip() for p in title.split("/")]
-            clean_parts = []
-            for p in parts:
-                # Убираем год в скобках и лишние пробелы
-                p_clean = re.sub(r"\(.*?\)", "", p).strip()
-                if p_clean and len(p_clean) > 1:
-                    clean_parts.append(p_clean)
-
-            # Приоритет поиска: Английское название (обычно точнее), потом Русское
-            search_queries = sorted(
-                clean_parts, key=lambda x: (not x.isascii(), len(x)), reverse=True
-            )
-
-            print(f"\n[{idx}/{total_count}] TITLE: {title} ({year})", flush=True)
-            if kp_id or imdb_id:
-                print(
-                    f"    📋 Имеем ID: KP:{kp_id or '-'}, IMDb:{imdb_id or '-'}",
-                    flush=True,
-                )
-
-            all_results = []
-            seen_urls = set()
-
-            for s_title in search_queries:
-                try:
-                    # 1. Пробуем с годом
-                    res_with_year = searcher.fast_search(f"{s_title} {year}")
-
-                    # 2. Сразу же добавляем результаты без года, если их мало или если результаты с годом не точные
-                    # (Но чтобы не спамить лишними запросами, сначала проверим качество результатов с годом)
-                    need_no_year = True
-                    if res_with_year:
-                        # Если хотя бы один результат с годом имеет точное совпадение названия
-                        for r in res_with_year:
-                            res_name_norm = normalize_title(
-                                re.sub(r"\(.*?\)", "", r["title"])
-                            )
-                            if any(
-                                res_name_norm == db_norm
-                                for db_norm in [normalize_title(p) for p in clean_parts]
-                            ):
-                                need_no_year = False
-                                break
-
-                    res_no_year = []
-                    if need_no_year:
-                        res_no_year = searcher.fast_search(s_title)
-
-                    for r in res_with_year + res_no_year:
-                        if r["url"] not in seen_urls:
-                            all_results.append(r)
-                            seen_urls.add(r["url"])
-                except Exception as e:
-                    print(f"    ⚠️ Ошибка поиска по '{s_title}': {e}")
-
-            if not all_results:
-                # Если совсем ничего не нашли, пробуем самый агрессивный поиск по первой части названия
-                if clean_parts:
-                    try:
-                        print(
-                            f"    [?] Trying fallback search for '{clean_parts[0]}'..."
-                        )
-                        res_fallback = searcher.fast_search(clean_parts[0])
-                        for r in res_fallback:
-                            if r["url"] not in seen_urls:
-                                all_results.append(r)
-                                seen_urls.add(r["url"])
-                    except:
-                        pass
-
-            if not all_results:
-                print(f"  [-] Nothing found on Rezka.")
-                cursor.execute(
-                    "UPDATE items SET checked_rezka = 1 WHERE id = ?", (item_id,)
-                )
-                conn.commit()
-                continue
-
-            print(f"    [*] Found {len(all_results)} results in search.")
-
-            results_with_scores = []
-            norm_db_titles = [normalize_title(p) for p in clean_parts]
-
-            for res in all_results:
-                res_name = res["title"]
-                res_url = res["url"]
-
-                # Извлекаем год из названия Резки "Название (Год)" или из URL
-                year_match = re.search(r"\((\d{4})\)", res_name)
-                if not year_match:
-                    # Ищем год в URL: ищем 4 цифры после дефиса
-                    year_match = re.search(r"-(\d{4})", res_url)
-                res_year = int(year_match.group(1)) if year_match else None
-
-                # Нормализуем название результата для сравнения
-                res_clean_name = (
-                    re.sub(r"\(.*?\)", "", res_name).replace(" / ", "/").strip()
-                )
-                res_parts = [
-                    normalize_title(p.strip()) for p in res_clean_name.split("/")
-                ]
-
-                score = 0
-                # Проверка совпадения названия (любая часть)
-                match_found = False
-                exact_name_match = False
-                for db_norm in norm_db_titles:
-                    for res_norm in res_parts:
-                        if db_norm == res_norm:
-                            score += 130  # Увеличиваем за точное совпадение
-                            match_found = True
-                            exact_name_match = True
-                            break
-                        elif (len(db_norm) > 4 and db_norm in res_norm) or (
-                            len(res_norm) > 4 and res_norm in db_norm
-                        ):
-                            score += 50
-                            match_found = True
-                    if match_found:
-                        break
-
-                # Проверка года (базовая по результатам поиска)
-                if year and res_year:
-                    diff = abs(year - res_year)
-                    if diff == 0:
-                        score += 60
-                    elif diff == 1:
-                        score += 50  # Для сериалов разброс в 1 год - это норма
-                    elif diff <= 3:
-                        score -= 40  # Небольшой штраф за малый разброс
-                    else:
-                        score -= 150  # Другой год - большой штраф
-
-                results_with_scores.append(
-                    {
-                        "res": res,
-                        "score": score,
-                        "year": res_year,
-                        "exact_name_match": exact_name_match,
-                    }
-                )
-
-            results_with_scores.sort(key=lambda x: x["score"], reverse=True)
-
-            final_res = None
-            final_data = {}
-
-            for item in results_with_scores:
-                res = item["res"]
-                score = item["score"]
-                exact_name_match = item.get("exact_name_match", False)
-
-                # Если название совпало точно, заходим даже при плохом годе (чтобы проверить ID)
-                if score < 70 and not exact_name_match:
-                    continue
-
-                print(f"    [?] Checking: {res['title']} (Score: {score})")
-                try:
-                    rezka = HdRezkaApi(res["url"])
-                    soup = rezka.soup
-                except:
-                    print(f"      [!] Page load error.")
-                    continue
-
-                # 1. СБОР ID И ГОДА СО СТРАНИЦЫ
-                page_kp_id = None
-                page_imdb_id = None
-                page_year = item.get("year")  # Год из результатов поиска
-
-                # Дополнительно ищем год на самой странице (в th или li)
-                if not page_year:
-                    # Ищем во всех тегах, содержащих "Год" или "Дата выхода"
-                    year_label = soup.find(
-                        lambda tag: (
-                            tag.name in ["th", "b", "span", "h2"]
-                            and tag.text
-                            and any(x in tag.text for x in ["Год", "Дата выхода"])
-                        )
-                    )
-                    if year_label:
-                        container = (
-                            year_label.find_next_sibling(["td", "span"])
-                            or year_label.parent
-                        )
-                        if container:
-                            y_m = re.search(r"(\d{4})", container.text)
-                            if y_m:
-                                page_year = int(y_m.group(1))
-
-                    if not page_year:
-                        y_m = re.search(
-                            r"(?:Год|Дата выхода):.*?(\d{4})", str(soup), re.S | re.I
-                        )
-                        if y_m:
-                            page_year = int(y_m.group(1))
-
-                if page_year:
-                    print(f"      [*] Year on page: {page_year}")
-
-                # Пересчитываем score с учетом уточненного года
-                current_score = score
-                if not item.get("year") and page_year and year:
-                    diff = abs(year - page_year)
-                    if diff == 0:
-                        current_score += 60
-                    elif diff == 1:
-                        current_score += 50
-                    elif diff <= 3:
-                        current_score -= 40
-                    else:
-                        current_score -= 150
-
-                # А) Из кнопок рейтинга
-                rate_blocks = soup.find_all(class_=re.compile(r"b-post__info_rates"))
-                for block in rate_blocks:
-                    kp_link = block.find("a", href=re.compile(r"kinopoisk\.ru"))
-                    if kp_link:
-                        kp_m = re.search(
-                            r"/film/(\d+)|/series/(\d+)|/(\d+)/", kp_link["href"]
-                        )
-                        if kp_m:
-                            page_kp_id = next(g for g in kp_m.groups() if g)
-
-                    imdb_link = block.find("a", href=re.compile(r"imdb\.com"))
-                    if imdb_link:
-                        imdb_m = re.search(r"/title/(tt\d+)", imdb_link["href"])
-                        if imdb_m:
-                            page_imdb_id = imdb_m.group(1)
-
-                # Б) Из скрытых ссылок
-                links = soup.find_all("a", href=re.compile(r"/help/"))
-                import base64
-                from urllib.parse import unquote
-
-                for link in links:
-                    try:
-                        href = link["href"]
-                        if "/help/" not in href:
-                            continue
-                        b64_url = href.split("/help/")[1].split(".html")[0].strip("/")
-                        b64_url = unquote(b64_url)
-                        # Чистим от возможных лишних символов
-                        b64_url = re.sub(r"[^a-zA-Z0-9+/=]", "", b64_url)
-                        missing_padding = len(b64_url) % 4
-                        if missing_padding:
-                            b64_url += "=" * (4 - missing_padding)
-
-                        real_url = base64.b64decode(b64_url).decode(
-                            "utf-8", errors="ignore"
-                        )
-                        real_url = unquote(
-                            real_url
-                        )  # Разкодируем URL-encoded символы типа %3A
-
-                        if "kinopoisk.ru" in real_url:
-                            kp_m = re.search(
-                                r"/(?:film|series)/(\d+)|/(\d+)/", real_url
-                            )
-                            if kp_m and not page_kp_id:
-                                page_kp_id = next(g for g in kp_m.groups() if g)
-                        elif "imdb.com" in real_url:
-                            imdb_m = re.search(r"/title/(tt\d+)", real_url)
-                            if imdb_m and not page_imdb_id:
-                                imdb_m = imdb_m.group(1)
-                    except:
-                        pass
-
-                # --- ЖЕЛЕЗНАЯ ВЕРИФИКАЦИЯ ПО ID ---
-                id_match = False
-                id_conflict = False
-
-                print(
-                    f"      [?] ID Check: DB({kp_id or '-'}, {imdb_id or '-'}) vs Rezka({page_kp_id or '-'}, {page_imdb_id or '-'})"
-                )
-
-                if kp_id and page_kp_id:
-                    if str(kp_id) == str(page_kp_id):
-                        print(f"      [+] MATCH KP ID: {kp_id}")
-                        id_match = True
-                    else:
-                        print(f"      [-] CONFLICT KP ID: {kp_id} != {page_kp_id}")
-                        id_conflict = True
-
-                if imdb_id and page_imdb_id:
-                    if str(imdb_id) == str(page_imdb_id):
-                        print(f"      [+] MATCH IMDb ID: {imdb_id}")
-                        id_match = True
-                    else:
-                        print(
-                            f"      [-] CONFLICT IMDb ID: {imdb_id} != {page_imdb_id}"
-                        )
-                        id_conflict = True
-
-                if id_conflict:
-                    continue  # Если ID не совпали - это точно другой фильм
-
-                # --- ИТОГОВОЕ РЕШЕНИЕ ---
-                is_valid = False
-                if id_match:
-                    is_valid = True  # Если ID совпали - берем 100%
-                elif (kp_id or imdb_id) and not (page_kp_id or page_imdb_id):
-                    # Если в базе ID есть, а на резке нет - доверяем при Score >= 90
-                    # (Например: совпадение названия, даже если год чуть отличается)
-                    if current_score >= 90:
-                        print(f"      [+] Trusting by title (Score: {current_score})")
-                        is_valid = True
-                    else:
-                        print(f"      [-] Not enough data (Score: {current_score})")
-                elif not (kp_id or imdb_id) and current_score >= 90:
-                    # Если ID нет нигде - доверяем названию (снижаем порог)
-                    is_valid = True
-
-                # Специальный случай: Если у нас нет ID в базе, но они есть на Резке - принимаем при хорошем Score
-                if (
-                    not (kp_id or imdb_id)
-                    and (page_kp_id or page_imdb_id)
-                    and current_score >= 110
-                ):
-                    is_valid = True
-
-                if is_valid:
-                    final_res = res
-                    final_data = {
-                        "kp_id": page_kp_id or kp_id,
-                        "imdb_id": page_imdb_id or imdb_id,
-                        "score": current_score,
-                        "soup": soup,
-                    }
-                    break
-
-            if not final_res:
-                print(f"  [-] No suitable results found.")
-                cursor.execute(
-                    "UPDATE items SET checked_rezka = 1 WHERE id = ?", (item_id,)
-                )
-                conn.commit()
-                continue
-
-            print(
-                f"  [+] CONFIRMED: {final_res['title']} (Score: {final_data['score']})"
-            )
-            soup = final_data["soup"]
-
-            # Собираем данные
-            found_kp_rating = kp_rating
-            found_imdb_rating = imdb_rating
-
-            # Парсим рейтинги заново (уже со страницы подтвержденного фильма)
-            rate_blocks = soup.find_all(class_=re.compile(r"b-post__info_rates"))
-            for block in rate_blocks:
-                block_text = block.text.lower()
-                val_tag = block.find(["span", "b"], class_=["num", "bold"])
-                if not val_tag:
-                    val_tag = block.find("b")
-                if val_tag:
-                    try:
-                        val = float(val_tag.text.strip().replace(",", "."))
-                        if "кинопоиск" in block_text or "kp" in block_text:
-                            found_kp_rating = val
-                        elif "imdb" in block_text:
-                            found_imdb_rating = val
-                    except:
-                        pass
-
-            # Постер (с исправлением протокола)
-            found_poster = None
-            og_image = soup.find("meta", property="og:image")
-            if og_image and og_image.get("content"):
-                found_poster = og_image["content"]
-            if not found_poster:
-                itemprop_img = soup.find("img", itemprop="image")
-                if itemprop_img:
-                    found_poster = itemprop_img.get("src") or itemprop_img.get(
-                        "data-src"
-                    )
-
-            if found_poster and found_poster.startswith("//"):
-                found_poster = "https:" + found_poster
-
-            # Обновляем
-            cursor.execute(
-                """
-                UPDATE items 
-                SET rezka_url = ?, 
-                    kp_rating = CASE WHEN kp_rating IS NULL OR kp_rating = 0 THEN ? ELSE kp_rating END, 
-                    imdb_rating = CASE WHEN imdb_rating IS NULL OR imdb_rating = 0 THEN ? ELSE imdb_rating END, 
-                    kp_id = COALESCE(kp_id, ?), 
-                    imdb_id = COALESCE(imdb_id, ?),
-                    poster_url = CASE WHEN poster_url IS NULL OR poster_url = '' THEN ? ELSE poster_url END,
-                    checked_rezka = 1
-                WHERE id = ?
-            """,
-                (
-                    final_res["url"],
-                    found_kp_rating,
-                    found_imdb_rating,
-                    final_data["kp_id"],
-                    final_data["imdb_id"],
-                    found_poster,
-                    item_id,
-                ),
-            )
-            conn.commit()
-
-            print(
-                f"    [*] Success! Ratings: KP: {found_kp_rating or '-'}, IMDb: {found_imdb_rating or '-'}"
-            )
-            if found_poster:
-                print(f"    [*] Poster updated.")
-
-        except Exception as e:
-            print(f"  [-] Error processing {item_id}: {e}")
-
-        time.sleep(REZKA_REQUEST_DELAY)
+    if total_count > 0:
+        found, not_found = asyncio.run(_search_rezka_batch(items, db, conn))
+        print(f"\n=== RESULTS: Found={found}, Not found={not_found} ===")
+    else:
+        print("No items to process.")
 
     conn.close()
     print("\n=== FINISHED ===")

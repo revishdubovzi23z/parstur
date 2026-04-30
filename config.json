@@ -14,7 +14,8 @@
     "request_delay": 0.5
   },
   "rezka": {
-    "request_delay": 0.5
+    "request_delay": 0.5,
+    "concurrency": 3
   },
   "rutor": {
     "max_retries": 3,
@@ -29,5 +30,12 @@
     "expire_hours": 168,
     "allowable_methods": ["GET"],
     "match_headers": ["Authorization", "X-API-KEY"]
+  },
+  "user_sync": {
+    "imdb_csv": "IMDBOCENKI.csv",
+    "kp_csv": "kinopoiskocenki.csv"
+  },
+  "feed": {
+    "default_limit": 20
   }
 }

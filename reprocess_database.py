@@ -1,4 +1,3 @@
-import sqlite3
 import time
 import requests
 import re
@@ -8,6 +7,8 @@ from bs4 import BeautifulSoup
 from tmdb_client import TMDBClient
 from app_core import VIDEO_CATEGORY_IDS
 from script_utils import load_config, should_stop, clear_stop_flag
+from db import Database
+from logger import setup_tee_logger
 
 GARBAGE_KEYWORDS = [
     "S01",
@@ -51,32 +52,28 @@ def report_progress(current, total, status_key="reprocess"):
     try:
         with open(f"progress_{status_key}.json", "w") as f:
             json.dump({"current": current, "total": total}, f)
-    except:
+    except Exception:
         pass
 
 
 def reprocess_all(force_all=False, specific_id=None):
-
+    setup_tee_logger("reprocess", "reprocess_log.txt")
     clear_stop_flag(STATUS_KEY)
-    conn = sqlite3.connect("app_data.db", timeout=30.0)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
+    db = Database()
+    conn = db.get_connection()
 
     print(f"Подключено к БД. Режим WAL включен.", flush=True)
 
     ids_str = ",".join(map(str, VIDEO_CATEGORY_IDS))
-
-    # Берём карточки для обработки
-    garbage_like = " OR ".join(
-        [f"items.title LIKE '%{kw}%'" for kw in GARBAGE_KEYWORDS[:6]]
-    )
+    garbage_like = " OR ".join(["items.title LIKE ?" for _ in GARBAGE_KEYWORDS[:6]])
+    garbage_params = [f"%{kw}%" for kw in GARBAGE_KEYWORDS[:6]]
 
     if specific_id:
-        where_clause = f"items.id = {specific_id}"
+        where_clause = "items.id = ?"
+        where_params = [specific_id]
     else:
         where_clause = f"items.category_id IN ({ids_str}) AND items.is_reprocessed = 0"
+        where_params = []
     if not force_all:
         where_clause += """
           AND (items.is_metadata_fixed = 0 OR items.kp_id IS NULL OR items.kp_id = '' OR items.imdb_id IS NULL OR items.imdb_id = '')
@@ -89,6 +86,7 @@ def reprocess_all(force_all=False, specific_id=None):
             {garbage_like}
           )
         """.format(garbage_like=garbage_like)
+        where_params.extend(garbage_params)
 
     tmdb = TMDBClient()
     rutor = RutorParser()
@@ -96,18 +94,19 @@ def reprocess_all(force_all=False, specific_id=None):
     mode_str = "ПОЛНОЕ ОБНОВЛЕНИЕ" if force_all else "УМНАЯ ПРОВЕРКА"
     print(f"=== ЗАПУСК: {mode_str} ===", flush=True)
 
-    cursor.execute(f"SELECT COUNT(*) FROM items WHERE {where_clause}")
-    total_to_process = cursor.fetchone()[0]
+    total_to_process = db.get_items_count(where_clause, where_params, conn=conn)
     print(f"Найдено элементов для обработки: {total_to_process}", flush=True)
 
     total_updated = 0
     total_fixed_all = 0
 
     while True:
-        cursor.execute(f"""
+        cursor = conn.cursor()
+        cursor.execute(
+            f"""
             SELECT items.id, items.title, items.year,
                    items.poster_url, items.description,
-                   items.kp_id, items.imdb_id, items.kinorium_id,
+                    items.kp_id, items.imdb_id,
                    items.imdb_rating, items.kp_rating,
                    MIN(releases.rutor_id) as rutor_id,
                    items.category_id
@@ -117,8 +116,10 @@ def reprocess_all(force_all=False, specific_id=None):
             GROUP BY items.id
             ORDER BY items.id DESC
             LIMIT {REPROCESS_BATCH_SIZE}
-        """)
-        items = cursor.fetchall()
+        """,
+            where_params,
+        )
+        items = [dict(r) for r in cursor.fetchall()]
 
         if not items:
             report_progress(total_to_process, total_to_process)
@@ -146,7 +147,6 @@ def reprocess_all(force_all=False, specific_id=None):
             rutor_id = row["rutor_id"]
             kp_id = row["kp_id"] or ""
             imdb_id = row["imdb_id"] or ""
-            kinorium_id = row["kinorium_id"] or ""
             poster = row["poster_url"] or ""
             desc = row["description"] or ""
             imdb_rating = row["imdb_rating"] or 0.0
@@ -158,7 +158,6 @@ def reprocess_all(force_all=False, specific_id=None):
                 conn.close()
                 return
 
-            # Показываем что именно нужно найти
             needs = []
             if not kp_id:
                 needs.append("KP ID")
@@ -178,27 +177,23 @@ def reprocess_all(force_all=False, specific_id=None):
                 print(f"  📋 Нужно: {', '.join(needs)}", flush=True)
 
             changes = []
-            has_error = False
 
-            # ── 1. Страница на Руторе ─────────────────────────────────────
             if not kp_id or not imdb_id:
-                cursor.execute(
-                    "SELECT rutor_id FROM releases WHERE item_id = ?", (item_id,)
-                )
-                rels = cursor.fetchall()
-
-                for rel_idx, rel in enumerate(rels):
+                rels = db.get_rutor_ids_for_item(item_id, conn=conn)
+                for rel_idx, rel_rutor_id in enumerate(rels):
                     if kp_id and imdb_id:
                         break
-
-                    rid = rel["rutor_id"]
                     try:
                         time.sleep(0.3)
                         MIRROR = "http://rutor.info"
-                        print(f"  🔍 Рутор (1.1): {MIRROR}/torrent/{rid}", flush=True)
-                        resp = requests.get(f"{MIRROR}/torrent/{rid}", timeout=20)
+                        print(
+                            f"  🔍 Рутор (1.1): {MIRROR}/torrent/{rel_rutor_id}",
+                            flush=True,
+                        )
+                        resp = requests.get(
+                            f"{MIRROR}/torrent/{rel_rutor_id}", timeout=20
+                        )
                         if resp.status_code == 200:
-                            # Ищем KP ID
                             if not kp_id:
                                 m = re.search(
                                     r"kinopoisk\.ru/rating/(\d+)\.gif", resp.text
@@ -213,7 +208,6 @@ def reprocess_all(force_all=False, specific_id=None):
                                 if m:
                                     kp_id = m.group(1)
                                     changes.append(f"    ✅ Нашел KP ID: {kp_id}")
-
                             if not imdb_id:
                                 m = re.search(r"imdb\.com/title/(tt\d+)", resp.text)
                                 if m:
@@ -224,7 +218,6 @@ def reprocess_all(force_all=False, specific_id=None):
                     except Exception as e:
                         print(f"    ⚠️ Ошибка глубокого поиска: {e}", flush=True)
 
-            # ── 2. TMDB ───────────────────────────────────────────────────
             tmdb_data = None
             if (
                 not poster
@@ -235,17 +228,21 @@ def reprocess_all(force_all=False, specific_id=None):
                 try:
                     if imdb_id:
                         tmdb_data = tmdb.find_by_imdb_id(imdb_id)
-
                     if not tmdb_data:
-                        parts = old_title.split(" / ")
-                        search_term = parts[0].split("/")[0].strip()
-                        orig_term = (
-                            parts[1].split("/")[0].strip() if len(parts) > 1 else None
+                        t_parts = old_title.split(" / ")
+                        ru_part = re.sub(
+                            r"\s*\(\d{4}\)\s*", "", t_parts[0].split("/")[0]
+                        ).strip()
+                        en_part = None
+                        if len(t_parts) > 1:
+                            en_part = re.sub(
+                                r"\s*\(\d{4}\)\s*", "", t_parts[1].split("/")[0]
+                            ).strip()
+                        search_primary = en_part or ru_part
+                        search_alt = ru_part if en_part else None
+                        tmdb_data = tmdb.search_movie(
+                            search_primary, year, alt_title=search_alt
                         )
-                        tmdb_data = tmdb.search_movie(orig_term or search_term, year)
-                        if not tmdb_data and orig_term:
-                            tmdb_data = tmdb.search_movie(search_term, year)
-
                     if tmdb_data:
                         print("  ✅ Данные в TMDB получены", flush=True)
                         if not imdb_id and tmdb_data.get("imdb_id"):
@@ -264,22 +261,17 @@ def reprocess_all(force_all=False, specific_id=None):
                             new_orig = tmdb_data.get("original_title") or tmdb_data.get(
                                 "title"
                             )
-
-                            # Формируем красивое название: Русское / Оригинальное (Год)
                             if new_ru.lower() != new_orig.lower():
                                 new_title = f"{new_ru} / {new_orig}"
                             else:
                                 new_title = new_ru
-
                             if year:
                                 new_title += f" ({year})"
-
                             if new_title != old_title:
                                 final_title = new_title
                                 changes.append(
                                     f"    ✨ Название обновлено: {final_title}"
                                 )
-
                             if new_orig:
                                 original_title = new_orig
                     else:
@@ -287,7 +279,6 @@ def reprocess_all(force_all=False, specific_id=None):
                 except Exception as e:
                     print(f"    ⚠️ Ошибка TMDB: {e}", flush=True)
 
-            # ── Итог ──────────────────────────────────────────────────────
             for c in changes:
                 print(c, flush=True)
 
@@ -310,60 +301,44 @@ def reprocess_all(force_all=False, specific_id=None):
                     is_fixed = 1
                     total_fixed_all += 1
 
-            # ── Сохраняем ─────────────────────────────────────────────────
             try:
-                cursor.execute(
-                    """
-                    UPDATE items
-                    SET title = ?, poster_url = ?, description = ?, imdb_id = ?, kp_id = ?,
-                        kp_rating = ?, imdb_rating = ?, is_metadata_fixed = ?, is_reprocessed = 1,
-                        original_title = ?
-                    WHERE id = ?
-                """,
-                    (
-                        final_title,
-                        poster,
-                        desc,
-                        imdb_id,
-                        kp_id,
-                        kp_rating,
-                        imdb_rating,
-                        is_fixed,
-                        tmdb_data.get("original_title") if tmdb_data else None,
-                        item_id,
-                    ),
+                db.fill_item_metadata(
+                    item_id,
+                    conn=conn,
+                    title=final_title,
+                    poster_url=poster,
+                    description=desc,
+                    imdb_id=imdb_id,
+                    kp_id=kp_id,
+                    kp_rating=kp_rating,
+                    imdb_rating=imdb_rating,
+                    original_title=tmdb_data.get("original_title")
+                    if tmdb_data
+                    else None,
+                )
+                db.update_item(
+                    item_id, conn=conn, is_metadata_fixed=is_fixed, is_reprocessed=1
                 )
                 conn.commit()
                 total_updated += 1
-            except sqlite3.IntegrityError:
+            except Exception:
                 print(
                     f"  🔗 Обнаружен дубликат для '{final_title}'. Сливаю карточки...",
                     flush=True,
                 )
-                cursor.execute(
-                    "SELECT id FROM items WHERE title = ? AND year = ? AND category_id = ? AND id != ?",
-                    (final_title, year, row["category_id"], item_id),
+                existing_id = db.find_duplicate_item_id(
+                    final_title, year, row["category_id"], item_id, conn=conn
                 )
-                existing = cursor.fetchone()
-                if existing:
-                    existing_id = existing[0]
-                    cursor.execute(
-                        "UPDATE releases SET item_id = ? WHERE item_id = ?",
-                        (existing_id, item_id),
-                    )
-                    cursor.execute(
-                        "UPDATE items SET is_reprocessed = 1 WHERE id = ?",
-                        (existing_id,),
-                    )
-                    cursor.execute("DELETE FROM items WHERE id = ?", (item_id,))
+                if existing_id:
+                    db.reassign_releases(item_id, existing_id, conn=conn)
+                    db.update_item(existing_id, conn=conn, is_reprocessed=1)
+                    db.delete_item(item_id, conn=conn)
                     conn.commit()
                     print(
                         f"  ✅ Успешно слито с карточкой ID {existing_id}", flush=True
                     )
                 else:
-                    cursor.execute(
-                        "UPDATE items SET is_reprocessed = 1 WHERE id = ?", (item_id,)
-                    )
+                    db.update_item(item_id, conn=conn, is_reprocessed=1)
                     conn.commit()
 
             time.sleep(REPROCESS_REQUEST_DELAY)
@@ -383,7 +358,7 @@ if __name__ == "__main__":
         try:
             idx = sys.argv.index("--id")
             specific_id = int(sys.argv[idx + 1])
-        except:
+        except Exception:
             pass
 
     reprocess_all(force, specific_id)

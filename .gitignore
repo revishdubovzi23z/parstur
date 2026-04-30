@@ -29,3 +29,6 @@ rutor_test.html
 temp_csv_head.txt
 IMDBOCENKI.csv
 kinopoiskocenki.csv
+progress_*.json
+checkpoint_*.json
+stop_*.flag

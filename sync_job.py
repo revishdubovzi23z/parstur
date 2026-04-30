@@ -1,4 +1,3 @@
-import sqlite3
 import requests
 import time
 import datetime
@@ -19,13 +18,15 @@ from script_utils import (
     clear_checkpoint,
     clear_stop_flag,
 )
+from db import Database
+from logger import setup_tee_logger
 
 
 def report_progress(current, total, status_key):
     try:
         with open(f"progress_{status_key}.json", "w") as f:
             json.dump({"current": current, "total": total}, f)
-    except:
+    except Exception:
         pass
 
 
@@ -40,46 +41,7 @@ SYNC_DEFAULT_PERIOD_DAYS = _config.get("sync", {}).get("default_period_days", 30
 SYNC_REQUEST_DELAY = _config.get("sync", {}).get("request_delay", 0.3)
 
 
-class TrackerAppCore:
-    def __init__(self, db_path="app_data.db"):
-        self.db_path = db_path
-        self.parser = RutorParser()
-        self.tmdb = TMDBClient()
-        self.kinopoisk = KinopoiskClient()
-
-    def get_last_sync_date(self, category_id=None):
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            if category_id:
-                cursor.execute(
-                    """
-                    SELECT MAX(r.date_added) 
-                    FROM releases r 
-                    JOIN items i ON r.item_id = i.id 
-                    WHERE i.category_id = ?
-                """,
-                    (category_id,),
-                )
-            else:
-                cursor.execute("SELECT MAX(date_added) FROM releases")
-
-            res = cursor.fetchone()[0]
-            if res:
-                return res
-            import datetime
-
-            return (
-                datetime.date.today()
-                - datetime.timedelta(days=SYNC_DEFAULT_PERIOD_DAYS)
-            ).isoformat()
-
-    def update_last_sync_date(self, date_str):
-        # В нашей структуре дата берется из самих релизов, так что это опционально
-        pass
-
-
 def parse_rutor_date(date_str):
-    # Форматы: "25 Апр 26", "Сегодня 12:34", "Вчера 10:15"
     from datetime import datetime, date, timedelta
 
     now = datetime.now()
@@ -123,9 +85,8 @@ def parse_rutor_date(date_str):
             year = int(parts[2])
             if year < 100:
                 year += 2000
-            # Если времени нет, ставим 00:00:00
             return datetime(year, month, day).isoformat(sep=" ")
-    except:
+    except Exception:
         pass
 
     return now.isoformat(sep=" ")
@@ -144,23 +105,17 @@ CATEGORIES_TO_SYNC = [
     {"id": 12, "use_tmdb": False},
 ]
 
-# Добавляем имена из центрального хранилища
 for c in CATEGORIES_TO_SYNC:
     c["name"] = RUTOR_CATEGORIES.get(c["id"], f"Unknown {c['id']}")
 
 
 def deduplicate_releases(raw_list):
-    """
-    Группирует раздачи по чистому названию и году.
-    """
     groups = {}
     for r in raw_list:
-        # Используем нормализованное название для ключа группировки
         key = (normalize_title(r["parsed_title"]), r["year"])
-
         if key not in groups:
             groups[key] = {
-                "display_title": r["parsed_title"],  # Название для отображения
+                "display_title": r["parsed_title"],
                 "year": r["year"],
                 "releases": [],
             }
@@ -169,12 +124,17 @@ def deduplicate_releases(raw_list):
 
 
 def run_sync(mode="video", manual_min_date=None):
-    app = TrackerAppCore()
+    setup_tee_logger("sync", "sync_log.txt")
+    db = Database()
+    parser = RutorParser()
+    tmdb = TMDBClient()
+    kinopoisk = KinopoiskClient()
+
     status_key = STATUS_KEY
     checkpoint = load_checkpoint(status_key)
     completed_cats = checkpoint.get("completed_categories", []) if checkpoint else []
     resume_cat_id = checkpoint.get("current_category_id") if checkpoint else None
-    resume_page = checkpoint.get("current_page", 0) if checkpoint else 0
+    resume_page = checkpoint.get("current_page", 0) if checkpoint else None
 
     if checkpoint:
         print(
@@ -187,466 +147,390 @@ def run_sync(mode="video", manual_min_date=None):
         target_date = manual_min_date
         print(f"=== ЗАПУСК ПАРСИНГА (Режим: {mode}, РУЧНАЯ ДАТА: {target_date}) ===")
     else:
-        target_date = app.get_last_sync_date(category_id=None)
+        target_date = db.get_last_release_date()
         print(f"=== ЗАПУСК ПАРСИНГА (Режим: {mode}, Цель: {target_date}) ===")
 
-    with sqlite3.connect(app.db_path, timeout=30.0) as conn:
-        cursor = conn.cursor()
+    conn = db.get_connection()
+    cursor = conn.cursor()
 
-        for cat in CATEGORIES_TO_SYNC:
-            cat_id = cat["id"]
-            cat_name = cat["name"]
-            use_tmdb = cat["use_tmdb"]
+    for cat in CATEGORIES_TO_SYNC:
+        cat_id = cat["id"]
+        cat_name = cat["name"]
+        use_tmdb = cat["use_tmdb"]
 
-            if mode == "video" and not use_tmdb:
-                continue
-            if mode == "other" and use_tmdb:
-                continue
+        if mode == "video" and not use_tmdb:
+            continue
+        if mode == "other" and use_tmdb:
+            continue
 
-            if cat_id in completed_cats:
-                print(f"\n--- Категория: {cat_name} (ПРОПУСК: уже обработана) ---")
-                continue
+        if cat_id in completed_cats:
+            print(f"\n--- Категория: {cat_name} (ПРОПУСК: уже обработана) ---")
+            continue
 
-            current_target = (
-                manual_min_date
-                if manual_min_date
-                else app.get_last_sync_date(category_id=cat_id)
-            )
-            print(f"\n--- Категория: {cat_name} (Ищем новее {current_target}) ---")
+        current_target = (
+            manual_min_date
+            if manual_min_date
+            else db.get_last_release_date(category_id=cat_id)
+        )
+        print(f"\n--- Категория: {cat_name} (Ищем новее {current_target}) ---")
 
-            page_start = resume_page if cat_id == resume_cat_id else 0
+        page_start = resume_page if cat_id == resume_cat_id else 0
 
-            all_raw_releases = []
-            for page in range(page_start, SYNC_PAGE_DEPTH):
-                if should_stop(status_key):
-                    save_checkpoint(
-                        status_key,
-                        {
-                            "completed_categories": completed_cats,
-                            "current_category_id": cat_id,
-                            "current_page": page,
-                        },
-                    )
-                    print("[STOP] Graceful shutdown. Checkpoint saved.")
-                    return
-
-                raw = app.parser.get_category_releases(cat_id, page=page)
-                if not raw:
-                    break
-
-                new_ones = []
-                for r in raw:
-                    rutor_dt = parse_rutor_date(r["date_str"])
-                    if rutor_dt < current_target:
-                        continue
-
-                    if cat_id in VIDEO_CATEGORY_IDS:
-                        ry = r.get("year")
-                        if ry:
-                            if ry < MIN_YEAR or ry > MAX_YEAR:
-                                continue
-
-                    new_ones.append(r)
-
-                all_raw_releases.extend(new_ones)
-
-                print(f"  Стр {page}: новых (с учетом фильтров) {len(new_ones)}")
-                if len(new_ones) < len(raw) - SYNC_STOP_THRESHOLD:
-                    break
-                time.sleep(SYNC_REQUEST_DELAY)
-
-            if not all_raw_releases:
-                report_progress(1, 1, status_key)
-                completed_cats.append(cat_id)
-                continue
-            if mode == "other" and use_tmdb:
-                continue
-
-            # Определяем дату именно для этой категории (если не задана вручную)
-            current_target = (
-                manual_min_date
-                if manual_min_date
-                else app.get_last_sync_date(category_id=cat_id)
-            )
-            print(f"\n--- Категория: {cat_name} (Ищем новее {current_target}) ---")
-
-            all_raw_releases = []
-            for page in range(20):  # Глубина 20 страниц
-                raw = app.parser.get_category_releases(cat_id, page=page)
-                if not raw:
-                    break
-
-                new_ones = []
-                for r in raw:
-                    # 1. Проверка даты добавления на Рутор (с точностью до времени)
-                    rutor_dt = parse_rutor_date(r["date_str"])
-                    if rutor_dt < current_target:
-                        continue
-
-                    # 2. Фильтр по году выпуска (только для видео-категорий)
-                    if cat_id in VIDEO_CATEGORY_IDS:
-                        ry = r.get("year")
-                        if ry:
-                            if ry < MIN_YEAR or ry > MAX_YEAR:
-                                continue
-                        else:
-                            # Если года нет в названии, но мы в категории видео -
-                            # можно либо пропускать, либо оставлять. Оставим для ручной проверки.
-                            pass
-
-                    new_ones.append(r)
-
-                all_raw_releases.extend(new_ones)
-
-                print(f"  Стр {page}: новых (с учетом фильтров) {len(new_ones)}")
-                if len(new_ones) < len(raw) - 5:  # Если пошли старые раздачи
-                    break
-                time.sleep(0.3)
-
-            if not all_raw_releases:
-                report_progress(1, 1, status_key)
-                continue
-
-            unique_movies = deduplicate_releases(all_raw_releases)
-            total_m = len(unique_movies)
-            for idx, (key, movie_data) in enumerate(unique_movies.items(), 1):
-                if should_stop(status_key):
-                    save_checkpoint(
-                        status_key,
-                        {
-                            "completed_categories": completed_cats,
-                            "current_category_id": cat_id,
-                            "current_page": page_start + SYNC_PAGE_DEPTH,
-                        },
-                    )
-                    print(
-                        "[STOP] Graceful shutdown during item processing. Checkpoint saved."
-                    )
-                    return
-
-                report_progress(idx, total_m, status_key)
-                clean_t_key, year = key
-
-                display_title = movie_data["display_title"]
-
-                # Ищем существующий фильм УМНЫМ способом (сначала точно, потом по чистому названию)
-                cursor.execute(
-                    "SELECT id, title FROM items WHERE year=? AND category_id=?",
-                    (year, cat_id),
+        all_raw_releases = []
+        for page in range(page_start, SYNC_PAGE_DEPTH):
+            if should_stop(status_key):
+                save_checkpoint(
+                    status_key,
+                    {
+                        "completed_categories": completed_cats,
+                        "current_category_id": cat_id,
+                        "current_page": page,
+                    },
                 )
-                potential_matches = cursor.fetchall()
+                print("[STOP] Graceful shutdown. Checkpoint saved.")
+                conn.close()
+                return
 
-                item_id = None
-                for p_id, p_title in potential_matches:
-                    if normalize_title(p_title) == clean_t_key:
-                        item_id = p_id
-                        break
+            raw = parser.get_category_releases(cat_id, page=page)
+            if not raw:
+                break
 
-                is_new_item = False
-                if not item_id:
-                    is_new_item = True
-                    print(f"\n[НОВЫЙ] 🎬 {display_title} ({year})")
-                    # ПЫТАЕМСЯ ДОСТАТЬ ID ПРЯМО С РУТОРА (для точности)
-                    rutor_kp_id = None
-                    rutor_imdb_id = None
+            new_ones = []
+            for r in raw:
+                rutor_dt = parse_rutor_date(r["date_str"])
+                if rutor_dt < current_target:
+                    continue
+                if cat_id in VIDEO_CATEGORY_IDS:
+                    ry = r.get("year")
+                    if ry:
+                        if ry < MIN_YEAR or ry > MAX_YEAR:
+                            continue
+                new_ones.append(r)
 
-                    if cat_id in [1, 4, 5, 16, 7]:
-                        for rel_idx, rel in enumerate(movie_data["releases"]):
-                            if rutor_kp_id and rutor_imdb_id:
-                                break
+            all_raw_releases.extend(new_ones)
+            print(f"  Стр {page}: новых (с учетом фильтров) {len(new_ones)}")
+            if len(new_ones) < len(raw) - SYNC_STOP_THRESHOLD:
+                break
+            time.sleep(SYNC_REQUEST_DELAY)
 
-                            try:
-                                rel_url = (
-                                    f"{app.parser.mirror}/torrent/{rel['rutor_id']}"
-                                )
-                                print(f"  🔍 Рутор (1.1): {rel_url}")
-                                resp = requests.get(rel_url, timeout=20)
-                                if resp.status_code == 200:
-                                    # --- Достаем H1 ---
-                                    from bs4 import BeautifulSoup
+        if not all_raw_releases:
+            report_progress(1, 1, status_key)
+            completed_cats.append(cat_id)
+            continue
 
-                                    soup = BeautifulSoup(resp.text, "html.parser")
-                                    h1 = soup.find("h1")
-                                    if h1:
-                                        full_h1_title = h1.text.strip()
-                                        if "Раздача не существует" not in full_h1_title:
-                                            display_title = (
-                                                app.parser.clean_display_title(
-                                                    full_h1_title
-                                                )
-                                            )
-                                            print(
-                                                f"    ✨ Название уточнено: {display_title}"
-                                            )
+        unique_movies = deduplicate_releases(all_raw_releases)
+        total_m = len(unique_movies)
+        for idx, (key, movie_data) in enumerate(unique_movies.items(), 1):
+            if should_stop(status_key):
+                save_checkpoint(
+                    status_key,
+                    {
+                        "completed_categories": completed_cats,
+                        "current_category_id": cat_id,
+                        "current_page": page_start + SYNC_PAGE_DEPTH,
+                    },
+                )
+                print(
+                    "[STOP] Graceful shutdown during item processing. Checkpoint saved."
+                )
+                conn.close()
+                return
 
-                                    # Ищем KP ID
-                                    if not rutor_kp_id:
+            report_progress(idx, total_m, status_key)
+            clean_t_key, year = key
+            display_title = movie_data["display_title"]
+
+            cursor.execute(
+                "SELECT id, title FROM items WHERE year=? AND category_id=?",
+                (year, cat_id),
+            )
+            potential_matches = cursor.fetchall()
+
+            item_id = None
+            for p_id, p_title in potential_matches:
+                if normalize_title(p_title) == clean_t_key:
+                    item_id = p_id
+                    break
+
+            is_new_item = False
+            if not item_id:
+                is_new_item = True
+                print(f"\n[НОВЫЙ] 🎬 {display_title} ({year})")
+                rutor_kp_id = None
+                rutor_imdb_id = None
+
+                if cat_id in [1, 4, 5, 16, 7]:
+                    for rel_idx, rel in enumerate(movie_data["releases"]):
+                        if rutor_kp_id and rutor_imdb_id:
+                            break
+                        try:
+                            rel_url = f"{parser.mirror}/torrent/{rel['rutor_id']}"
+                            print(f"  🔍 Рутор (1.1): {rel_url}")
+                            resp = requests.get(rel_url, timeout=20)
+                            if resp.status_code == 200:
+                                from bs4 import BeautifulSoup
+
+                                soup = BeautifulSoup(resp.text, "html.parser")
+                                h1 = soup.find("h1")
+                                if h1:
+                                    full_h1_title = h1.text.strip()
+                                    if "Раздача не существует" not in full_h1_title:
+                                        display_title = parser.clean_display_title(
+                                            full_h1_title
+                                        )
+                                        print(
+                                            f"    ✨ Название уточнено: {display_title}"
+                                        )
+
+                                if not rutor_kp_id:
+                                    kp_match = re.search(
+                                        r"kinopoisk\.ru/rating/(\d+)\.gif", resp.text
+                                    )
+                                    if not kp_match:
                                         kp_match = re.search(
-                                            r"kinopoisk\.ru/rating/(\d+)\.gif",
+                                            r"kinopoisk\.ru/(?:film|series)/(\d+)",
                                             resp.text,
                                         )
-                                        if not kp_match:
-                                            kp_match = re.search(
-                                                r"kinopoisk\.ru/(?:film|series)/(\d+)",
+                                    if kp_match:
+                                        rutor_kp_id = kp_match.group(1)
+                                        print(f"    ✅ Нашел KP ID: {rutor_kp_id}")
+
+                                if not rutor_imdb_id:
+                                    imdb_match = re.search(
+                                        r"imdb\.com/title/(tt\d+)", resp.text
+                                    )
+                                    if imdb_match:
+                                        rutor_imdb_id = imdb_match.group(1)
+                                        print(f"    ✅ Нашел IMDb ID: {rutor_imdb_id}")
+                        except Exception as e:
+                            print(f"    ⚠️ Ошибка парсинга страницы: {e}")
+
+                        if len(movie_data["releases"]) > 1:
+                            time.sleep(0.4)
+
+                    if not rutor_kp_id or not rutor_imdb_id:
+                        try:
+                            search_term = (
+                                display_title.split(" / ")[0].split("/")[0].strip()
+                            )
+                            search_term = re.sub(r"\(.*?\)", "", search_term)
+                            search_term = re.sub(r"\[.*?\]", "", search_term).strip()
+
+                            print(f"  🔍 Рутор (1.2 Глубокий поиск): {search_term}")
+                            search_results = parser.search_releases(search_term)
+                            matches = [
+                                res
+                                for res in search_results
+                                if res.get("year")
+                                and year
+                                and abs(res.get("year") - year) <= 1
+                            ]
+
+                            if matches:
+                                print(
+                                    f"    🔎 Найдено в архиве: {len(matches)}. Проверяю..."
+                                )
+                                for m_idx, m in enumerate(matches[:3]):
+                                    if rutor_kp_id and rutor_imdb_id:
+                                        break
+                                    rid = m["rutor_id"]
+                                    time.sleep(0.4)
+                                    resp = requests.get(
+                                        f"{parser.mirror}/torrent/{rid}", timeout=20
+                                    )
+                                    if resp.status_code == 200:
+                                        if not rutor_kp_id:
+                                            m_kp = re.search(
+                                                r"kinopoisk\.ru/rating/(\d+)\.gif",
                                                 resp.text,
                                             )
-                                        if kp_match:
-                                            rutor_kp_id = kp_match.group(1)
-                                            print(f"    ✅ Нашел KP ID: {rutor_kp_id}")
-
-                                    # Ищем IMDb ID
-                                    if not rutor_imdb_id:
-                                        imdb_match = re.search(
-                                            r"imdb\.com/title/(tt\d+)", resp.text
-                                        )
-                                        if imdb_match:
-                                            rutor_imdb_id = imdb_match.group(1)
-                                            print(
-                                                f"    ✅ Нашел IMDb ID: {rutor_imdb_id}"
-                                            )
-                            except Exception as e:
-                                print(f"    ⚠️ Ошибка парсинга страницы: {e}")
-
-                            if len(movie_data["releases"]) > 1:
-                                time.sleep(0.4)
-
-                        # --- Глубокий поиск ---
-                        if not rutor_kp_id or not rutor_imdb_id:
-                            try:
-                                search_term = (
-                                    display_title.split(" / ")[0].split("/")[0].strip()
-                                )
-                                search_term = re.sub(r"\(.*?\)", "", search_term)
-                                search_term = re.sub(
-                                    r"\[.*?\]", "", search_term
-                                ).strip()
-
-                                print(f"  🔍 Рутор (1.2 Глубокий поиск): {search_term}")
-                                search_results = app.parser.search_releases(search_term)
-                                matches = [
-                                    res
-                                    for res in search_results
-                                    if res.get("year")
-                                    and year
-                                    and abs(res.get("year") - year) <= 1
-                                ]
-
-                                if matches:
-                                    print(
-                                        f"    🔎 Найдено в архиве: {len(matches)}. Проверяю..."
-                                    )
-                                    for m_idx, m in enumerate(matches[:3]):
-                                        if rutor_kp_id and rutor_imdb_id:
-                                            break
-                                        rid = m["rutor_id"]
-                                        time.sleep(0.4)
-                                        resp = requests.get(
-                                            f"{app.parser.mirror}/torrent/{rid}",
-                                            timeout=20,
-                                        )
-                                        if resp.status_code == 200:
-                                            if not rutor_kp_id:
+                                            if not m_kp:
                                                 m_kp = re.search(
-                                                    r"kinopoisk\.ru/rating/(\d+)\.gif",
-                                                    resp.text,
+                                                    r"film/(\d+)", resp.text
                                                 )
-                                                if not m_kp:
-                                                    m_kp = re.search(
-                                                        r"film/(\d+)", resp.text
-                                                    )
-                                                if m_kp:
-                                                    rutor_kp_id = m_kp.group(1)
-                                                    print(
-                                                        f"      ✅ Нашел KP ID в архиве: {rutor_kp_id}"
-                                                    )
-                                            if not rutor_imdb_id:
-                                                m_imdb = re.search(
-                                                    r"imdb\.com/title/(tt\d+)",
-                                                    resp.text,
+                                            if m_kp:
+                                                rutor_kp_id = m_kp.group(1)
+                                                print(
+                                                    f"      ✅ Нашел KP ID в архиве: {rutor_kp_id}"
                                                 )
-                                                if m_imdb:
-                                                    rutor_imdb_id = m_imdb.group(1)
-                                                    print(
-                                                        f"      ✅ Нашел IMDb ID в архиве: {rutor_imdb_id}"
-                                                    )
-                                else:
-                                    print(
-                                        "    ⚠️ В архиве Рутора совпадений не найдено."
-                                    )
-                            except Exception as e:
-                                print(f"    ⚠️ Ошибка глубокого поиска: {e}")
-
-                    poster = ""
-                    desc = ""
-                    imdb_id = rutor_imdb_id
-                    imdb_rating = 0.0
-                    clean_display_title = display_title
-
-                    if use_tmdb:
-                        if app.tmdb.is_limited:
-                            print("  ⚠️ Лимит TMDB исчерпан, пропускаю обогащение.")
-                            tmdb_data = None
-                        else:
-                            tmdb_data = None
-                            if imdb_id:
-                                print(f"  🔍 TMDB (2.1 по ID): {imdb_id}")
-                                tmdb_data = app.tmdb.find_by_imdb_id(imdb_id)
-
-                            if not tmdb_data:
-                                search_title = (
-                                    display_title.split(" / ")[0].split("/")[0].strip()
-                                )
-                                print(f"  🔍 TMDB (2.2 поиск): {search_title} ({year})")
-                                tmdb_data = app.tmdb.search_movie(search_title, year)
-
-                            if tmdb_data:
-                                poster = tmdb_data.get("poster_url", "")
-                                desc = tmdb_data.get("description", "")
-                                if tmdb_data.get("title"):
-                                    clean_display_title = tmdb_data["title"]
-                                    if year and str(year) not in clean_display_title:
-                                        clean_display_title += f" ({year})"
-                                if not imdb_id:
-                                    imdb_id = tmdb_data.get("imdb_id", "")
-                                print(
-                                    f"    🎯 TMDB: данные получены (Постер: {'✅' if poster else '❌'})"
-                                )
+                                        if not rutor_imdb_id:
+                                            m_imdb = re.search(
+                                                r"imdb\.com/title/(tt\d+)", resp.text
+                                            )
+                                            if m_imdb:
+                                                rutor_imdb_id = m_imdb.group(1)
+                                                print(
+                                                    f"      ✅ Нашел IMDb ID в архиве: {rutor_imdb_id}"
+                                                )
                             else:
-                                print("    ⚠️ TMDB: ничего не найдено.")
+                                print("    ⚠️ В архиве Рутора совпадений не найдено.")
+                        except Exception as e:
+                            print(f"    ⚠️ Ошибка глубокого поиска: {e}")
 
-                    # Сохраняем
-                    title_norm = ""
-                    search_names = []
-                    t_clean = re.sub(r"\(.*?\)", "", clean_display_title)
-                    t_clean = re.sub(r"\[.*?\]", "", t_clean)
-                    t_clean = re.sub(
-                        r"(?i)\b(UHD|BDRemu[xх]|BDRip|Web-DL|Blu-Ray|Remux|1080p|720p|4K|HDR|HEVC|SATRip)\b",
-                        "",
-                        t_clean,
-                    )
-                    parts = [p.strip() for p in t_clean.split("/") if p.strip()]
-                    for p in parts:
-                        for pp in p.split(" / "):
-                            if pp.strip():
-                                import unicodedata as ud
+                poster = ""
+                desc = ""
+                imdb_id = rutor_imdb_id
+                imdb_rating = 0.0
+                clean_display_title = display_title
 
-                                search_names.append(
-                                    ud.normalize("NFC", pp.strip()).lower()
-                                )
-
-                    search_names = list(set(search_names))
-                    if search_names:
-                        title_norm = search_names[0]
-
-                    cursor.execute(
-                        """
-                        INSERT OR IGNORE INTO items (title, year, category_id, poster_url, description, imdb_id, kp_id, imdb_rating, kp_rating, is_metadata_fixed, title_norm)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)
-                    """,
-                        (
-                            clean_display_title,
-                            year,
-                            cat_id,
-                            poster,
-                            desc,
-                            imdb_id,
-                            rutor_kp_id,
-                            imdb_rating,
-                            title_norm,
-                        ),
-                    )
-                    item_id = cursor.lastrowid
-
-                    if not item_id:
-                        cursor.execute(
-                            "SELECT id FROM items WHERE title=? AND year=? AND category_id=?",
-                            (clean_display_title, year, cat_id),
-                        )
-                        row = cursor.fetchone()
-                        if row:
-                            item_id = row[0]
-
-                    for sn in search_names:
-                        cursor.execute(
-                            "INSERT INTO item_search_names (item_id, name_norm) VALUES (?, ?)",
-                            (item_id, sn),
-                        )
-
-                    print(f"  ➕ ДОБАВЛЕН: {display_title} ({year})")
-
-                # Добавляем раздачи
-                added_any = False
-                for rel in movie_data["releases"]:
-                    cursor.execute(
-                        "SELECT 1 FROM releases WHERE rutor_id=?", (rel["rutor_id"],)
-                    )
-                    if not cursor.fetchone():
-                        if not added_any and not is_new_item:
+                if use_tmdb:
+                    if tmdb.is_limited:
+                        print("  ⚠️ Лимит TMDB исчерпан, пропускаю обогащение.")
+                        tmdb_data = None
+                    else:
+                        tmdb_data = None
+                        if imdb_id:
+                            print(f"  🔍 TMDB (2.1 по ID): {imdb_id}")
+                            tmdb_data = tmdb.find_by_imdb_id(imdb_id)
+                        if not tmdb_data:
+                            t_parts = display_title.split(" / ")
+                            ru_part = re.sub(
+                                r"\s*\(\d{4}\)\s*", "", t_parts[0].split("/")[0]
+                            ).strip()
+                            en_part = None
+                            if len(t_parts) > 1:
+                                en_part = re.sub(
+                                    r"\s*\(\d{4}\)\s*", "", t_parts[1].split("/")[0]
+                                ).strip()
+                            search_primary = en_part or ru_part
+                            search_alt = ru_part if en_part else None
                             print(
-                                f"  🔗 Добавлен новый релиз к существующему фильму: {display_title}"
+                                f"  🔍 TMDB (2.2 поиск): {search_primary}"
+                                + (f" / alt:{search_alt}" if search_alt else "")
+                                + f" ({year})"
                             )
-                            added_any = True
+                            tmdb_data = tmdb.search_movie(
+                                search_primary, year, alt_title=search_alt
+                            )
+                        if tmdb_data:
+                            poster = tmdb_data.get("poster_url", "")
+                            desc = tmdb_data.get("description", "")
+                            if tmdb_data.get("title") and tmdb_data.get(
+                                "original_title"
+                            ):
+                                new_ru = tmdb_data["title"]
+                                new_orig = tmdb_data["original_title"]
+                                if new_ru.lower() != new_orig.lower():
+                                    clean_display_title = f"{new_ru} / {new_orig}"
+                                else:
+                                    clean_display_title = new_ru
+                                if year and str(year) not in clean_display_title:
+                                    clean_display_title += f" ({year})"
+                            if not imdb_id:
+                                imdb_id = tmdb_data.get("imdb_id", "")
+                            print(
+                                f"    🎯 TMDB: данные получены (Постер: {'✅' if poster else '❌'})"
+                            )
+                        else:
+                            print("    ⚠️ TMDB: ничего не найдено.")
 
-                        # Дата релиза (чтобы поднялся наверх)
-                        rel_date = parse_rutor_date(rel["date_str"])
-                        cursor.execute(
-                            """
-                            INSERT INTO releases (item_id, rutor_id, torrent_title, quality, date_added, magnet, link)
-                            VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """,
-                            (
-                                item_id,
-                                rel["rutor_id"],
-                                rel["full_title"],
-                                rel["quality"],
-                                rel_date,
-                                rel["magnet"],
-                                rel["link"],
-                            ),
-                        )
+                title_norm = ""
+                search_names = []
+                t_clean = re.sub(r"\(.*?\)", "", clean_display_title)
+                t_clean = re.sub(r"\[.*?\]", "", t_clean)
+                t_clean = re.sub(
+                    r"(?i)\b(UHD|BDRemu[xх]|BDRip|Web-DL|Blu-Ray|Remux|1080p|720p|4K|HDR|HEVC|SATRip)\b",
+                    "",
+                    t_clean,
+                )
+                parts = [p.strip() for p in t_clean.split("/") if p.strip()]
+                for p in parts:
+                    for pp in p.split(" / "):
+                        if pp.strip():
+                            search_names.append(
+                                unicodedata.normalize("NFC", pp.strip()).lower()
+                            )
+
+                search_names = list(set(search_names))
+                if search_names:
+                    title_norm = search_names[0]
+
+                item_id = db.insert_item(
+                    {
+                        "title": clean_display_title,
+                        "year": year,
+                        "category_id": cat_id,
+                        "poster_url": poster,
+                        "description": desc,
+                        "imdb_id": imdb_id,
+                        "kp_id": rutor_kp_id,
+                        "imdb_rating": imdb_rating,
+                        "kp_rating": 0,
+                        "is_metadata_fixed": 0,
+                        "title_norm": title_norm,
+                    },
+                    conn=conn,
+                )
+
+                for sn in search_names:
+                    db.insert_search_name(item_id, sn, conn=conn)
+
+                print(f"  ➕ ДОБАВЛЕН: {display_title} ({year})")
+
+            added_any = False
+            for rel in movie_data["releases"]:
+                if not db.release_exists_by_rutor_id(rel["rutor_id"], conn=conn):
+                    if not added_any and not is_new_item:
                         print(
-                            f"    └─ Новая раздача: [{rel['quality']}] {rel['full_title'][:50]}... ({rel_date})"
+                            f"  🔗 Добавлен новый релиз к существующему фильму: {display_title}"
                         )
+                        added_any = True
+                    rel_date = parse_rutor_date(rel["date_str"])
+                    db.insert_release(
+                        {
+                            "item_id": item_id,
+                            "rutor_id": rel["rutor_id"],
+                            "torrent_title": rel["full_title"],
+                            "quality": rel["quality"],
+                            "date_added": rel_date,
+                            "magnet": rel["magnet"],
+                            "link": rel["link"],
+                        },
+                        conn=conn,
+                    )
+                    print(
+                        f"    └─ Новая раздача: [{rel['quality']}] {rel['full_title'][:50]}... ({rel_date})"
+                    )
 
-            conn.commit()
-            completed_cats.append(cat_id)
-            save_checkpoint(
-                status_key,
-                {
-                    "completed_categories": completed_cats,
-                    "current_category_id": None,
-                    "current_page": 0,
-                },
-            )
+        conn.commit()
+        completed_cats.append(cat_id)
+        save_checkpoint(
+            status_key,
+            {
+                "completed_categories": completed_cats,
+                "current_category_id": None,
+                "current_page": 0,
+            },
+        )
+
+    conn.close()
     clear_checkpoint(status_key)
     print("\n=== Готово! ===")
 
 
 if __name__ == "__main__":
-    # Аргументы: [1] mode, [2] min_year, [3] max_year, [4] manual_min_date
     mode = sys.argv[1] if len(sys.argv) > 1 else "video"
     manual_min_date = None
 
-    # Если переданы года аргументами - переопределяем те, что из .env
     if len(sys.argv) > 2:
         try:
             val = sys.argv[2]
-            if "-" in val and len(val) > 5:  # Похоже на дату YYYY-MM-DD
+            if "-" in val and len(val) > 5:
                 manual_min_date = val
             else:
                 MIN_YEAR = int(val)
                 print(f"Переопределен MIN_YEAR: {MIN_YEAR}")
-        except:
+        except Exception:
             pass
     if len(sys.argv) > 3:
         try:
             val = sys.argv[3]
-            if "-" in val and len(val) > 5:  # Похоже на дату YYYY-MM-DD
+            if "-" in val and len(val) > 5:
                 manual_min_date = val
             else:
                 MAX_YEAR = int(val)
                 print(f"Переопределен MAX_YEAR: {MAX_YEAR}")
-        except:
+        except Exception:
             pass
 
     if len(sys.argv) > 4:

@@ -28,6 +28,17 @@
 </head>
 <body>
     <div id="app" v-cloak class="min-h-screen">
+        <!-- Логин модал -->
+        <div v-if="showLogin" class="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center">
+            <div class="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-sm">
+                <h2 class="text-xl font-bold text-slate-900 mb-1">Antigravity Tracker</h2>
+                <p class="text-sm text-slate-500 mb-6">Введите логин и пароль</p>
+                <div v-if="loginError" class="bg-red-50 text-red-600 text-sm rounded-lg px-3 py-2 mb-4">{{ loginError }}</div>
+                <input v-model="loginUser" @keyup.enter="$refs.passInput.focus()" type="text" placeholder="Логин" class="w-full border border-slate-200 rounded-lg px-4 py-2.5 mb-3 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900">
+                <input v-model="loginPass" @keyup.enter="doLogin" ref="passInput" type="password" placeholder="Пароль" class="w-full border border-slate-200 rounded-lg px-4 py-2.5 mb-5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900">
+                <button @click="doLogin" class="w-full bg-slate-900 text-white rounded-lg py-2.5 text-sm font-semibold hover:bg-slate-800 transition-colors">Войти</button>
+            </div>
+        </div>
         <!-- Шапка -->
         <header class="bg-white border-b border-slate-200 sticky top-0 z-50">
             <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -475,6 +486,10 @@
         </transition>
 
         <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-8">
+            <div v-if="connectionError" class="bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 mb-4 flex items-center justify-between">
+                <span class="text-sm font-medium">Сервер недоступен. Проверьте подключение.</span>
+                <button @click="fetchFeed()" class="text-sm font-semibold text-red-700 hover:text-red-900 underline">Повторить</button>
+            </div>
             <!-- Сетка карточек -->
             <div v-if="loading" class="text-center py-20">
                 <svg class="animate-spin h-8 w-8 mx-auto text-black mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
@@ -587,7 +602,7 @@
                             <p class="text-[11px] text-slate-500 line-clamp-3 mb-4 leading-relaxed flex-1">{{ item.description }}</p>
 
                             <!-- Виджеты рейтингов -->
-                            <div v-if="item.kp_id || item.kinorium_id || item.imdb_id" class="flex flex-wrap gap-2 mb-4">
+                            <div v-if="item.kp_id || item.imdb_id" class="flex flex-wrap gap-2 mb-4">
                                 <template>
                                     <img v-if="item.kp_id" :src="'https://rating.kinopoisk.ru/' + item.kp_id + '.gif'" class="h-8 rounded shadow-sm cursor-pointer" @click="window.open('https://www.kinopoisk.ru/film/' + item.kp_id + '/', '_blank')">
                                     <img v-if="item.imdb_id" :src="'http://s.rutor.info/imdb/pic/' + item.imdb_id.replace('tt', '') + '.gif'" referrerpolicy="no-referrer" class="h-8 rounded shadow-sm cursor-pointer" @click="window.open('https://www.imdb.com/title/' + item.imdb_id + '/', '_blank')" @error="$event.target.style.display='none'">
@@ -597,9 +612,9 @@
                             <div class="flex items-center gap-2 mt-auto pt-3 border-t border-slate-100">
                                 <a v-if="item.releases && item.releases.length > 0" :href="item.releases[0].link" target="_blank" class="flex-1 bg-red-600 text-white text-[10px] font-bold py-1.5 rounded text-center shadow-sm hover:bg-red-700 transition-colors">RUTOR</a>
                                 <a v-if="item.kp_id" :href="'https://www.kinopoisk.ru/film/' + item.kp_id + '/'" target="_blank" class="flex-1 bg-orange-50 text-orange-700 text-[10px] font-bold py-1.5 rounded text-center">КП</a>
-                                <a :href="item.rezka_url || 'https://ru.kinorium.com/search/?q=' + encodeURIComponent(item.title)" target="_blank" 
-                                   :class="['flex-1 text-[10px] font-bold py-1.5 rounded text-center relative', item.rezka_url ? 'bg-purple-100 text-purple-700 border border-purple-200' : 'bg-indigo-50 text-indigo-700']">
-                                    {{ item.rezka_url ? 'REZKA' : 'КИНОРИУМ' }}
+                                <a v-if="item.rezka_url" :href="item.rezka_url" target="_blank" 
+                                   class="flex-1 bg-purple-100 text-purple-700 border border-purple-200 text-[10px] font-bold py-1.5 rounded text-center relative">
+                                    REZKA
                                     <span v-if="item.checked_rezka === 0" class="absolute -top-1 -right-1 w-2.5 h-2.5 bg-orange-500 rounded-full border-2 border-white shadow-sm" title="Ожидает проверки Rezka"></span>
                                 </a>
                                 <a v-if="item.imdb_id" :href="'https://www.imdb.com/title/' + item.imdb_id + '/'" target="_blank" class="w-12 bg-slate-100 text-slate-600 text-[10px] font-bold py-1.5 rounded text-center">IMDB</a>
@@ -788,7 +803,17 @@
                     showIdEditor: false,
                     editingItem: null,
                     editKpId: '',
-                    editImdbId: ''
+                    editImdbId: '',
+                    authEnabled: false,
+                    authToken: sessionStorage.getItem('authToken') || '',
+                    showLogin: false,
+                    loginUser: '',
+                    loginPass: '',
+                    loginError: '',
+                    connectionError: false,
+                    ws: null,
+                    wsConnected: false,
+                    wsReconnectTimer: null
                 }
             },
             computed: {
@@ -833,19 +858,129 @@
                 page(val) { sessionStorage.setItem('f_page', val); }
             },
             mounted() { 
-                this.loadFilters();
-                this.fetchCategories(); 
-                this.fetchCollections();
-                this.fetchLastVisit();
-                this.fetchFeed().then(() => {
-                    this.restoreScroll();
-                }); 
-                this.startStatusPolling(); 
+                this.connectWebSocket();
+                this.checkAuth().then(() => {
+                    if (!this.authEnabled || this.authToken) {
+                        this.loadFilters();
+                        this.fetchCategories(); 
+                        this.fetchCollections();
+                        this.fetchLastVisit();
+                        this.fetchFeed().then(() => {
+                            this.restoreScroll();
+                        }); 
+                        this.startStatusPolling(); 
+                    }
+                });
                 document.addEventListener('click', () => { this.activeCollectionMenuId = null; });
                 window.addEventListener('scroll', this.saveScroll);
                 window.addEventListener('beforeunload', () => { this.markVisited(); });
             },
             methods: {
+                connectWebSocket() {
+                    if (this.ws && this.ws.readyState <= 1) return;
+                    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+                    this.ws = new WebSocket(`${proto}//${location.host}/ws`);
+                    this.ws.onopen = () => {
+                        this.wsConnected = true;
+                        this.connectionError = false;
+                        if (this.statusInterval) { clearInterval(this.statusInterval); this.statusInterval = null; }
+                    };
+                    this.ws.onclose = () => {
+                        this.wsConnected = false;
+                        if (!this.statusInterval) this.startStatusPolling();
+                        this.wsReconnectTimer = setTimeout(() => this.connectWebSocket(), 3000);
+                    };
+                    this.ws.onerror = () => { this.ws.close(); };
+                    this.ws.onmessage = (e) => {
+                        const msg = JSON.parse(e.data);
+                        if (msg.type === 'status') {
+                            if (msg.statuses) {
+                                this.statuses = msg.statuses;
+                            } else {
+                                this.statuses[msg.key] = msg.value;
+                                if (msg.value === 'completed' || msg.value === 'stopped' || msg.value === 'error') {
+                                    this.fetchCategories();
+                                    this.fetchCollections();
+                                    this.fetchFeed('silent');
+                                }
+                            }
+                        }
+                        if (msg.type === 'progress') {
+                            if (msg.key) {
+                                this.progress[msg.key] = { current: msg.current, total: msg.total };
+                            } else {
+                                this.progress = msg.progress || this.progress;
+                            }
+                        }
+                        if (msg.type === 'log') {
+                            if (this.showLogs && msg.key) {
+                                const logMap = { sync_video:'video', sync_other:'other', reprocess:'reprocess', fix:'fix', poiskkino:'fix_poiskkino', rezka:'rezka', user:'user', cleanup:'cleanup', single_update:'single_update' };
+                                const logType = logMap[msg.key];
+                                if (logType && this.selectedLogType === logType) {
+                                    this.syncLogs += msg.data;
+                                }
+                            }
+                            if (!this.userSelectedLog && msg.key) {
+                                const logMap = { sync_video:'video', sync_other:'other', reprocess:'reprocess', fix:'fix', poiskkino:'fix_poiskkino', rezka:'rezka', user:'user', cleanup:'cleanup', single_update:'single_update' };
+                                if (logMap[msg.key] && this.statuses[msg.key] === 'running') {
+                                    this.selectedLogType = logMap[msg.key];
+                                }
+                            }
+                        }
+                    };
+                },
+                async apiFetch(url, options = {}) {
+                    if (this.authToken) {
+                        if (!options.headers) options.headers = {};
+                        options.headers['Authorization'] = 'Bearer ' + this.authToken;
+                    }
+                    const res = await fetch(url, options);
+                    if (res.status === 401 && this.authEnabled) {
+                        this.authToken = '';
+                        sessionStorage.removeItem('authToken');
+                        this.showLogin = true;
+                        throw new Error('Unauthorized');
+                    }
+                    return res;
+                },
+                async checkAuth() {
+                    try {
+                        const res = await this.apiFetch('/api/auth_status');
+                        const data = await res.json();
+                        this.authEnabled = data.auth_enabled;
+                        if (this.authEnabled && !this.authToken) {
+                            this.showLogin = true;
+                        }
+                    } catch (e) {
+                        this.authEnabled = false;
+                    }
+                },
+                async doLogin() {
+                    this.loginError = '';
+                    try {
+                        const res = await this.apiFetch('/api/login', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ username: this.loginUser, password: this.loginPass })
+                        });
+                        if (res.ok) {
+                            const data = await res.json();
+                            this.authToken = data.token;
+                            sessionStorage.setItem('authToken', data.token);
+                            this.showLogin = false;
+                            this.loginUser = '';
+                            this.loginPass = '';
+                            this.fetchCategories();
+                            this.fetchCollections();
+                            this.fetchFeed();
+                            this.startStatusPolling();
+                        } else {
+                            this.loginError = 'Неверный логин или пароль';
+                        }
+                    } catch (e) {
+                        this.loginError = 'Ошибка соединения';
+                    }
+                },
                 loadFilters() {
                     const get = (key, def) => {
                         const val = sessionStorage.getItem(key);
@@ -883,8 +1018,10 @@
                     }
                 },
                 async fetchCategories() {
-                    const res = await fetch(`/api/categories?hide_rated=${this.hideWatched}&hide_collected=${this.hideCollected}`);
-                    this.categories = await res.json();
+                    try {
+                        const res = await this.apiFetch(`/api/categories?hide_rated=${this.hideWatched}&hide_collected=${this.hideCollected}`);
+                        this.categories = await res.json();
+                    } catch (e) { this.connectionError = true; }
                 },
                 async fetchFeed() {
                     const isSilent = arguments.length > 0 && arguments[0] === 'silent';
@@ -904,16 +1041,19 @@
                         if (this.hideWatched) url += `&hide_rated=true`;
                         if (this.hideCollected) url += `&hide_collected=true`;
                         if (this.showNewOnly && this.lastVisit) url += `&min_date=${this.lastVisit.split(' ')[0]}`;
-                        const res = await fetch(url);
+                        const res = await this.apiFetch(url);
                         const data = await res.json();
                         this.items = data.items;
                         this.totalPages = data.totalPages;
                         this.fetchItemCollections(this.items.map(i => i.id));
-                    } catch (e) { console.error(e); } finally { this.loading = false; }
+                        this.connectionError = false;
+                    } catch (e) { console.error(e); this.connectionError = true; } finally { this.loading = false; }
                 },
                 async fetchCollections() {
-                    const res = await fetch('/api/collections');
-                    this.collections = await res.json();
+                    try {
+                        const res = await this.apiFetch('/api/collections');
+                        this.collections = await res.json();
+                    } catch (e) { this.connectionError = true; }
                 },
                 initSortable() {
                     this.$nextTick(() => {
@@ -940,7 +1080,7 @@
                                     reorderedCollections.sort((a, b) => newOrder.indexOf(a.id) - newOrder.indexOf(b.id));
                                     this.collections = reorderedCollections;
 
-                                    await fetch('/api/collections/save_order', {
+                                    await this.apiFetch('/api/collections/save_order', {
                                         method: 'POST',
                                         headers: { 'Content-Type': 'application/json' },
                                         body: JSON.stringify({ order: newOrder })
@@ -985,7 +1125,7 @@
                 },
                 async createCollection() {
                     if (!this.newCollectionName.trim()) return;
-                    await fetch('/api/collections', {
+                    await this.apiFetch('/api/collections', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ name: this.newCollectionName })
@@ -996,7 +1136,7 @@
                 },
                 async deleteCollection(id) {
                     if (!confirm("Удалить эту коллекцию?")) return;
-                    await fetch(`/api/collections/${id}`, { method: 'DELETE' });
+                    await this.apiFetch(`/api/collections/${id}`, { method: 'DELETE' });
                     if (this.selectedCollectionId === id) this.selectedCollectionId = null;
                     this.fetchCollections();
                     this.fetchFeed();
@@ -1012,7 +1152,7 @@
                     else this.activeCollectionMenuId = itemId;
                 },
                 async toggleItemCollection(itemId, collectionId) {
-                    const res = await fetch(`/api/collections/${collectionId}/toggle`, {
+                    const res = await this.apiFetch(`/api/collections/${collectionId}/toggle`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ item_id: itemId })
@@ -1038,7 +1178,7 @@
                 async fetchItemCollections(itemIds) {
                     for (let id of itemIds) {
                         if (!this.itemCollections[id]) {
-                            const res = await fetch(`/api/item_collections/${id}`);
+                            const res = await this.apiFetch(`/api/item_collections/${id}`);
                             this.itemCollections[id] = await res.json();
                         }
                     }
@@ -1058,7 +1198,7 @@
                     } 
                 },
                 async fetchLogs() {
-                    const res = await fetch(`/api/sync_log?log_type=${this.selectedLogType}&t=${Date.now()}`);
+                    const res = await this.apiFetch(`/api/sync_log?log_type=${this.selectedLogType}&t=${Date.now()}`);
                     const data = await res.json();
                     const logContainer = document.getElementById('log-container');
                     const wasAtBottom = logContainer ? (logContainer.scrollHeight - logContainer.scrollTop - logContainer.clientHeight < 50) : true;
@@ -1072,12 +1212,13 @@
                     });
                 },
                 startLogPolling() {
+                    if (this.wsConnected) return;
                     if (this.logInterval) clearInterval(this.logInterval);
-                    this.logInterval = setInterval(() => { if (this.showLogs) this.fetchLogs(); }, 2000);
+                    this.logInterval = setInterval(() => { if (this.showLogs && !this.wsConnected) this.fetchLogs(); }, 2000);
                 },
                 async fetchStatus() {
                     try {
-                        const res = await fetch('/api/process_status');
+                        const res = await this.apiFetch('/api/process_status');
                         const data = await res.json();
                         this.statuses = data.statuses;
                         this.progress = data.progress;
@@ -1107,9 +1248,12 @@
                     } catch (e) { console.error("Ошибка статуса", e); }
                 },
                 startStatusPolling() {
+                    if (this.wsConnected) return;
                     this.fetchStatus();
                     if (this.statusInterval) clearInterval(this.statusInterval);
-                    this.statusInterval = setInterval(() => this.fetchStatus(), 2000);
+                    this.statusInterval = setInterval(() => {
+                        if (!this.wsConnected) this.fetchStatus();
+                    }, 5000);
                 },
                 switchLog(type) { 
                     this.selectedLogType = type; 
@@ -1172,7 +1316,7 @@
                 },
                 async startRezkaSync() {
                     try {
-                        const res = await fetch('/api/start_sync_rezka', { method: 'POST' });
+                        const res = await this.apiFetch('/api/start_sync_rezka', { method: 'POST' });
                         if (res.status === 400) {
                             const data = await res.json();
                             this.showToast(data.detail);
@@ -1185,7 +1329,7 @@
                 },
                 async startFullPipeline() {
                     try {
-                        const res = await fetch('/api/start_full_pipeline', { method: 'POST' });
+                        const res = await this.apiFetch('/api/start_full_pipeline', { method: 'POST' });
                         if (res.status === 400) {
                             const data = await res.json();
                             alert(data.detail);
@@ -1199,7 +1343,7 @@
 
                 async stopProcess(key) { 
                     try {
-                        await fetch(`/api/stop/${key}`, { method: 'POST' });
+                        await this.apiFetch(`/api/stop/${key}`, { method: 'POST' });
                         setTimeout(() => this.fetchStatus(), 500);
                     } catch (e) {}
                 },
@@ -1209,11 +1353,11 @@
                 },
                 async fetchStats() {
                     try {
-                        const res = await fetch('/api/stats');
+                        const res = await this.apiFetch('/api/stats');
                         if (!res.ok) throw new Error("Stats fetch failed");
                         this.stats = await res.json();
                         
-                        const resHistory = await fetch('/api/job_history?limit=10');
+                        const resHistory = await this.apiFetch('/api/job_history?limit=10');
                         if (resHistory.ok) {
                             this.jobHistory = await resHistory.json();
                         }
@@ -1238,13 +1382,13 @@
                 },
                 async clearLogFile() {
                     if(!confirm("Очистить лог?")) return;
-                    await fetch(`/api/clear_log?log_type=${this.selectedLogType}`, { method: 'POST' });
+                    await this.apiFetch(`/api/clear_log?log_type=${this.selectedLogType}`, { method: 'POST' });
                     this.syncLogs = 'Очищено.';
                 },
                 clearLog() { this.clearLogFile(); },
                 async syncUser() {
                     try {
-                        await fetch('/api/sync_user', { method: 'POST' });
+                        await this.apiFetch('/api/sync_user', { method: 'POST' });
                         this.showLogs = true;
                         this.switchLog('user');
                         this.startLogPolling();
@@ -1253,14 +1397,14 @@
                 async startCleanup() {
                     try {
                         this.userSelectedLog = false;
-                        await fetch('/api/start_cleanup', { method: 'POST' });
+                        await this.apiFetch('/api/start_cleanup', { method: 'POST' });
                         this.showLogs = true;
                         this.switchLog('cleanup');
                         this.startLogPolling();
                     } catch (e) { alert("Ошибка запуска очистки"); }
                 },
                 async ignoreItem(id) {
-                    await fetch(`/api/ignore/${id}`, { method: 'POST' });
+                    await this.apiFetch(`/api/ignore/${id}`, { method: 'POST' });
                     this.showToast('Добавлено в игнорируемые');
                     this.toast.lastId = id;
                     
@@ -1275,7 +1419,7 @@
                 },
                 async reprocessItem(id) {
                     try {
-                        const res = await fetch(`/api/reprocess_item/${id}`, { method: 'POST' });
+                        const res = await this.apiFetch(`/api/update_item/${id}`, { method: 'POST' });
                         if (res.status === 400) {
                             const data = await res.json();
                             this.showToast(data.detail);
@@ -1295,7 +1439,7 @@
                         this.selectedResetFields = [];
                     } else {
                         this.activeResetMenuId = itemId;
-                        this.selectedResetFields = ['poster', 'description', 'kp_id', 'imdb_id', 'rezka_url', 'ratings'];
+                        this.selectedResetFields = [];
                     }
                 },
                 async confirmReset(itemId) {
@@ -1303,19 +1447,19 @@
                     if (!confirm("Вы уверены, что хотите сбросить выбранные поля?")) return;
                     
                     try {
-                        const res = await fetch(`/api/reset_item/${itemId}`, {
+                        const res = await this.apiFetch(`/api/reset_item/${itemId}`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ fields: this.selectedResetFields })
                         });
                         if (res.ok) {
+                            const resetFields = [...this.selectedResetFields];
                             this.showToast('Данные сброшены');
                             this.activeResetMenuId = null;
                             this.selectedResetFields = [];
-                            // Обновляем текущий элемент в списке
                             const item = this.items.find(i => i.id === itemId);
                             if (item) {
-                                this.selectedResetFields.forEach(f => {
+                                resetFields.forEach(f => {
                                     if (f === 'ratings') { item.kp_rating = 0; item.imdb_rating = 0; }
                                     else if (f === 'poster') item.poster_url = null;
                                     else item[f] = null;
@@ -1328,7 +1472,7 @@
                 },
                 async undoIgnore() {
                     if (!this.toast.lastId) return;
-                    await fetch(`/api/ignore/${this.toast.lastId}`, { method: 'POST' });
+                    await this.apiFetch(`/api/ignore/${this.toast.lastId}`, { method: 'POST' });
                     this.toast.show = false;
                     this.toast.lastId = null;
                     this.fetchFeed();
@@ -1350,7 +1494,7 @@
                 },
                 async fetchLastVisit() {
                     try {
-                        const res = await fetch('/api/last_visit');
+                        const res = await this.apiFetch('/api/last_visit');
                         const data = await res.json();
                         this.lastVisit = data.last_visit;
                     } catch(e) {}
@@ -1369,7 +1513,7 @@
                     this.fetchFeed();
                 },
                 async markVisited() {
-                    try { await fetch('/api/mark_visited', { method: 'POST' }); } catch(e) {}
+                    try { await this.apiFetch('/api/mark_visited', { method: 'POST' }); } catch(e) {}
                 },
                 openIdEditor(item) {
                     this.editingItem = item;
@@ -1387,7 +1531,7 @@
                             this.showIdEditor = false;
                             return;
                         }
-                        const res = await fetch(`/api/set_ids/${this.editingItem.id}`, {
+                        const res = await this.apiFetch(`/api/set_ids/${this.editingItem.id}`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify(payload)

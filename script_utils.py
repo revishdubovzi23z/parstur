@@ -33,7 +33,7 @@ def load_checkpoint(status_key):
         try:
             with open(path, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except:
+        except Exception:
             return None
     return None
 
@@ -43,7 +43,7 @@ def clear_checkpoint(status_key):
     if os.path.exists(path):
         try:
             os.remove(path)
-        except:
+        except Exception:
             pass
 
 
@@ -52,5 +52,5 @@ def clear_stop_flag(status_key):
     if os.path.exists(path):
         try:
             os.remove(path)
-        except:
+        except Exception:
             pass
