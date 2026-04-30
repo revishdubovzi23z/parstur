@@ -267,10 +267,102 @@ Vue: `@keydown` на `document`. ~40 строк.
 
 ---
 
+### 15. 🔥 HdRezkaApi — заменить ручной HTML-парсинг на готовую библиотеку
+
+**Библиотека:** [HdRezkaApi](https://github.com/SuperZombi/HdRezkaApi) (`pip install HdRezkaApi`)
+
+**Что умеет и чем полезно для нас:**
+
+#### A. Замена всего ручного HTML-парсинга
+Сейчас в `rezka_sync.py` и `rezka_collections_sync.py` мы вручную парсим HTML через BeautifulSoup: поиск, страница фильма, рейтинги, KP/IMDb ID, описание, постер. HdRezkaApi делает всё это из коробки:
+```python
+from HdRezkaApi import HdRezkaApi
+rezka = HdRezkaApi(url)
+# Готовые поля:
+rezka.name           # название
+rezka.description    # описание
+rezka.thumbnail      # постер (превью)
+rezka.thumbnailHQ    # постер (высокое качество)
+rezka.rating.value   # рейтинг (float)
+rezka.rating.votes   # количество голосов
+rezka.translators    # {id: {name, premium}} — все озвучки
+rezka.otherParts     # [{Film_name: url}] — сиквелы/приквелы
+rezka.type           # фильм/сериал (HdRezkaFormat)
+rezka.category       # фильм/сериал/мульт/аниме (HdRezkaCategory)
+```
+**Выгода:** Убираем ~200 строк BeautifulSoup-кода. Библиотека стабильнее — если Rezka меняет HTML-вёрстку, автор библиотеки обновляет парсинг, а наш код не ломается.
+
+#### B. Прямые ссылки на видео (getStream)
+```python
+stream = rezka.getStream()               # для фильма
+stream = rezka.getStream('1', '1')       # для сериала (сезон, серия)
+stream('720p')    # → URL mp4
+stream('1080p')   # → URL mp4
+stream.videos     # → {'360p': [url], '480p': [url], '720p': [url]}
+stream.subtitles  # → {'en': {title, link}, 'ru': ...}
+```
+**Выгода:** Кнопка **"▶ СМОТРЕТЬ"** прямо на карточке. Не нужно переходить на Rezka — можно открывать плеер или внешнюю программу (VLC) из трекера. Можно добавить выбор качества и озвучки.
+
+#### C. Точная информация о сезонах и сериях
+```python
+rezka.seriesInfo    # {translator_id: {seasons: {1,2}, episodes: {1: {1,2,3}}}}
+rezka.episodesInfo  # [{season, episodes: [{episode, translations: [{translator_id, name}]}]}]
+```
+**Выгода:** Сейчас бейдж "НОВЫЙ СЕЗОН" определяется через `latest_release` из Rutor (дата релиза торрента). С HdRezkaApi можно точно знать: "в этой озвучке появился сезон 2" — и показывать бейдж точнее. Также можно показывать номер последней вышедшей серии.
+
+#### D. HdRezkaSearch — качественный поиск
+```python
+from HdRezkaApi.search import HdRezkaSearch
+results = HdRezkaSearch("https://rezka.ag/")("film name")
+# → [{title, url, rating}]
+```
+**Выгода:** Заменяет наш ручной парсинг `/engine/ajax/search.php`. Быстрый поиск возвращает рейтинг сразу — можно использовать для скоринга кандидатов. Расширенный поиск (`find_all=True`) даёт пагинацию и категорию.
+
+#### E. HdRezkaSession — логин один раз
+```python
+from HdRezkaApi import HdRezkaSession
+with HdRezkaSession("https://rezka.ag/") as session:
+    session.login("email", "password")
+    rezka = session.get(url)          # авторизован автоматически
+    results = session.search("query") # авторизован автоматически
+```
+**Выгода:** Сейчас в `_sync_rezka_folder()` при каждом toggle-нажатии мы логинимся заново (POST /ajax/login/ + GET /favorites/). С сессией — логин один раз при старте сервера, потом все запросы авторизованы. Это и быстрее, и снижает риск блокировки аккаунта за частые логины.
+
+#### F. Переводчики (озвучки)
+```python
+rezka.translators       # {id: {name, premium}}
+rezka.translators_names # {name: {id, premium}}
+```
+**Выгода:** Можно показывать в карточке доступные озвучки. Можно приоритизировать любимую озвучку через `translators_priority` — и при нажатии "СМОТРЕТЬ" автоматически выбирать нужную.
+
+---
+
+**Что заменить в нашем коде:**
+| Файл | Что сейчас | Что станет |
+|------|------------|------------|
+| `rezka_sync.py` | Ручной HTML-парсинг страницы + ручной search через BS4 | `HdRezkaApi(url)` для страницы, `HdRezkaSearch` для поиска |
+| `rezka_collections_sync.py` | `_parse_rezka_page()` — 80 строк BS4 | `HdRezkaApi(url)` — 1 строка |
+| `rezka_collections_sync.py` | `_search_rezka_url()` — 50 строк BS4 | `HdRezkaSearch(origin)(query)` — 1 строка |
+| `main.py` _sync_rezka_folder | Логин + GET /favorites/ при каждом toggle | `HdRezkaSession` — логин один раз |
+
+**Новый функционал:**
+| Возможность | Где показать |
+|-------------|-------------|
+| Прямая ссылка на видео | Кнопка "▶ СМОТРЕТЬ" на карточке |
+| Выбор озвучки | Модал при нажатии "СМОТРЕТЬ" |
+| Список серий | Раскрытие в карточке для сериалов |
+| Сиквелы/приквелы | Ссылки "Часть 2" под описанием |
+| Количество голосов | Рядом с рейтингом |
+
+**Сложность:** Средняя. ~3-4 часа на замену парсинга + 2-3 часа на кнопку "СМОТРЕТЬ".
+
+---
+
 ## ПРИОРИТЕТ РЕАЛИЗАЦИИ
 
 | # | Что | Время | Влияние |
 |---|------|-------|---------|
+| 15 | 🔥 HdRezkaApi интеграция | 5-7ч | Кнопка "СМОТРЕТЬ", стабильный парсинг, сессии, озвучки, серии |
 | 4 | Прокси постеров | 1ч | Офлайн, скорость, надёжность |
 | 2 | ✅ FTS5 поиск | Выполнено | Качество поиска x10 |
 | 12 | Кешированный counts | 30мин | Нагрузка -15x |

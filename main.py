@@ -1082,6 +1082,18 @@ def get_item_collections(item_id: int):
     return db.get_item_collections(item_id)
 
 
+class BatchCollectionsRequest(BaseModel):
+    ids: list[int]
+
+
+@app.post("/api/batch_item_collections")
+def batch_item_collections(data: BatchCollectionsRequest):
+    result = {}
+    for item_id in data.ids:
+        result[str(item_id)] = db.get_item_collections(item_id)
+    return result
+
+
 class SaveOrderRequest(BaseModel):
     order: list[int]
 
