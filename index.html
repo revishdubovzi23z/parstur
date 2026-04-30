@@ -477,8 +477,17 @@
                              </button>
                              <button v-if="statuses.cleanup === 'running'" @click="stopProcess('cleanup')" 
                                      class="absolute right-2 top-2 bg-red-500 hover:bg-red-600 text-white w-8 h-8 rounded-lg flex items-center justify-center text-xs shadow-lg transition-transform hover:scale-110">✕</button>
-                         </div>
-                         <a :href="'/api/export?fmt=json&category_id=' + selectedCategory" download class="px-4 py-3 bg-emerald-50 text-emerald-700 rounded-xl font-bold text-xs hover:bg-emerald-100 text-center transition-all">📥 JSON</a>
+                          </div>
+                          <div class="relative">
+                              <button @click="startRezkaCollections" :disabled="statuses.rezka_collections === 'running'" 
+                                      :class="['w-full px-4 py-3 rounded-xl font-bold text-xs transition-all', statuses.rezka_collections === 'running' ? 'bg-purple-600 text-white animate-pulse' : 'bg-purple-50 text-purple-700 hover:bg-purple-100']">
+                                  📂 СИНХРОНИЗАЦИЯ REZKA ПАПОК
+                                  <span v-if="statuses.rezka_collections === 'running'" class="block text-[9px] opacity-70">ПРОЦЕСС ИДЕТ...</span>
+                              </button>
+                              <button v-if="statuses.rezka_collections === 'running'" @click="stopProcess('rezka_collections')" 
+                                      class="absolute right-2 top-2 bg-red-500 hover:bg-red-600 text-white w-8 h-8 rounded-lg flex items-center justify-center text-xs shadow-lg transition-transform hover:scale-110">✕</button>
+                          </div>
+                          <a :href="'/api/export?fmt=json&category_id=' + selectedCategory" download class="px-4 py-3 bg-emerald-50 text-emerald-700 rounded-xl font-bold text-xs hover:bg-emerald-100 text-center transition-all">📥 JSON</a>
                          <a :href="'/api/export?fmt=csv&category_id=' + selectedCategory" download class="px-4 py-3 bg-teal-50 text-teal-700 rounded-xl font-bold text-xs hover:bg-teal-100 text-center transition-all">📥 CSV</a>
                      </div>
                 </div>
@@ -517,6 +526,10 @@
                             <!-- NEW badge -->
                             <div v-if="isNewItem(item)" class="absolute top-3 right-12 z-20">
                                 <span class="bg-orange-500 text-white text-[8px] font-black px-1.5 py-0.5 rounded-full shadow-lg animate-pulse">NEW</span>
+                            </div>
+                            <!-- NEW SEASON badge for collection items -->
+                            <div v-if="item.has_new_release" class="absolute top-3 right-12 z-20">
+                                <span class="bg-emerald-500 text-white text-[7px] font-black px-1.5 py-0.5 rounded-full shadow-lg">НОВЫЙ СЕЗОН</span>
                             </div>
                             
                             <!-- Центрированная кнопка "ЗАКЛАДКИ" при наведении -->
@@ -787,7 +800,7 @@
                     sortableInstance: null,
                     activeCollectionMenuId: null, itemCollections: {},
                     activeResetMenuId: null, selectedResetFields: [],
-                    logTypes: { 'reprocess': 'Обновление', 'video': 'Видео', 'other': 'Остальное', 'fix': 'Поиск', 'fix_poiskkino': 'PoiskKino', 'rezka': 'Rezka', 'user': 'CSV', 'cleanup': 'Чистка', 'single_update': 'Карточка' },
+                    logTypes: { 'reprocess': 'Обновление', 'video': 'Видео', 'other': 'Остальное', 'fix': 'Поиск', 'fix_poiskkino': 'PoiskKino', 'rezka': 'Rezka', 'rezka_collections': 'Rezka Папки', 'user': 'CSV', 'cleanup': 'Чистка', 'single_update': 'Карточка' },
                     statuses: { sync_video: 'idle', sync_other: 'idle', reprocess: 'idle', poiskkino: 'idle', rezka: 'idle', user: 'idle', cleanup: 'idle', full_pipeline: 'idle', single_update: 'idle' },
                     progress: { sync_video: {current:0, total:0}, sync_other: {current:0, total:0}, reprocess: {current:0, total:0}, poiskkino: {current:0, total:0}, rezka: {current:0, total:0}, user: {current:0, total:0}, cleanup: {current:0, total:0}, full_pipeline: {current:0, total:0}, single_update: {current:0, total:0} },
                     userSelectedLog: false,
@@ -818,7 +831,7 @@
             },
             computed: {
                 currentLogFilename() {
-                    const maps = { 'reprocess': 'reprocess_log.txt', 'video': 'sync_video_log.txt', 'other': 'sync_other_log.txt', 'fix': 'fix_tech_log.txt', 'fix_poiskkino': 'fix_poiskkino_log.txt', 'rezka': 'sync_rezka_log.txt', 'user': 'user_sync_log.txt', 'cleanup': 'cleanup_log.txt', 'single_update': 'single_update_log.txt' };
+                    const maps = { 'reprocess': 'reprocess_log.txt', 'video': 'sync_video_log.txt', 'other': 'sync_other_log.txt', 'fix': 'fix_tech_log.txt', 'fix_poiskkino': 'fix_poiskkino_log.txt', 'rezka': 'sync_rezka_log.txt', 'rezka_collections': 'rezka_collections_log.txt', 'user': 'user_sync_log.txt', 'cleanup': 'cleanup_log.txt', 'single_update': 'single_update_log.txt' };
                     return maps[this.selectedLogType] || 'log.txt';
                 },
                 currentStatusKey() {
@@ -829,6 +842,7 @@
                         'fix': 'fix', 
                         'fix_poiskkino': 'poiskkino', 
                         'rezka': 'rezka', 
+                        'rezka_collections': 'rezka_collections', 
                         'user': 'user', 
                         'cleanup': 'cleanup', 
                         'full_pipeline': 'full_pipeline', 
@@ -914,18 +928,21 @@
                         }
                         if (msg.type === 'log') {
                             if (this.showLogs && msg.key) {
-                                const logMap = { sync_video:'video', sync_other:'other', reprocess:'reprocess', fix:'fix', poiskkino:'fix_poiskkino', rezka:'rezka', user:'user', cleanup:'cleanup', single_update:'single_update' };
+                                const logMap = { sync_video:'video', sync_other:'other', reprocess:'reprocess', fix:'fix', poiskkino:'fix_poiskkino', rezka:'rezka', rezka_collections:'rezka_collections', user:'user', cleanup:'cleanup', single_update:'single_update' };
                                 const logType = logMap[msg.key];
                                 if (logType && this.selectedLogType === logType) {
                                     this.syncLogs += msg.data;
                                 }
                             }
                             if (!this.userSelectedLog && msg.key) {
-                                const logMap = { sync_video:'video', sync_other:'other', reprocess:'reprocess', fix:'fix', poiskkino:'fix_poiskkino', rezka:'rezka', user:'user', cleanup:'cleanup', single_update:'single_update' };
+                                const logMap = { sync_video:'video', sync_other:'other', reprocess:'reprocess', fix:'fix', poiskkino:'fix_poiskkino', rezka:'rezka', rezka_collections:'rezka_collections', user:'user', cleanup:'cleanup', single_update:'single_update' };
                                 if (logMap[msg.key] && this.statuses[msg.key] === 'running') {
                                     this.selectedLogType = logMap[msg.key];
                                 }
                             }
+                        }
+                        if (msg.type === 'rezka_sync_error') {
+                            this.showToast(msg.message);
                         }
                     };
                 },
@@ -1402,6 +1419,15 @@
                         this.switchLog('cleanup');
                         this.startLogPolling();
                     } catch (e) { alert("Ошибка запуска очистки"); }
+                },
+                async startRezkaCollections() {
+                    try {
+                        this.userSelectedLog = false;
+                        await this.apiFetch('/api/start_rezka_collections', { method: 'POST' });
+                        this.showLogs = true;
+                        this.switchLog('rezka_collections');
+                        this.startLogPolling();
+                    } catch (e) { alert("Ошибка запуска синхронизации Rezka папок"); }
                 },
                 async ignoreItem(id) {
                     await this.apiFetch(`/api/ignore/${id}`, { method: 'POST' });

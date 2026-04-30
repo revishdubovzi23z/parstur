@@ -103,10 +103,19 @@ def merge_duplicates():
             if dup_id == master_id or dup_id in merged_ids:
                 continue
 
-            if reason not in ["Kinopoisk ID", "IMDb ID"]:
-                t1 = clean_t(master["title"])
-                t2 = clean_t(dup["title"])
-                similarity = SequenceMatcher(None, t1, t2).ratio()
+            from difflib import SequenceMatcher
+
+            t1 = clean_t(master["title"])
+            t2 = clean_t(dup["title"])
+            similarity = SequenceMatcher(None, t1, t2).ratio()
+
+            if reason in ["Kinopoisk ID", "IMDb ID"]:
+                if similarity < 0.4:
+                    print(
+                        f"  [ПРОПУСК ({reason})] '{dup['title']}' ({dup['year']}) != '{master['title']}' ({master['year']}) [sim={similarity:.2f}]"
+                    )
+                    continue
+            else:
                 if similarity < 0.6:
                     continue
 

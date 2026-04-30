@@ -288,6 +288,7 @@ process_status = {
     "user": "idle",
     "cleanup": "idle",
     "rezka": "idle",
+    "rezka_collections": "idle",
     "full_pipeline": "idle",
     "single_update": "idle",
 }
@@ -672,6 +673,23 @@ async def start_cleanup():
         "cleanup",
         log_file,
     )
+
+
+@app.post("/api/start_rezka_collections")
+async def start_rezka_collections():
+    if check_any_running():
+        raise HTTPException(400, "Другой процесс уже запущен")
+    log_file = "rezka_collections_log.txt"
+    with open(log_file, "w", encoding="utf-8") as f:
+        f.write("=== Синхронизация коллекций Rezka ===\n")
+    await task_queue.add_task(
+        run_script_with_args,
+        "rezka_collections",
+        "rezka_collections_sync.py",
+        [],
+        "rezka_collections",
+        log_file,
+    )
     return {"status": "started"}
 
 
@@ -912,9 +930,150 @@ class CollectionItemRequest(BaseModel):
     item_id: int
 
 
+def _sync_rezka_folder(action, collection_id, item_id):
+    try:
+        import requests as req
+        from db import Database as _DB
+        import re as _re
+        from bs4 import BeautifulSoup as _BS
+        from app_core import normalize_title
+
+        rezka_email = os.getenv("REZKA_EMAIL", "")
+        rezka_password = os.getenv("REZKA_PASSWORD", "")
+        if not rezka_email or not rezka_password:
+            return
+
+        _db = _DB()
+        _conn = _db.get_connection()
+        _c = _conn.cursor()
+
+        _c.execute("SELECT name FROM collections WHERE id = ?", (collection_id,))
+        _coll = _c.fetchone()
+        if not _coll:
+            _conn.close()
+            return
+
+        _c.execute("SELECT rezka_url FROM items WHERE id = ?", (item_id,))
+        _item = _c.fetchone()
+        _conn.close()
+
+        if not _item or not _item["rezka_url"]:
+            return
+
+        rezka_url = _item["rezka_url"]
+        _m = _re.search(
+            r"/(?:films|series|cartoons|animation|show|telecasts)/[^/]+/(\d+)-",
+            rezka_url,
+        )
+        if not _m:
+            return
+        post_id = _m.group(1)
+
+        _r = req.post(
+            "https://rezka.ag/ajax/login/",
+            data={"login_name": rezka_email, "login_password": rezka_password},
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=10,
+        )
+        _cookies = _r.cookies.get_dict()
+        if not _r.json().get("success"):
+            return
+
+        _folders_resp = req.get(
+            "https://rezka.ag/favorites/",
+            headers={"User-Agent": "Mozilla/5.0"},
+            cookies=_cookies,
+            timeout=15,
+        )
+        _soup = _BS(_folders_resp.content, "html.parser")
+        _sidebar = _soup.find(
+            "div", class_="b-favorites_content__sidebarbar"
+        ) or _soup.find("div", class_="b-favorites_content__sidebar")
+        cat_id = None
+        if _sidebar:
+            coll_norm = normalize_title(_coll["name"])
+            for _a in _sidebar.find_all("a", href=True):
+                _href = _a.get("href", "")
+                if "javascript" in _href:
+                    continue
+                _text = _a.text.strip()
+                _fname = _re.sub(r"\s*\(\d+\)", "", _text).strip()
+                if normalize_title(_fname) == coll_norm:
+                    _m2 = _re.search(r"/favorites/(\d+)/", _href)
+                    if _m2:
+                        cat_id = _m2.group(1)
+                    break
+
+        if not cat_id:
+            return
+
+        if action == "added":
+            req.post(
+                "https://rezka.ag/ajax/favorites/",
+                data={"post_id": post_id, "cat_id": cat_id, "action": "add_post"},
+                headers={
+                    "User-Agent": "Mozilla/5.0",
+                    "X-Requested-With": "XMLHttpRequest",
+                },
+                cookies=_cookies,
+                timeout=10,
+            )
+        else:
+            req.post(
+                "https://rezka.ag/ajax/favorites/",
+                data={
+                    "post_id": post_id,
+                    "cat_id": cat_id,
+                    "action": "add_post",
+                    "del": "1",
+                },
+                headers={
+                    "User-Agent": "Mozilla/5.0",
+                    "X-Requested-With": "XMLHttpRequest",
+                },
+                cookies=_cookies,
+                timeout=10,
+            )
+    except Exception as e:
+        print(f"[REZKA SYNC ERROR] {e}")
+
+
+def _sync_rezka_folder_wrapper(action, collection_id, item_id):
+    try:
+        _sync_rezka_folder(action, collection_id, item_id)
+    except Exception as e:
+        import asyncio as _a
+
+        try:
+            _a.get_event_loop().create_task(
+                ws_manager.broadcast(
+                    {
+                        "type": "rezka_sync_error",
+                        "message": f"Ошибка синхронизации с Rezka: {e}",
+                        "item_id": item_id,
+                        "collection_id": collection_id,
+                        "action": action,
+                    }
+                )
+            )
+        except Exception:
+            pass
+
+
 @app.post("/api/collections/{collection_id}/toggle")
-def toggle_collection_item(collection_id: int, data: CollectionItemRequest):
+async def toggle_collection_item(collection_id: int, data: CollectionItemRequest):
     action = db.toggle_collection_item(collection_id, data.item_id)
+
+    if (
+        action in ("added", "removed")
+        and os.getenv("REZKA_EMAIL")
+        and os.getenv("REZKA_PASSWORD")
+    ):
+        loop = asyncio.get_event_loop()
+        loop.run_in_executor(
+            None, _sync_rezka_folder_wrapper, action, collection_id, data.item_id
+        )
+
     return {"status": "success", "action": action}
 
 
@@ -950,6 +1109,7 @@ def get_sync_log(log_type: str = "video"):
         "reprocess": "reprocess_log.txt",
         "cleanup": "cleanup_log.txt",
         "rezka": "sync_rezka_log.txt",
+        "rezka_collections": "rezka_collections_log.txt",
         "single_update": "single_update_log.txt",
     }
     filename = log_files.get(log_type)
@@ -982,6 +1142,7 @@ def download_log(log_type: str = "video"):
         "reprocess": "reprocess_log.txt",
         "cleanup": "cleanup_log.txt",
         "rezka": "sync_rezka_log.txt",
+        "rezka_collections": "rezka_collections_log.txt",
         "single_update": "single_update_log.txt",
     }
     filename = log_files.get(log_type)
@@ -1001,6 +1162,7 @@ def clear_log(log_type: str = "video"):
         "reprocess": "reprocess_log.txt",
         "cleanup": "cleanup_log.txt",
         "rezka": "sync_rezka_log.txt",
+        "rezka_collections": "rezka_collections_log.txt",
         "single_update": "single_update_log.txt",
     }
     filename = log_files.get(log_type)

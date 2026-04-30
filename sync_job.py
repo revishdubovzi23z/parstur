@@ -445,27 +445,57 @@ def run_sync(mode="video", manual_min_date=None):
                 if search_names:
                     title_norm = search_names[0]
 
-                item_id = db.insert_item(
-                    {
-                        "title": clean_display_title,
-                        "year": year,
-                        "category_id": cat_id,
-                        "poster_url": poster,
-                        "description": desc,
-                        "imdb_id": imdb_id,
-                        "kp_id": rutor_kp_id,
-                        "imdb_rating": imdb_rating,
-                        "kp_rating": 0,
-                        "is_metadata_fixed": 0,
-                        "title_norm": title_norm,
-                    },
+                existing_id = db.find_existing_item(
+                    kp_id=rutor_kp_id,
+                    imdb_id=imdb_id,
+                    title_norm=title_norm,
+                    year=year,
+                    category_id=cat_id,
                     conn=conn,
                 )
+
+                if existing_id:
+                    item_id = existing_id
+                    db.fill_item_metadata(
+                        item_id,
+                        conn=conn,
+                        poster_url=poster,
+                        description=desc,
+                        imdb_id=imdb_id,
+                        kp_id=rutor_kp_id,
+                        imdb_rating=imdb_rating,
+                        title=title_norm if title_norm else None,
+                    )
+                    print(
+                        f"  🔗 НАЙДЕН ДУБЛЬ: {display_title} ({year}) -> id={item_id}"
+                    )
+                else:
+                    item_id = db.insert_item(
+                        {
+                            "title": clean_display_title,
+                            "year": year,
+                            "category_id": cat_id,
+                            "poster_url": poster,
+                            "description": desc,
+                            "imdb_id": imdb_id,
+                            "kp_id": rutor_kp_id,
+                            "imdb_rating": imdb_rating,
+                            "kp_rating": 0,
+                            "is_metadata_fixed": 0,
+                            "title_norm": title_norm,
+                        },
+                        conn=conn,
+                    )
 
                 for sn in search_names:
                     db.insert_search_name(item_id, sn, conn=conn)
 
-                print(f"  ➕ ДОБАВЛЕН: {display_title} ({year})")
+                if existing_id:
+                    print(
+                        f"  🔗 НАЙДЕН ДУБЛЬ: {display_title} ({year}) -> id={item_id}"
+                    )
+                else:
+                    print(f"  ➕ ДОБАВЛЕН: {display_title} ({year})")
 
             added_any = False
             for rel in movie_data["releases"]:

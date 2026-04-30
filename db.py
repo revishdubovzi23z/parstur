@@ -324,6 +324,90 @@ class Database:
                 f"SELECT COUNT(*) FROM items WHERE {where_clause}", params
             ).fetchone()[0]
 
+    def find_existing_item(
+        self,
+        kp_id=None,
+        imdb_id=None,
+        title_norm=None,
+        year=None,
+        category_id=None,
+        rezka_url=None,
+        conn=None,
+    ):
+        with self._conn(conn) as c:
+            if kp_id:
+                row = c.execute(
+                    "SELECT id FROM items WHERE kp_id = ? LIMIT 1", (str(kp_id),)
+                ).fetchone()
+                if row:
+                    return row[0]
+            if imdb_id:
+                row = c.execute(
+                    "SELECT id FROM items WHERE imdb_id = ? LIMIT 1", (str(imdb_id),)
+                ).fetchone()
+                if row:
+                    return row[0]
+            if rezka_url:
+                row = c.execute(
+                    "SELECT id FROM items WHERE rezka_url = ? LIMIT 1", (rezka_url,)
+                ).fetchone()
+                if row:
+                    return row[0]
+            if title_norm:
+                from app_core import normalize_title
+
+                norm = normalize_title(title_norm)
+                if norm:
+                    if year and category_id:
+                        rows = c.execute(
+                            "SELECT id, year FROM items WHERE title_norm = ? AND category_id = ?",
+                            (norm, category_id),
+                        ).fetchall()
+                        for r in rows:
+                            iy = r[1] or 0
+                            if (
+                                iy == year
+                                or iy == 0
+                                or year == 0
+                                or abs(iy - year) <= 1
+                            ):
+                                return r[0]
+                    if category_id:
+                        row = c.execute(
+                            "SELECT id FROM items WHERE title_norm = ? AND category_id = ? LIMIT 1",
+                            (norm, category_id),
+                        ).fetchone()
+                        if row:
+                            return row[0]
+                    row = c.execute(
+                        "SELECT id FROM items WHERE title_norm = ? LIMIT 1",
+                        (norm,),
+                    ).fetchone()
+                    if row:
+                        return row[0]
+                    rows = c.execute(
+                        "SELECT item_id FROM item_search_names WHERE name_norm = ? LIMIT 5",
+                        (norm,),
+                    ).fetchall()
+                    if rows:
+                        for r in rows:
+                            item_row = c.execute(
+                                "SELECT year, category_id FROM items WHERE id = ?",
+                                (r[0],),
+                            ).fetchone()
+                            if item_row:
+                                iy = item_row[0] or 0
+                                ic = item_row[1] or 0
+                                if year and (
+                                    iy == year
+                                    or iy == 0
+                                    or year == 0
+                                    or abs(iy - year) <= 1
+                                ):
+                                    if not category_id or ic == category_id:
+                                        return r[0]
+            return None
+
     def insert_item(self, data: dict, conn=None) -> Optional[int]:
         with self._conn(conn) as c:
             cols = ", ".join(data.keys())
@@ -630,9 +714,17 @@ class Database:
             if hide_rated:
                 watched_ids = self.get_watched_item_ids(conn=c)
                 if watched_ids:
-                    where_clauses.append(
-                        f"items.id NOT IN ({','.join(map(str, watched_ids))})"
+                    collected_ids = set(
+                        r[0]
+                        for r in c.execute(
+                            "SELECT DISTINCT item_id FROM collection_items"
+                        ).fetchall()
                     )
+                    hide_ids = watched_ids - collected_ids
+                    if hide_ids:
+                        where_clauses.append(
+                            f"items.id NOT IN ({','.join(map(str, hide_ids))})"
+                        )
 
             if hide_collected and not collection_id:
                 where_clauses.append(
@@ -689,6 +781,31 @@ class Database:
                 ).fetchall()
                 item["releases"] = [dict(r) for r in rows]
 
+            if collection_id:
+                for item in items:
+                    item["has_new_release"] = False
+                    if item.get("latest_release"):
+                        ci_row = c.execute(
+                            "SELECT added_at FROM collection_items WHERE collection_id = ? AND item_id = ?",
+                            (collection_id, item["id"]),
+                        ).fetchone()
+                        if ci_row and ci_row[0]:
+                            try:
+                                from datetime import datetime
+
+                                added = datetime.strptime(
+                                    ci_row[0][:19], "%Y-%m-%d %H:%M:%S"
+                                )
+                                latest = datetime.strptime(
+                                    item["latest_release"][:19], "%Y-%m-%d %H:%M:%S"
+                                )
+                                if latest > added:
+                                    item["has_new_release"] = True
+                            except Exception:
+                                pass
+                        else:
+                            item["has_new_release"] = True
+
             return {"items": items, "totalPages": total_pages}
 
     # ── Categories ──────────────────────────────────────────────────
@@ -702,8 +819,16 @@ class Database:
             def make_filters(alias="i"):
                 clauses = []
                 if watched_ids:
-                    ids_str = ",".join(map(str, watched_ids))
-                    clauses.append(f"{alias}.id NOT IN ({ids_str})")
+                    collected_ids = set(
+                        r[0]
+                        for r in c.execute(
+                            "SELECT DISTINCT item_id FROM collection_items"
+                        ).fetchall()
+                    )
+                    hide_ids = watched_ids - collected_ids
+                    if hide_ids:
+                        ids_str = ",".join(map(str, hide_ids))
+                        clauses.append(f"{alias}.id NOT IN ({ids_str})")
                 if hide_collected:
                     clauses.append(
                         f"{alias}.id NOT IN (SELECT item_id FROM collection_items)"
