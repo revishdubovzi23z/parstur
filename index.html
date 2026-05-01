@@ -27,8 +27,7 @@
         .slide-up-enter-active, .slide-up-leave-active { transition: transform 0.35s ease, opacity 0.35s ease; }
         .slide-up-enter-from, .slide-up-leave-to { transform: translateY(100%); opacity: 0; }
         @media (max-width: 640px) {
-            .card-title { min-height: 2.5rem !important; font-size: 0.8rem !important; line-height: 1.2 !important; }
-            .card-desc { -webkit-line-clamp: 2 !important; }
+            .card-title { line-height: 1.2 !important; }
         }
     </style>
 </head>
@@ -511,7 +510,7 @@
             </div>
 
             <div v-else>
-                <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2 sm:gap-4">
+                <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 sm:gap-6">
                     <div v-for="item in items" :key="item.id" class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden flex flex-col card-hover relative group">
                         <!-- Постер -->
                         <div class="relative aspect-[2/3] bg-gray-200 overflow-hidden">
@@ -609,11 +608,11 @@
                         </div>
 
                         <div class="p-3 sm:p-4 flex flex-col flex-1">
-                            <h3 class="text-xs sm:text-sm font-black text-slate-900 leading-tight mb-1 line-clamp-3 card-title min-h-[2.5rem]">{{ item.title }}</h3>
+                            <h3 class="text-sm font-black text-slate-900 leading-tight mb-1 line-clamp-4 min-h-[3.5rem]">{{ item.title }}</h3>
                             <div class="flex items-center gap-2 mb-2">
                                 <span class="text-[10px] font-bold text-slate-400 uppercase bg-slate-50 px-2 py-0.5 rounded">{{ item.year }}</span>
                             </div>
-                            <p class="text-[10px] sm:text-[11px] text-slate-500 line-clamp-2 card-desc mb-3 leading-relaxed flex-1">{{ item.description }}</p>
+                            <p class="text-[11px] text-slate-500 line-clamp-3 mb-3 leading-relaxed flex-1">{{ item.description }}</p>
 
                             <!-- Виджеты рейтингов -->
                             <div v-if="item.kp_id || item.imdb_id" class="flex flex-wrap gap-2 mb-4">
@@ -623,15 +622,24 @@
                                 </template>
                             </div>
 
-                            <div class="flex items-center gap-2 mt-auto pt-3 border-t border-slate-100">
-                                <a v-if="item.releases && item.releases.length > 0" :href="item.releases[0].link" target="_blank" class="flex-1 bg-red-600 text-white text-[10px] font-bold py-1.5 rounded text-center shadow-sm hover:bg-red-700 transition-colors">RUTOR</a>
-                                <a v-if="item.kp_id" :href="'https://www.kinopoisk.ru/film/' + item.kp_id + '/'" target="_blank" class="flex-1 bg-orange-50 text-orange-700 text-[10px] font-bold py-1.5 rounded text-center">КП</a>
-                                <a v-if="item.rezka_url" :href="item.rezka_url" target="_blank" 
-                                   class="flex-1 bg-purple-100 text-purple-700 border border-purple-200 text-[10px] font-bold py-1.5 rounded text-center relative">
-                                    REZKA
-                                    <span v-if="item.checked_rezka === 0" class="absolute -top-1 -right-1 w-2.5 h-2.5 bg-orange-500 rounded-full border-2 border-white shadow-sm" title="Ожидает проверки Rezka"></span>
-                                </a>
-                                <a v-if="item.imdb_id" :href="'https://www.imdb.com/title/' + item.imdb_id + '/'" target="_blank" class="w-12 bg-slate-100 text-slate-600 text-[10px] font-bold py-1.5 rounded text-center">IMDB</a>
+                            <div class="mt-auto pt-2 border-t border-slate-100 space-y-1.5">
+                                <div class="flex items-center justify-center gap-1.5">
+                                    <a v-if="item.releases && item.releases.length > 0" :href="item.releases[0].link" target="_blank" 
+                                       class="px-2 py-1 bg-red-600 text-white text-[9px] font-black rounded-lg shadow-sm hover:bg-red-700 transition-colors">RUTOR</a>
+                                    <a v-if="item.kp_id" :href="'https://www.kinopoisk.ru/film/' + item.kp_id + '/'" target="_blank" 
+                                       class="px-2 py-1 bg-orange-50 text-orange-600 text-[9px] font-black rounded-lg hover:bg-orange-100 transition-colors">КП</a>
+                                    <a v-if="item.rezka_url" :href="item.rezka_url" target="_blank" 
+                                       class="px-2 py-1 bg-purple-100 text-purple-600 text-[9px] font-black rounded-lg relative hover:bg-purple-200 transition-colors">
+                                        REZKA
+                                        <span v-if="item.checked_rezka === 0" class="absolute -top-1 -right-1 w-2 h-2 bg-orange-500 rounded-full border-2 border-white"></span>
+                                    </a>
+                                    <a v-if="item.imdb_id" :href="'https://www.imdb.com/title/' + item.imdb_id + '/'" target="_blank" 
+                                       class="px-2 py-1 bg-yellow-50 text-yellow-700 text-[9px] font-black rounded-lg hover:bg-yellow-100 transition-colors">IMDB</a>
+                                </div>
+                                <button v-if="item.rezka_url" @click="openStream(item)" 
+                                   class="w-full py-1.5 bg-green-600 text-white text-[10px] font-black rounded-lg shadow-sm hover:bg-green-700 transition-colors">
+                                    ▶ СМОТРЕТЬ
+                                </button>
                             </div>
                         </div>
                     </div>
@@ -683,6 +691,78 @@
         </transition>
 
         <!-- Дашборд / Статистика -->
+        <transition name="fade">
+            <div v-if="showStreamModal" @click="showStreamModal = false" class="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-[100] flex items-center justify-center p-4">
+                <div @click.stop class="bg-white w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden">
+                    <div class="p-5 border-b border-slate-100 flex justify-between items-center">
+                        <h3 class="text-lg font-black text-slate-900 tracking-tight">{{ streamItem?.title }}</h3>
+                        <button @click="showStreamModal = false" class="text-slate-400 hover:text-slate-900 text-xl">✕</button>
+                    </div>
+                    <div class="p-5 space-y-4">
+                        <div v-if="streamLoading" class="text-center py-8 text-slate-400 font-bold">Загрузка...</div>
+                        <div v-else-if="streamError" class="text-center py-8 text-red-500 font-bold">{{ streamError }}</div>
+                        <template v-else>
+                            <!-- Translator select -->
+                            <div v-if="streamInfo?.translators && Object.keys(streamInfo.translators).length > 1">
+                                <label class="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1 block">Озвучка</label>
+                                <select v-model="streamTranslator" @change="onStreamTranslatorChange" class="w-full bg-slate-100 rounded-xl px-3 py-2 text-sm font-bold border-none focus:ring-2 focus:ring-slate-900">
+                                    <option v-for="(t, tid) in streamInfo.translators" :key="tid" :value="tid">{{ t.name }}{{ t.premium ? ' ★' : '' }}</option>
+                                </select>
+                            </div>
+                            <!-- Season select -->
+                            <div v-if="streamInfo?.type === 'series' && streamSeriesInfo">
+                                <label class="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1 block">Сезон</label>
+                                <select v-model="streamSeason" @change="onStreamSeasonChange" class="w-full bg-slate-100 rounded-xl px-3 py-2 text-sm font-bold border-none focus:ring-2 focus:ring-slate-900">
+                                    <option v-for="(name, s) in streamSeriesInfo.seasons" :key="s" :value="s">{{ name }}</option>
+                                </select>
+                            </div>
+                            <!-- Episode select -->
+                            <div v-if="streamInfo?.type === 'series' && streamEpisodes">
+                                <label class="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1 block">Серия</label>
+                                <select v-model="streamEpisode" class="w-full bg-slate-100 rounded-xl px-3 py-2 text-sm font-bold border-none focus:ring-2 focus:ring-slate-900">
+                                    <option v-for="(name, e) in streamEpisodes" :key="e" :value="e">{{ name }}</option>
+                                </select>
+                            </div>
+                            <!-- Quality buttons -->
+                            <div v-if="streamVideos">
+                                <label class="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-2 block">Качество</label>
+                                <div class="grid grid-cols-3 gap-2">
+                                    <button v-for="(url, q) in streamVideos" :key="q" @click="playStream(q)" 
+                                        :disabled="!url" 
+                                        class="py-2.5 rounded-xl text-xs font-black transition-all"
+                                        :class="url ? 'bg-green-600 text-white hover:bg-green-700 shadow-sm' : 'bg-slate-100 text-slate-400 cursor-not-allowed'">
+                                        {{ q }}
+                                    </button>
+                                </div>
+                            </div>
+                            <!-- External players -->
+                            <div v-if="streamCurrentUrl" class="space-y-2 pt-2">
+                                <label class="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1 block">Открыть в плеере</label>
+                                <div class="flex flex-wrap gap-2">
+                                    <a :href="'vlc://' + streamCurrentUrl" class="px-3 py-2 bg-orange-500 text-white text-[10px] font-black rounded-lg hover:bg-orange-600 transition-colors shadow-sm">VLC</a>
+                                    <a :href="'intent://' + streamCurrentUrl.replace('https://', '') + '#Intent;scheme=https;package=com.nextplayer;end'" class="px-3 py-2 bg-indigo-500 text-white text-[10px] font-black rounded-lg hover:bg-indigo-600 transition-colors shadow-sm">Next Player</a>
+                                    <a :href="'intent://' + streamCurrentUrl.replace('https://', '') + '#Intent;scheme=https;package=com.mxtech.videoplayer.ad;end'" class="px-3 py-2 bg-blue-500 text-white text-[10px] font-black rounded-lg hover:bg-blue-600 transition-colors shadow-sm">MX Player</a>
+                                    <a :href="'intent://' + streamCurrentUrl.replace('https://', '') + '#Intent;scheme=https;package=org.videolan.vlc;end'" class="px-3 py-2 bg-orange-600 text-white text-[10px] font-black rounded-lg hover:bg-orange-700 transition-colors shadow-sm">VLC Android</a>
+                                    <a :href="streamM3uUrl" class="px-3 py-2 bg-slate-700 text-white text-[10px] font-black rounded-lg hover:bg-slate-800 transition-colors shadow-sm">M3U ↓</a>
+                                    <button @click="copyStreamUrl" class="px-3 py-2 bg-slate-100 text-slate-700 text-[10px] font-black rounded-lg hover:bg-slate-200 transition-colors">📋 Копировать</button>
+                                </div>
+                            </div>
+                            <!-- Subtitles -->
+                            <div v-if="streamSubtitles && Object.keys(streamSubtitles).length > 0" class="pt-2">
+                                <label class="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1 block">Субтитры</label>
+                                <div class="flex flex-wrap gap-1">
+                                    <a v-for="(sub, lang) in streamSubtitles" :key="lang" :href="sub.link" target="_blank"
+                                       class="px-2 py-1 bg-slate-100 rounded-lg text-[10px] font-bold text-slate-600 hover:bg-slate-200">
+                                        {{ sub.title }}
+                                    </a>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+        </transition>
+
         <transition name="fade">
             <div v-if="showDashboard" @click="showDashboard = false" class="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-[100] flex items-center justify-center p-4">
                 <div @click.stop class="bg-white w-full max-w-4xl max-h-[90vh] rounded-[2rem] shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-300">
@@ -815,8 +895,13 @@
                     showNewOnly: localStorage.getItem('showNewOnly') === 'true',
                     lastVisit: null,
                     showIdEditor: false,
+                    showStreamModal: false,
                     editingItem: null,
                     editKpId: '',
+                    editImdbId: '',
+                    streamItem: null, streamInfo: null, streamLoading: false, streamError: null,
+                    streamTranslator: null, streamSeason: null, streamEpisode: null,
+                    streamVideos: null, streamSubtitles: null, streamCurrentUrl: null, streamCurrentQuality: null,
                     editImdbId: '',
                     authEnabled: false,
                     authToken: sessionStorage.getItem('authToken') || '',
@@ -833,6 +918,22 @@
             computed: {
                 anyRunning() {
                     return Object.values(this.statuses).some(s => s === 'running');
+                },
+                streamSeriesInfo() {
+                    if (!this.streamInfo?.series_info || !this.streamTranslator) return null;
+                    return this.streamInfo.series_info[this.streamTranslator] || null;
+                },
+                streamEpisodes() {
+                    if (!this.streamSeriesInfo?.episodes || !this.streamSeason) return null;
+                    return this.streamSeriesInfo.episodes?.[this.streamSeason] || null;
+                },
+                streamM3uUrl() {
+                    if (!this.streamItem || !this.streamCurrentQuality) return '';
+                    let url = `/api/stream_m3u/${this.streamItem.id}?quality=${this.streamCurrentQuality}`;
+                    if (this.streamTranslator) url += `&translator=${this.streamTranslator}`;
+                    if (this.streamSeason) url += `&season=${this.streamSeason}`;
+                    if (this.streamEpisode) url += `&episode=${this.streamEpisode}`;
+                    return url;
                 },
                 currentLogFilename() {
                     const maps = { 'reprocess': 'reprocess_log.txt', 'video': 'sync_video_log.txt', 'other': 'sync_other_log.txt', 'fix': 'fix_tech_log.txt', 'fix_poiskkino': 'fix_poiskkino_log.txt', 'rezka': 'sync_rezka_log.txt', 'rezka_collections': 'rezka_collections_log.txt', 'user': 'user_sync_log.txt', 'cleanup': 'cleanup_log.txt', 'single_update': 'single_update_log.txt' };
@@ -1597,7 +1698,101 @@
                         this.showToast('Ошибка сохранения ID');
                     }
                 },
-                showToast(msg) { this.toast.message = msg; this.toast.show = true; setTimeout(() => this.toast.show = false, 3000); }
+                showToast(msg) { this.toast.message = msg; this.toast.show = true; setTimeout(() => this.toast.show = false, 3000); },
+                async openStream(item) {
+                    this.streamItem = item;
+                    this.streamInfo = null;
+                    this.streamVideos = null;
+                    this.streamSubtitles = null;
+                    this.streamError = null;
+                    this.streamLoading = true;
+                    this.streamTranslator = null;
+                    this.streamSeason = null;
+                    this.streamEpisode = null;
+                    this.showStreamModal = true;
+                    try {
+                        const res = await this.apiFetch(`/api/stream_info/${item.id}`);
+                        const data = await res.json();
+                        if (data.error) {
+                            this.streamError = data.error;
+                        } else {
+                            this.streamInfo = data;
+                            if (data.translators) {
+                                const keys = Object.keys(data.translators);
+                                this.streamTranslator = keys[0] || null;
+                            }
+                            if (data.type === 'series' && data.series_info && this.streamTranslator) {
+                                const si = data.series_info[this.streamTranslator];
+                                if (si?.seasons) {
+                                    this.streamSeason = Object.keys(si.seasons)[0] || null;
+                                }
+                                if (si?.episodes && this.streamSeason) {
+                                    this.streamEpisode = Object.keys(si.episodes[this.streamSeason] || {})[0] || null;
+                                }
+                            }
+                            await this.loadStreamUrls();
+                        }
+                    } catch (e) {
+                        this.streamError = 'Ошибка загрузки';
+                    } finally {
+                        this.streamLoading = false;
+                    }
+                },
+                onStreamTranslatorChange() {
+                    this.streamSeason = null;
+                    this.streamEpisode = null;
+                    this.streamVideos = null;
+                    if (this.streamInfo?.series_info && this.streamTranslator) {
+                        const si = this.streamInfo.series_info[this.streamTranslator];
+                        if (si?.seasons) {
+                            this.streamSeason = Object.keys(si.seasons)[0] || null;
+                        }
+                        if (si?.episodes && this.streamSeason) {
+                            this.streamEpisode = Object.keys(si.episodes[this.streamSeason] || {})[0] || null;
+                        }
+                    }
+                    this.loadStreamUrls();
+                },
+                onStreamSeasonChange() {
+                    this.streamEpisode = null;
+                    this.streamVideos = null;
+                    if (this.streamSeriesInfo?.episodes && this.streamSeason) {
+                        this.streamEpisode = Object.keys(this.streamSeriesInfo.episodes[this.streamSeason] || {})[0] || null;
+                    }
+                    this.loadStreamUrls();
+                },
+                async loadStreamUrls() {
+                    this.streamVideos = null;
+                    this.streamSubtitles = null;
+                    try {
+                        let url = `/api/stream/${this.streamItem.id}?translator=${this.streamTranslator}`;
+                        if (this.streamSeason) url += `&season=${this.streamSeason}`;
+                        if (this.streamEpisode) url += `&episode=${this.streamEpisode}`;
+                        const res = await this.apiFetch(url);
+                        const data = await res.json();
+                        if (data.error) {
+                            this.streamError = data.error;
+                        } else {
+                            this.streamVideos = data.videos;
+                            this.streamSubtitles = data.subtitles;
+                        }
+                    } catch (e) {
+                        this.streamError = 'Ошибка загрузки потока';
+                    }
+                },
+                playStream(quality) {
+                    const url = this.streamVideos?.[quality];
+                    if (url) {
+                        this.streamCurrentUrl = url;
+                        this.streamCurrentQuality = quality;
+                    }
+                },
+                copyStreamUrl() {
+                    if (this.streamCurrentUrl) {
+                        navigator.clipboard.writeText(this.streamCurrentUrl);
+                        this.showToast('URL скопирован');
+                    }
+                }
             }
         }).mount('#app');
     </script>

@@ -91,7 +91,7 @@ def _score_candidates(all_results, clean_parts, year):
             elif diff <= 3:
                 score -= 40
             else:
-                score -= 150
+                score -= 80
 
         results_with_scores.append(
             {
@@ -201,7 +201,7 @@ def _verify_candidate_soup(soup, scored_item, year, kp_id, imdb_id):
         elif diff <= 3:
             current_score -= 40
         else:
-            current_score -= 150
+            current_score -= 80
 
     if page_year:
         print(f"      [*] Год на странице: {page_year}")
@@ -299,7 +299,7 @@ def _verify_candidate(rezka_obj, scored_item, year, kp_id, imdb_id):
         elif diff <= 3:
             current_score -= 40
         else:
-            current_score -= 150
+            current_score -= 80
 
     if page_year:
         print(f"      [*] Год на странице: {page_year}")
@@ -478,7 +478,7 @@ def search_rezka_for_item(
     candidates = _score_candidates(all_results, clean_parts, year)
 
     has_ids = bool(kp_id or imdb_id)
-    min_score = -50 if has_ids else 70
+    min_score = -150 if has_ids else 70
 
     final_res = None
     final_data = {}

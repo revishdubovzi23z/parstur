@@ -1112,7 +1112,171 @@ def batch_item_collections(data: BatchCollectionsRequest):
     return result
 
 
-class SaveOrderRequest(BaseModel):
+@app.get("/api/stream_info/{item_id}")
+def get_stream_info(item_id: int):
+    from HdRezkaApi import HdRezkaApi
+    from HdRezkaApi.types import TVSeries
+
+    row = (
+        db.get_connection()
+        .cursor()
+        .execute("SELECT rezka_url FROM items WHERE id = ?", (item_id,))
+        .fetchone()
+    )
+    if not row or not row["rezka_url"]:
+        return {"error": "no rezka_url"}
+
+    try:
+        cookies = rezka_session.cookies if rezka_session else {"hdmbbs": "1"}
+        rezka = HdRezkaApi(row["rezka_url"], cookies=cookies)
+        if not rezka.ok:
+            return {"error": "failed to load page"}
+
+        is_series = rezka.type == TVSeries
+        result = {
+            "type": "series" if is_series else "movie",
+            "name": rezka.name,
+            "translators": rezka.translators,
+        }
+
+        if is_series:
+            series_data = {}
+            for tid, info in rezka.seriesInfo.items():
+                series_data[str(tid)] = {
+                    "name": info.get("translator_name", ""),
+                    "premium": info.get("premium", False),
+                    "seasons": {str(k): v for k, v in info.get("seasons", {}).items()},
+                    "episodes": {
+                        str(s): {str(e): name for e, name in eps.items()}
+                        for s, eps in info.get("episodes", {}).items()
+                    },
+                }
+            result["series_info"] = series_data
+
+        return result
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/stream/{item_id}")
+def get_stream(
+    item_id: int,
+    season: Optional[str] = None,
+    episode: Optional[str] = None,
+    translator: Optional[str] = None,
+):
+    from HdRezkaApi import HdRezkaApi
+
+    row = (
+        db.get_connection()
+        .cursor()
+        .execute("SELECT rezka_url FROM items WHERE id = ?", (item_id,))
+        .fetchone()
+    )
+    if not row or not row["rezka_url"]:
+        return {"error": "no rezka_url"}
+
+    try:
+        cookies = rezka_session.cookies if rezka_session else {"hdmbbs": "1"}
+        rezka = HdRezkaApi(row["rezka_url"], cookies=cookies)
+        if not rezka.ok:
+            return {"error": "failed to load page"}
+
+        kwargs = {}
+        if translator:
+            kwargs["translation"] = translator
+
+        if season and episode:
+            stream = rezka.getStream(season, episode, **kwargs)
+        else:
+            stream = rezka.getStream(**kwargs)
+
+        videos = {}
+        for quality, urls in stream.videos.items():
+            videos[quality] = urls[0] if urls else None
+
+        subtitles = {}
+        if stream.subtitles and stream.subtitles.subtitles:
+            for lang, info in stream.subtitles.subtitles.items():
+                subtitles[lang] = {
+                    "title": info.get("title", lang),
+                    "link": info.get("link", ""),
+                }
+
+        return {
+            "videos": videos,
+            "subtitles": subtitles,
+            "translator_id": stream.translator_id,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/stream_m3u/{item_id}")
+def get_stream_m3u(
+    item_id: int,
+    season: Optional[str] = None,
+    episode: Optional[str] = None,
+    translator: Optional[str] = None,
+    quality: Optional[str] = None,
+):
+    from HdRezkaApi import HdRezkaApi
+    from fastapi.responses import Response
+
+    row = (
+        db.get_connection()
+        .cursor()
+        .execute("SELECT rezka_url, title FROM items WHERE id = ?", (item_id,))
+        .fetchone()
+    )
+    if not row or not row["rezka_url"]:
+        return {"error": "no rezka_url"}
+
+    try:
+        cookies = rezka_session.cookies if rezka_session else {"hdmbbs": "1"}
+        rezka = HdRezkaApi(row["rezka_url"], cookies=cookies)
+        if not rezka.ok:
+            return {"error": "failed to load page"}
+
+        kwargs = {}
+        if translator:
+            kwargs["translation"] = translator
+
+        if season and episode:
+            stream = rezka.getStream(season, episode, **kwargs)
+        else:
+            stream = rezka.getStream(**kwargs)
+
+        if not quality or quality not in stream.videos:
+            quality = max(
+                stream.videos.keys(),
+                key=lambda q: {
+                    "4K": 7,
+                    "2K": 6,
+                    "1080p Ultra": 5,
+                    "1080p": 4,
+                    "720p": 3,
+                    "480p": 2,
+                    "360p": 1,
+                }.get(q, 0),
+            )
+
+        url = stream.videos[quality][0] if stream.videos[quality] else None
+        if not url:
+            return {"error": "no stream url"}
+
+        title = row["title"]
+        if season and episode:
+            title += f" - S{season}E{episode}"
+
+        m3u = f"#EXTM3U\n#EXTINF:-1,{title}\n{url}\n"
+        return Response(
+            content=m3u,
+            media_type="audio/mpegurl",
+            headers={"Content-Disposition": f'attachment; filename="{title}.m3u"'},
+        )
+    except Exception as e:
+        return {"error": str(e)}
     order: list[int]
 
 
