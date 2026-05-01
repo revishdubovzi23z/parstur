@@ -92,6 +92,8 @@ class Database:
                     checked_rezka INTEGER DEFAULT 0,
                     ignored_at TEXT,
                     is_reprocessed INTEGER DEFAULT 0,
+                    latest_season INTEGER DEFAULT 0,
+                    latest_episode INTEGER DEFAULT 0,
                     UNIQUE(title, year, category_id)
                 )
             """)
@@ -295,6 +297,18 @@ class Database:
             ]
             if "added_at" not in ci_cols:
                 cur.execute("ALTER TABLE collection_items ADD COLUMN added_at TEXT")
+
+            items_cols = [
+                col[1] for col in cur.execute("PRAGMA table_info(items)").fetchall()
+            ]
+            if "latest_season" not in items_cols:
+                cur.execute(
+                    "ALTER TABLE items ADD COLUMN latest_season INTEGER DEFAULT 0"
+                )
+            if "latest_episode" not in items_cols:
+                cur.execute(
+                    "ALTER TABLE items ADD COLUMN latest_episode INTEGER DEFAULT 0"
+                )
 
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS item_search_names (item_id INTEGER, name_norm TEXT)
@@ -784,7 +798,35 @@ class Database:
             if collection_id:
                 for item in items:
                     item["has_new_release"] = False
-                    if item.get("latest_release"):
+                    if (
+                        item.get("latest_season", 0) > 0
+                        and item.get("latest_episode", 0) > 0
+                    ):
+                        ci_row = c.execute(
+                            "SELECT added_at FROM collection_items WHERE collection_id = ? AND item_id = ?",
+                            (collection_id, item["id"]),
+                        ).fetchone()
+                        if ci_row and ci_row[0]:
+                            try:
+                                from datetime import datetime
+
+                                added = datetime.strptime(
+                                    ci_row[0][:19], "%Y-%m-%d %H:%M:%S"
+                                )
+                                season_key = (
+                                    f"s{item['latest_season']}e{item['latest_episode']}"
+                                )
+                                cache_row = c.execute(
+                                    "SELECT value FROM app_state WHERE key = ?",
+                                    (f"rezka_seen_{item['id']}",),
+                                ).fetchone()
+                                if not cache_row or cache_row[0] != season_key:
+                                    item["has_new_release"] = True
+                            except Exception:
+                                pass
+                        else:
+                            item["has_new_release"] = True
+                    elif item.get("latest_release"):
                         ci_row = c.execute(
                             "SELECT added_at FROM collection_items WHERE collection_id = ? AND item_id = ?",
                             (collection_id, item["id"]),

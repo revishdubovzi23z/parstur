@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Optional
 import json
+import re
 import uvicorn
 import asyncio
 import os
@@ -1221,7 +1222,7 @@ def get_stream_m3u(
     quality: Optional[str] = None,
 ):
     from HdRezkaApi import HdRezkaApi
-    from fastapi.responses import Response
+    from fastapi.responses import Response as R
 
     row = (
         db.get_connection()
@@ -1230,13 +1231,19 @@ def get_stream_m3u(
         .fetchone()
     )
     if not row or not row["rezka_url"]:
-        return {"error": "no rezka_url"}
+        return R(
+            content="error: no rezka_url", media_type="text/plain", status_code=404
+        )
 
     try:
         cookies = rezka_session.cookies if rezka_session else {"hdmbbs": "1"}
         rezka = HdRezkaApi(row["rezka_url"], cookies=cookies)
         if not rezka.ok:
-            return {"error": "failed to load page"}
+            return R(
+                content="error: failed to load page",
+                media_type="text/plain",
+                status_code=500,
+            )
 
         kwargs = {}
         if translator:
@@ -1263,20 +1270,53 @@ def get_stream_m3u(
 
         url = stream.videos[quality][0] if stream.videos[quality] else None
         if not url:
-            return {"error": "no stream url"}
+            return R(
+                content="error: no stream url", media_type="text/plain", status_code=500
+            )
 
         title = row["title"]
         if season and episode:
             title += f" - S{season}E{episode}"
 
+        safe_title = (
+            re.sub(r'[<>:"/\\|?*]', "", title)
+            .encode("ascii", "replace")
+            .decode("ascii")
+        )
         m3u = f"#EXTM3U\n#EXTINF:-1,{title}\n{url}\n"
-        return Response(
-            content=m3u,
-            media_type="audio/mpegurl",
-            headers={"Content-Disposition": f'attachment; filename="{title}.m3u"'},
+        return R(
+            content=m3u.encode("utf-8"),
+            media_type="audio/mpegurl; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{safe_title}.m3u"'},
         )
     except Exception as e:
-        return {"error": str(e)}
+        return R(content=f"error: {e}", media_type="text/plain", status_code=500)
+
+
+@app.post("/api/mark_season_seen/{item_id}")
+def mark_season_seen(item_id: int):
+    row = (
+        db.get_connection()
+        .cursor()
+        .execute(
+            "SELECT latest_season, latest_episode FROM items WHERE id = ?", (item_id,)
+        )
+        .fetchone()
+    )
+    if not row:
+        return {"error": "not found"}
+    key = f"rezka_seen_{item_id}"
+    value = f"s{row['latest_season']}e{row['latest_episode']}"
+    conn = db.get_connection()
+    conn.execute(
+        "INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)", (key, value)
+    )
+    conn.commit()
+    conn.close()
+    return {"status": "success"}
+
+
+class SaveOrderRequest(BaseModel):
     order: list[int]
 
 

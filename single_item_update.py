@@ -134,6 +134,8 @@ def update_single_item(item_id):
             imdb_rating=r["imdb_rating"],
             poster_url=r["poster_url"],
             description=r["description"],
+            latest_season=r.get("latest_season", 0),
+            latest_episode=r.get("latest_episode", 0),
         )
         conn.commit()
         if not kp_id and r["kp_id"]:

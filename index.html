@@ -528,8 +528,13 @@
                                 <span class="bg-orange-500 text-white text-[8px] font-black px-1.5 py-0.5 rounded-full shadow-lg animate-pulse">NEW</span>
                             </div>
                             <!-- NEW SEASON badge for collection items -->
-                            <div v-if="item.has_new_release" class="absolute top-3 right-12 z-20">
-                                <span class="bg-emerald-500 text-white text-[7px] font-black px-1.5 py-0.5 rounded-full shadow-lg">НОВЫЙ СЕЗОН</span>
+                            <div v-if="item.has_new_release" class="absolute top-3 right-12 z-20 flex items-center gap-0.5">
+                                <span class="bg-emerald-500 text-white text-[7px] font-black px-1.5 py-0.5 rounded-full shadow-lg">
+                                    НОВЫЙ СЕЗОН
+                                    <template v-if="item.latest_season"> S{{ item.latest_season }}</template>
+                                    <template v-if="item.latest_episode">E{{ item.latest_episode }}</template>
+                                </span>
+                                <button @click.stop="markSeasonSeen(item.id)" class="w-4 h-4 bg-white rounded-full text-slate-400 hover:text-slate-700 shadow text-[8px] flex items-center justify-center" title="Отметить как просмотрено">✓</button>
                             </div>
                             
                             <!-- Центрированная кнопка "ЗАКЛАДКИ" при наведении -->
@@ -735,15 +740,13 @@
                                     </button>
                                 </div>
                             </div>
-                            <!-- External players -->
+                             <!-- External players -->
                             <div v-if="streamCurrentUrl" class="space-y-2 pt-2">
                                 <label class="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1 block">Открыть в плеере</label>
                                 <div class="flex flex-wrap gap-2">
-                                    <a :href="'vlc://' + streamCurrentUrl" class="px-3 py-2 bg-orange-500 text-white text-[10px] font-black rounded-lg hover:bg-orange-600 transition-colors shadow-sm">VLC</a>
-                                    <a :href="'intent://' + streamCurrentUrl.replace('https://', '') + '#Intent;scheme=https;package=com.nextplayer;end'" class="px-3 py-2 bg-indigo-500 text-white text-[10px] font-black rounded-lg hover:bg-indigo-600 transition-colors shadow-sm">Next Player</a>
-                                    <a :href="'intent://' + streamCurrentUrl.replace('https://', '') + '#Intent;scheme=https;package=com.mxtech.videoplayer.ad;end'" class="px-3 py-2 bg-blue-500 text-white text-[10px] font-black rounded-lg hover:bg-blue-600 transition-colors shadow-sm">MX Player</a>
-                                    <a :href="'intent://' + streamCurrentUrl.replace('https://', '') + '#Intent;scheme=https;package=org.videolan.vlc;end'" class="px-3 py-2 bg-orange-600 text-white text-[10px] font-black rounded-lg hover:bg-orange-700 transition-colors shadow-sm">VLC Android</a>
-                                    <a :href="streamM3uUrl" class="px-3 py-2 bg-slate-700 text-white text-[10px] font-black rounded-lg hover:bg-slate-800 transition-colors shadow-sm">M3U ↓</a>
+                                    <a :href="streamM3uUrl" class="px-3 py-2 bg-orange-500 text-white text-[10px] font-black rounded-lg hover:bg-orange-600 transition-colors shadow-sm">VLC (M3U)</a>
+                                    <a :href="'intent:' + streamCurrentUrl + '#Intent;type=video/mp4;end'" class="px-3 py-2 bg-indigo-500 text-white text-[10px] font-black rounded-lg hover:bg-indigo-600 transition-colors shadow-sm">Выбрать плеер</a>
+                                    <a :href="streamCurrentUrl" target="_blank" class="px-3 py-2 bg-slate-500 text-white text-[10px] font-black rounded-lg hover:bg-slate-600 transition-colors shadow-sm">В браузере</a>
                                     <button @click="copyStreamUrl" class="px-3 py-2 bg-slate-100 text-slate-700 text-[10px] font-black rounded-lg hover:bg-slate-200 transition-colors">📋 Копировать</button>
                                 </div>
                             </div>
@@ -1792,6 +1795,13 @@
                         navigator.clipboard.writeText(this.streamCurrentUrl);
                         this.showToast('URL скопирован');
                     }
+                },
+                async markSeasonSeen(itemId) {
+                    try {
+                        await this.apiFetch(`/api/mark_season_seen/${itemId}`, { method: 'POST' });
+                        const item = this.items.find(i => i.id === itemId);
+                        if (item) item.has_new_release = false;
+                    } catch (e) {}
                 }
             }
         }).mount('#app');

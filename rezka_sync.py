@@ -353,6 +353,29 @@ def _verify_candidate(rezka_obj, scored_item, year, kp_id, imdb_id):
     return is_valid, page_kp_id, page_imdb_id, current_score, reason
 
 
+def _extract_series_info(rezka_obj):
+    from HdRezkaApi.types import TVSeries
+
+    if rezka_obj.type != TVSeries or not rezka_obj.seriesInfo:
+        return 0, 0
+
+    max_season = 0
+    max_episode = 0
+    for tid, info in rezka_obj.seriesInfo.items():
+        if info.get("premium"):
+            continue
+        for s_num in info.get("seasons", {}).keys():
+            s = int(s_num)
+            if s > max_season:
+                max_season = s
+            eps = info.get("episodes", {}).get(s_num, {})
+            for e_num in eps.keys():
+                e = int(e_num)
+                if s == max_season and e > max_episode:
+                    max_episode = e
+    return max_season, max_episode
+
+
 def _extract_metadata_from_rezka(rezka_obj, kp_rating, imdb_rating):
     found_kp_rating = kp_rating
     found_imdb_rating = imdb_rating
@@ -415,6 +438,8 @@ def search_rezka_for_item(
         "poster_url": None,
         "description": None,
         "score": 0,
+        "latest_season": 0,
+        "latest_episode": 0,
     }
 
     clean_parts, search_queries = _parse_title(title)
@@ -506,6 +531,7 @@ def search_rezka_for_item(
             kp_r, imdb_r, poster, desc = _extract_metadata_from_rezka(
                 rezka_obj, kp_rating, imdb_rating
             )
+            latest_season, latest_episode = _extract_series_info(rezka_obj)
             final_res = res
             final_data = {
                 "kp_id": page_kp_id or kp_id,
@@ -515,6 +541,8 @@ def search_rezka_for_item(
                 "imdb_rating": imdb_r,
                 "poster_url": poster,
                 "description": desc,
+                "latest_season": latest_season,
+                "latest_episode": latest_episode,
             }
             break
         elif reason == "conflict":
@@ -535,6 +563,8 @@ def search_rezka_for_item(
     result["poster_url"] = final_data["poster_url"]
     result["description"] = final_data["description"]
     result["score"] = final_data["score"]
+    result["latest_season"] = final_data.get("latest_season", 0)
+    result["latest_episode"] = final_data.get("latest_episode", 0)
     return result
 
 
@@ -835,6 +865,8 @@ async def _search_rezka_batch(items, db, conn):
                             "poster_url": poster,
                             "description": desc,
                             "score": current_score,
+                            "latest_season": 0,
+                            "latest_episode": 0,
                         }
                         resolved = True
                         print(
@@ -881,6 +913,8 @@ async def _search_rezka_batch(items, db, conn):
                     poster_url=r["poster_url"],
                     description=r["description"],
                     checked_rezka=1,
+                    latest_season=r.get("latest_season", 0),
+                    latest_episode=r.get("latest_episode", 0),
                 )
                 found_count += 1
             else:
