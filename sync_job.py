@@ -1,25 +1,26 @@
-import requests
-import time
-import datetime
+import json
+import os
 import re
 import sys
-import os
+import time
 import unicodedata
-import json
-from rutor_parser import RutorParser
-from tmdb_client import TMDBClient
-from kinopoisk_client import KinopoiskClient
+
+import requests
+
 from app_core import RUTOR_CATEGORIES, VIDEO_CATEGORY_IDS, normalize_title
+from db import Database
+from kinopoisk_client import KinopoiskClient
+from logger import setup_tee_logger
+from rutor_parser import RutorParser
 from script_utils import (
-    load_config,
-    should_stop,
-    save_checkpoint,
-    load_checkpoint,
     clear_checkpoint,
     clear_stop_flag,
+    load_checkpoint,
+    load_config,
+    save_checkpoint,
+    should_stop,
 )
-from db import Database
-from logger import setup_tee_logger
+from tmdb_client import TMDBClient
 
 
 def report_progress(current, total, status_key):
@@ -42,7 +43,18 @@ SYNC_REQUEST_DELAY = _config.get("sync", {}).get("request_delay", 0.3)
 
 
 def parse_rutor_date(date_str):
-    from datetime import datetime, date, timedelta
+    """Parse a Rutor 'date' cell.
+
+    Returns an ISO 8601 string on success, or None when the input can't
+    be parsed. The previous implementation fell back to datetime.now()
+    on any error, which made unparseable releases look brand-new and
+    poisoned the cursor used by subsequent syncs (see par2_code_review.md
+    §3.3). Callers now decide explicitly what to do with None.
+    """
+    from datetime import datetime, timedelta
+
+    if not date_str:
+        return None
 
     now = datetime.now()
 
@@ -66,17 +78,13 @@ def parse_rutor_date(date_str):
         if "Сегодня" in date_str:
             t_str = date_str.replace("Сегодня", "").strip()
             h, m = map(int, t_str.split(":"))
-            return now.replace(hour=h, minute=m, second=0, microsecond=0).isoformat(
-                sep=" "
-            )
+            return now.replace(hour=h, minute=m, second=0, microsecond=0).isoformat(sep=" ")
 
         if "Вчера" in date_str:
             t_str = date_str.replace("Вчера", "").strip()
             h, m = map(int, t_str.split(":"))
             yesterday = now - timedelta(days=1)
-            return yesterday.replace(
-                hour=h, minute=m, second=0, microsecond=0
-            ).isoformat(sep=" ")
+            return yesterday.replace(hour=h, minute=m, second=0, microsecond=0).isoformat(sep=" ")
 
         parts = date_str.split()
         if len(parts) >= 3:
@@ -87,9 +95,9 @@ def parse_rutor_date(date_str):
                 year += 2000
             return datetime(year, month, day).isoformat(sep=" ")
     except Exception:
-        pass
+        return None
 
-    return now.isoformat(sep=" ")
+    return None
 
 
 CATEGORIES_TO_SYNC = [
@@ -168,15 +176,14 @@ def run_sync(mode="video", manual_min_date=None):
             continue
 
         current_target = (
-            manual_min_date
-            if manual_min_date
-            else db.get_last_release_date(category_id=cat_id)
+            manual_min_date if manual_min_date else db.get_last_release_date(category_id=cat_id)
         )
         print(f"\n--- Категория: {cat_name} (Ищем новее {current_target}) ---")
 
         page_start = resume_page if cat_id == resume_cat_id else 0
 
         all_raw_releases = []
+        empty_pages_in_a_row = 0
         for page in range(page_start, SYNC_PAGE_DEPTH):
             if should_stop(status_key):
                 save_checkpoint(
@@ -198,7 +205,10 @@ def run_sync(mode="video", manual_min_date=None):
             new_ones = []
             for r in raw:
                 rutor_dt = parse_rutor_date(r["date_str"])
-                if rutor_dt < current_target:
+                # Treat undated releases as "unknown but maybe fresh" —
+                # let them through so we don't silently drop legitimate
+                # items because of a parser glitch on Rutor's side.
+                if rutor_dt is not None and rutor_dt < current_target:
                     continue
                 if cat_id in VIDEO_CATEGORY_IDS:
                     ry = r.get("year")
@@ -209,8 +219,17 @@ def run_sync(mode="video", manual_min_date=None):
 
             all_raw_releases.extend(new_ones)
             print(f"  Стр {page}: новых (с учетом фильтров) {len(new_ones)}")
-            if len(new_ones) < len(raw) - SYNC_STOP_THRESHOLD:
-                break
+            # Stop only after two consecutive pages produced zero new
+            # releases. The old heuristic (len(new_ones) < len(raw) -
+            # SYNC_STOP_THRESHOLD) broke whenever a page had exactly
+            # `threshold` old releases — it would terminate even though
+            # the next page might still have new ones.
+            if len(new_ones) == 0:
+                empty_pages_in_a_row += 1
+                if empty_pages_in_a_row >= 2:
+                    break
+            else:
+                empty_pages_in_a_row = 0
             time.sleep(SYNC_REQUEST_DELAY)
 
         if not all_raw_releases:
@@ -230,9 +249,7 @@ def run_sync(mode="video", manual_min_date=None):
                         "current_page": page_start + SYNC_PAGE_DEPTH,
                     },
                 )
-                print(
-                    "[STOP] Graceful shutdown during item processing. Checkpoint saved."
-                )
+                print("[STOP] Graceful shutdown during item processing. Checkpoint saved.")
                 conn.close()
                 return
 
@@ -275,12 +292,8 @@ def run_sync(mode="video", manual_min_date=None):
                                 if h1:
                                     full_h1_title = h1.text.strip()
                                     if "Раздача не существует" not in full_h1_title:
-                                        display_title = parser.clean_display_title(
-                                            full_h1_title
-                                        )
-                                        print(
-                                            f"    ✨ Название уточнено: {display_title}"
-                                        )
+                                        display_title = parser.clean_display_title(full_h1_title)
+                                        print(f"    ✨ Название уточнено: {display_title}")
 
                                 if not rutor_kp_id:
                                     kp_match = re.search(
@@ -296,9 +309,7 @@ def run_sync(mode="video", manual_min_date=None):
                                         print(f"    ✅ Нашел KP ID: {rutor_kp_id}")
 
                                 if not rutor_imdb_id:
-                                    imdb_match = re.search(
-                                        r"imdb\.com/title/(tt\d+)", resp.text
-                                    )
+                                    imdb_match = re.search(r"imdb\.com/title/(tt\d+)", resp.text)
                                     if imdb_match:
                                         rutor_imdb_id = imdb_match.group(1)
                                         print(f"    ✅ Нашел IMDb ID: {rutor_imdb_id}")
@@ -310,9 +321,7 @@ def run_sync(mode="video", manual_min_date=None):
 
                     if not rutor_kp_id or not rutor_imdb_id:
                         try:
-                            search_term = (
-                                display_title.split(" / ")[0].split("/")[0].strip()
-                            )
+                            search_term = display_title.split(" / ")[0].split("/")[0].strip()
                             search_term = re.sub(r"\(.*?\)", "", search_term)
                             search_term = re.sub(r"\[.*?\]", "", search_term).strip()
 
@@ -321,15 +330,11 @@ def run_sync(mode="video", manual_min_date=None):
                             matches = [
                                 res
                                 for res in search_results
-                                if res.get("year")
-                                and year
-                                and abs(res.get("year") - year) <= 1
+                                if res.get("year") and year and abs(res.get("year") - year) <= 1
                             ]
 
                             if matches:
-                                print(
-                                    f"    🔎 Найдено в архиве: {len(matches)}. Проверяю..."
-                                )
+                                print(f"    🔎 Найдено в архиве: {len(matches)}. Проверяю...")
                                 for m_idx, m in enumerate(matches[:3]):
                                     if rutor_kp_id and rutor_imdb_id:
                                         break
@@ -345,9 +350,7 @@ def run_sync(mode="video", manual_min_date=None):
                                                 resp.text,
                                             )
                                             if not m_kp:
-                                                m_kp = re.search(
-                                                    r"film/(\d+)", resp.text
-                                                )
+                                                m_kp = re.search(r"film/(\d+)", resp.text)
                                             if m_kp:
                                                 rutor_kp_id = m_kp.group(1)
                                                 print(
@@ -405,9 +408,7 @@ def run_sync(mode="video", manual_min_date=None):
                         if tmdb_data:
                             poster = tmdb_data.get("poster_url", "")
                             desc = tmdb_data.get("description", "")
-                            if tmdb_data.get("title") and tmdb_data.get(
-                                "original_title"
-                            ):
+                            if tmdb_data.get("title") and tmdb_data.get("original_title"):
                                 new_ru = tmdb_data["title"]
                                 new_orig = tmdb_data["original_title"]
                                 if new_ru.lower() != new_orig.lower():
@@ -437,9 +438,7 @@ def run_sync(mode="video", manual_min_date=None):
                 for p in parts:
                     for pp in p.split(" / "):
                         if pp.strip():
-                            search_names.append(
-                                unicodedata.normalize("NFC", pp.strip()).lower()
-                            )
+                            search_names.append(unicodedata.normalize("NFC", pp.strip()).lower())
 
                 search_names = list(set(search_names))
                 if search_names:
@@ -466,9 +465,7 @@ def run_sync(mode="video", manual_min_date=None):
                         imdb_rating=imdb_rating,
                         title=title_norm if title_norm else None,
                     )
-                    print(
-                        f"  🔗 НАЙДЕН ДУБЛЬ: {display_title} ({year}) -> id={item_id}"
-                    )
+                    print(f"  🔗 НАЙДЕН ДУБЛЬ: {display_title} ({year}) -> id={item_id}")
                 else:
                     item_id = db.insert_item(
                         {
@@ -491,9 +488,7 @@ def run_sync(mode="video", manual_min_date=None):
                     db.insert_search_name(item_id, sn, conn=conn)
 
                 if existing_id:
-                    print(
-                        f"  🔗 НАЙДЕН ДУБЛЬ: {display_title} ({year}) -> id={item_id}"
-                    )
+                    print(f"  🔗 НАЙДЕН ДУБЛЬ: {display_title} ({year}) -> id={item_id}")
                 else:
                     print(f"  ➕ ДОБАВЛЕН: {display_title} ({year})")
 
@@ -501,11 +496,20 @@ def run_sync(mode="video", manual_min_date=None):
             for rel in movie_data["releases"]:
                 if not db.release_exists_by_rutor_id(rel["rutor_id"], conn=conn):
                     if not added_any and not is_new_item:
-                        print(
-                            f"  🔗 Добавлен новый релиз к существующему фильму: {display_title}"
-                        )
+                        print(f"  🔗 Добавлен новый релиз к существующему фильму: {display_title}")
                         added_any = True
                     rel_date = parse_rutor_date(rel["date_str"])
+                    if rel_date is None:
+                        # Storage requires a non-null date; record it but
+                        # log so a corrupt date string is observable
+                        # rather than silently filed as "now".
+                        from datetime import datetime
+
+                        rel_date = datetime.now().isoformat(sep=" ")
+                        print(
+                            f"    ⚠️  Не удалось разобрать дату '{rel.get('date_str')}', использую текущее время.",
+                            flush=True,
+                        )
                     db.insert_release(
                         {
                             "item_id": item_id,

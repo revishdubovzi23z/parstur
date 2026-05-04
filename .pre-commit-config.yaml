@@ -1,0 +1,33 @@
+# 5.2: lightweight pre-commit gate. Activates with:
+#
+#     pip install pre-commit
+#     pre-commit install
+#
+# Each commit then runs ruff + black + a few hygiene hooks on
+# whatever's staged. CI (5.3) runs the same tools on the full repo
+# so nothing falls through the cracks if a contributor skips local
+# install.
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: ["--maxkb=2048"]
+      - id: check-merge-conflict
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+
+  # ruff handles both linting (--fix) and formatting (ruff-format),
+  # so we don't run black separately. ruff-format is black-compatible
+  # by design.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+      - id: ruff-format

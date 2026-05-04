@@ -1,0 +1,45 @@
+# 5.8: convenience compose file. Builds the Dockerfile in this
+# directory, mounts a host folder for persistent state, and reads
+# the .env file at the repo root for AUTH_USER / AUTH_PASS_HASH /
+# REZKA_* / TMDB_API_KEY / KINOPOISK_API_KEY etc.
+#
+#   docker compose up --build
+#
+# Stop with:
+#
+#   docker compose down
+#
+# The first start will create ./data/ in the repo root for the
+# SQLite db, the requests-cache backend, and per-process progress
+# files. NOTHING in this directory ships in the image — the bind
+# mount is the source of truth.
+
+services:
+  par2:
+    build: .
+    image: par2:dev
+    container_name: par2
+    restart: unless-stopped
+    # Read all auth / API / rezka secrets from .env at the repo
+    # root. Compose handles missing values gracefully — the app
+    # will boot without auth and without rezka login.
+    env_file:
+      - .env
+    environment:
+      # Override paths that main.py / db.py read so they land in
+      # the persistent volume instead of the container layer.
+      APP_DATA_DIR: /data
+      DB_PATH: /data/app_data.db
+      API_CACHE_PATH: /data/api_cache.db
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/data
+    healthcheck:
+      # Mirrors the Dockerfile HEALTHCHECK so `docker compose ps`
+      # shows the same status the container engine sees.
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

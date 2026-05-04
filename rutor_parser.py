@@ -1,20 +1,26 @@
+import os
+import re
+import time
+
+import PTN
 import requests
 from bs4 import BeautifulSoup
-import PTN
-import re
-import sys
-import codecs
-import time
+
 from script_utils import load_config
 
 _config = load_config()
 RUTOR_MAX_RETRIES = _config.get("rutor", {}).get("max_retries", 3)
 RUTOR_RETRY_DELAY_BASE = _config.get("rutor", {}).get("retry_delay_base", 5)
 
+# HTTPS by default so credentials, cookies and traffic don't leak in plaintext
+# on the local network. The env var lets a user override the mirror without
+# touching code (e.g. switch to a regional clone if rutor.info is unreachable).
+RUTOR_MIRROR = os.getenv("RUTOR_MIRROR", "https://rutor.info").rstrip("/")
+
 
 class RutorParser:
     def __init__(self):
-        self.mirror = "http://rutor.info"
+        self.mirror = RUTOR_MIRROR
         self.headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
         }
@@ -51,7 +57,7 @@ class RutorParser:
                 response = requests.get(url, headers=self.headers, timeout=20)
                 response.raise_for_status()
                 break
-            except Exception as e:
+            except Exception:
                 if attempt < max_retries:
                     time.sleep(RUTOR_RETRY_DELAY_BASE * attempt)
                 else:
@@ -125,7 +131,7 @@ class RutorParser:
                 response = requests.get(url, headers=self.headers, timeout=20)
                 response.raise_for_status()
                 break
-            except Exception as e:
+            except Exception:
                 if attempt < max_retries:
                     time.sleep(RUTOR_RETRY_DELAY_BASE * attempt)
                 else:

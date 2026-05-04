@@ -1,7 +1,9 @@
 import os
 import re
 import time
+
 from dotenv import load_dotenv
+
 from api_cache import get_cached_session
 
 load_dotenv()
@@ -33,11 +35,52 @@ class TMDBClient:
             resp = self.session.get(url, params=params, timeout=5)
             if resp.status_code == 200:
                 return resp.json().get("imdb_id")
-        except Exception:
-            pass
+            # Surface non-2xx so the operator can tell when TMDB is
+            # silently dropping requests (3.18). Previously we just
+            # returned None and the caller had no way to distinguish
+            # 'no IMDb id mapped' from 'request failed'.
+            print(f"TMDB external_ids({media_type}, {tmdb_id}) -> HTTP {resp.status_code}")
+        except Exception as e:
+            print(f"TMDB external_ids({media_type}, {tmdb_id}) failed: {type(e).__name__}: {e}")
         return None
 
-    def find_by_imdb_id(self, imdb_id):
+    def get_videos(self, media_type, tmdb_id):
+        """Return TMDB /videos for a given title (8.7 trailer support).
+
+        media_type: 'movie' or 'tv'.
+        Returns: list of dicts with at least {key, name, site, type, official}.
+        Tries Russian first, falls back to English/none if empty.
+        """
+        if not self.api_key or self.is_limited or not tmdb_id:
+            return []
+        if media_type not in ("movie", "tv"):
+            return []
+        url = f"{self.base_url}/{media_type}/{tmdb_id}/videos"
+        for lang in ("ru-RU", "en-US", None):
+            params = {"api_key": self.api_key}
+            if lang:
+                params["language"] = lang
+            try:
+                time.sleep(0.1)
+                resp = self.session.get(url, params=params, timeout=5)
+                if resp.status_code in (401, 403):
+                    self.is_limited = True
+                    return []
+                if resp.status_code == 200:
+                    results = resp.json().get("results", []) or []
+                    if results:
+                        return results
+            except Exception as e:
+                print(f"TMDB get_videos({media_type},{tmdb_id},{lang}): {type(e).__name__}: {e}")
+        return []
+
+    def find_by_imdb_id(self, imdb_id, return_meta=False):
+        """Resolve imdb_id → TMDB title metadata (and optionally id+media_type).
+
+        When return_meta=True the dict additionally includes 'tmdb_id' and
+        'media_type' so callers (e.g. 8.7 trailers) can hit /videos
+        without a second search round-trip.
+        """
         if not imdb_id or self.is_limited:
             return None
         url = f"{self.base_url}/find/{imdb_id}"
@@ -54,17 +97,15 @@ class TMDBClient:
                 return None
             if response.status_code == 200:
                 data = response.json()
-                results = data.get("movie_results") or data.get("tv_results") or []
+                movie_hits = data.get("movie_results") or []
+                tv_hits = data.get("tv_results") or []
+                results = movie_hits or tv_hits
                 if results:
                     result = results[0]
                     poster_path = result.get("poster_path")
-                    poster_url = (
-                        f"{self.image_base_url}{poster_path}" if poster_path else ""
-                    )
-                    release_date = (
-                        result.get("release_date") or result.get("first_air_date") or ""
-                    )
-                    return {
+                    poster_url = f"{self.image_base_url}{poster_path}" if poster_path else ""
+                    release_date = result.get("release_date") or result.get("first_air_date") or ""
+                    out = {
                         "title": result.get("title") or result.get("name") or "",
                         "original_title": result.get("original_title")
                         or result.get("original_name")
@@ -74,6 +115,10 @@ class TMDBClient:
                         "release_date": release_date,
                         "imdb_id": imdb_id,
                     }
+                    if return_meta:
+                        out["tmdb_id"] = result.get("id")
+                        out["media_type"] = "movie" if movie_hits else "tv"
+                    return out
         except Exception as e:
             print(f"Ошибка TMDB find_by_imdb_id ({imdb_id}): {e}")
         return None
@@ -118,18 +163,12 @@ class TMDBClient:
                             continue
 
                         tmdb_id = result.get("id")
-                        res_title = (
-                            result.get("title") or result.get("name") or ""
-                        ).strip()
+                        res_title = (result.get("title") or result.get("name") or "").strip()
                         res_orig = (
-                            result.get("original_title")
-                            or result.get("original_name")
-                            or ""
+                            result.get("original_title") or result.get("original_name") or ""
                         ).strip()
                         release_date = (
-                            result.get("release_date")
-                            or result.get("first_air_date")
-                            or ""
+                            result.get("release_date") or result.get("first_air_date") or ""
                         )
                         res_year = (
                             int(release_date[:4])
@@ -152,9 +191,7 @@ class TMDBClient:
                         if alt_title:
                             our_raw.append(_norm(alt_title))
                         our_norms = set(n for n in our_raw if n)
-                        their_norms = set(
-                            n for n in [_norm(res_title), _norm(res_orig)] if n
-                        )
+                        their_norms = set(n for n in [_norm(res_title), _norm(res_orig)] if n)
 
                         title_score = 0
                         if our_norms & their_norms:
@@ -167,10 +204,7 @@ class TMDBClient:
 
                         score = year_score + title_score
 
-                        if (
-                            tmdb_id not in candidates
-                            or score > candidates[tmdb_id]["score"]
-                        ):
+                        if tmdb_id not in candidates or score > candidates[tmdb_id]["score"]:
                             candidates[tmdb_id] = {
                                 "score": score,
                                 "tmdb_id": tmdb_id,

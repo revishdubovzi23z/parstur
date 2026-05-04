@@ -1,6 +1,8 @@
 import os
 import time
+
 from dotenv import load_dotenv
+
 from base_client import BaseMovieClient
 
 load_dotenv()
@@ -36,8 +38,7 @@ class PoiskKinoClient(BaseMovieClient):
             "kp_rating": float(rating.get("kp", 0) or 0.0),
             "imdb_rating": float(rating.get("imdb", 0) or 0.0),
             "poster_url": poster.get("url") or poster.get("previewUrl", ""),
-            "description": result.get("description", "")
-            or result.get("shortDescription", ""),
+            "description": result.get("description", "") or result.get("shortDescription", ""),
             "release_date": str(result.get("year", "")),
             "title": result.get("name")
             or result.get("alternativeName")
@@ -70,9 +71,7 @@ class PoiskKinoClient(BaseMovieClient):
                 if items:
                     result = items[0]
                     if year:
-                        year_match = [
-                            f for f in items if str(f.get("year", "")) == str(year)
-                        ]
+                        year_match = [f for f in items if str(f.get("year", "")) == str(year)]
                         if year_match:
                             result = year_match[0]
 

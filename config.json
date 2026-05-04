@@ -15,7 +15,10 @@
   },
   "rezka": {
     "request_delay": 0.5,
-    "concurrency": 3
+    "concurrency": 6,
+    "score_min_with_ids": -150,
+    "score_min_without_ids": 70,
+    "score_min_resync_with_ids": -50
   },
   "rutor": {
     "max_retries": 3,
@@ -37,5 +40,11 @@
   },
   "feed": {
     "default_limit": 20
+  },
+  "cleanup": {
+    "name_similarity_strict": 0.85,
+    "name_similarity_fuzzy": 0.6,
+    "name_group_warn": 50,
+    "name_group_max": 200
   }
 }

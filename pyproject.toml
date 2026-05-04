@@ -1,0 +1,114 @@
+# 5.2: minimal pyproject.toml. The repo uses requirements.txt as the
+# install manifest; this file only configures dev tooling (ruff /
+# black / mypy / pytest) so that running them is one command and
+# editor integrations pick up consistent rules.
+
+[project]
+name = "par2"
+version = "0.1.0"
+description = "Personal media catalog & sync (rutor / hdrezka / kinopoisk / TMDB)."
+requires-python = ">=3.10"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = [
+    "__pycache__",
+    "node_modules",
+    "dist",
+    "*.db",
+    "*.sqlite",
+]
+
+[tool.ruff.lint]
+# E/W: pycodestyle, F: pyflakes, I: isort, B: flake8-bugbear,
+# UP: pyupgrade, SIM: flake8-simplify, RUF: ruff's own rules.
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF"]
+# E203  conflicts with black's slice formatting.
+# E501  long lines — codebase has plenty of legitimate long URLs / SQL.
+# E402  module imports not at top — needed where we set os.environ
+#       defaults before importing FastAPI machinery; `# noqa` on each
+#       site is more clutter than the rule is worth.
+# B008  irrelevant for FastAPI's `Depends(...)` default-argument
+#       pattern, which the codebase relies on.
+# B007  unused loop control variables — many loops legitimately use
+#       only the iteration count or for_else flow.
+# SIM102/SIM105/SIM117/SIM118 stylistic; leave the existing shape alone.
+# UP006/UP007 (PEP 585/604 typing) — staged migration; project still
+#       imports `Optional` / `List` in places.
+# RUF001/RUF002/RUF003 ambiguous unicode (Latin vs Cyrillic) — the UI
+#       and a lot of comments are intentionally Russian; these warn
+#       on every Russian word and are pure noise.
+# RUF005 collection-literal-concatenation — stylistic.
+# RUF012 mutable class defaults — used intentionally for dataclass-
+#       style configuration sentinels in a few places.
+# RUF013 implicit Optional from `arg: T = None` — staged.
+# F841  unused locals — preserved across modules from previous
+#       refactors; safe to leave but not worth a sweep right now.
+# B905  zip() without explicit strict= — codebase predates 3.10;
+#       legacy iterables are not always equal-length but historic
+#       behavior is the implicit `strict=False`.
+# SIM103 stylistic.
+ignore = [
+    "E203", "E501", "E402",
+    "B008", "B007", "B905",
+    "SIM102", "SIM103", "SIM105", "SIM117", "SIM118",
+    "UP006", "UP007",
+    "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF013",
+    "F841",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests routinely use unused imports (fixtures), star-imports for
+# convenience, and asserts. None of those are hazards in test code.
+"tests/*" = ["F401", "F403", "F811", "B011"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+# Strict mypy on the entire codebase would generate thousands of
+# untyped-call errors against requests / aiohttp / HdRezkaApi. We
+# stage adoption: the few modules listed below are run through mypy
+# (in the CI 'types' job). Everything else is intentionally NOT
+# checked yet — add files here as types get filled in.
+python_version = "3.10"
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+# Stub coverage for the project's transitive deps (HdRezkaApi,
+# requests-cache, parse-torrent-name, ...) is incomplete; without
+# this every import would explode the checker.
+ignore_missing_imports = true
+# Suppress cascading errors from untyped imports — mypy still
+# follows the import to type-check the listed modules' usage of
+# them, but it doesn't *report* errors inside those imports. This
+# is what keeps `mypy app_core.py` from drowning in db.py errors.
+follow_imports = "silent"
+no_implicit_optional = true
+# Default profile is lenient; we tighten module-by-module via
+# overrides as type coverage gets filled in.
+check_untyped_defs = false
+disallow_untyped_defs = false
+warn_return_any = false
+
+# Modules with usable type coverage today.
+[[tool.mypy.overrides]]
+module = ["script_utils"]
+disallow_untyped_defs = true
+warn_return_any = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+]
+filterwarnings = [
+    # FastAPI's @app.on_event() is deprecated (item 6.1); silence
+    # while we still use it so test output stays readable.
+    "ignore::DeprecationWarning:fastapi.*",
+]

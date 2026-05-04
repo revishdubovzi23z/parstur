@@ -1,30 +1,31 @@
-from datetime import datetime
-from typing import Optional
-import json
-import re
-import uvicorn
 import asyncio
-import os
-import subprocess
-import sys
-import signal
-import secrets
+import base64
+import csv
 import hashlib
+import io
+import json
+import os
+import re
+import secrets
+import sys
+import time
 from contextlib import asynccontextmanager
+from datetime import datetime
+
+import uvicorn
+from dotenv import load_dotenv
 from fastapi import (
     FastAPI,
-    Request,
     HTTPException,
-    Depends,
+    Request,
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel
-from app_core import RUTOR_CATEGORIES, VIDEO_CATEGORY_IDS
-from script_utils import load_config, clear_stop_flag, clear_checkpoint
+
 from db import db
-from dotenv import load_dotenv
+from script_utils import clear_checkpoint, clear_stop_flag, load_config
 
 load_dotenv()
 
@@ -76,8 +77,68 @@ task_queue = TaskQueue()
 
 AUTH_USER = os.getenv("AUTH_USER", "")
 AUTH_PASS = os.getenv("AUTH_PASS", "")
-_auth_enabled = bool(AUTH_USER and AUTH_PASS)
+# Preferred way to configure the password: a pbkdf2_sha256-encoded hash. When
+# AUTH_PASS_HASH is set we ignore AUTH_PASS for verification (but still allow
+# AUTH_PASS as a one-off fallback when the hash isn't provided so existing
+# deployments don't break). Generate a hash with:
+#
+#     python -c "import hashlib,base64,secrets,sys; pw=sys.argv[1]; \
+#       salt=secrets.token_bytes(16); \
+#       h=hashlib.pbkdf2_hmac('sha256', pw.encode(), salt, 600_000); \
+#       print('pbkdf2_sha256$600000$'+base64.b64encode(salt).decode()+'$' \
+#             +base64.b64encode(h).decode())" 'your-password'
+AUTH_PASS_HASH = os.getenv("AUTH_PASS_HASH", "")
+_auth_enabled = bool(AUTH_USER) and bool(AUTH_PASS or AUTH_PASS_HASH)
+
+# Map token -> Unix-epoch expiry timestamp. We use a sliding 7-day TTL so a
+# user who keeps using the app stays logged in indefinitely, but a token that
+# was issued and never used past 7 days becomes invalid.
+SESSION_TTL_SECONDS = 7 * 24 * 60 * 60
 _session_tokens: dict[str, float] = {}
+
+
+def _verify_password(plaintext: str) -> bool:
+    """Return True if plaintext matches the configured password.
+
+    Verification is constant-time. AUTH_PASS_HASH (pbkdf2_sha256) takes
+    precedence; AUTH_PASS plaintext is used as a fallback for backward
+    compatibility.
+    """
+    if AUTH_PASS_HASH:
+        try:
+            algo, iter_str, salt_b64, hash_b64 = AUTH_PASS_HASH.split("$", 3)
+        except ValueError:
+            return False
+        if algo != "pbkdf2_sha256":
+            return False
+        try:
+            iterations = int(iter_str)
+        except ValueError:
+            return False
+        try:
+            salt = base64.b64decode(salt_b64)
+            expected = base64.b64decode(hash_b64)
+        except Exception:
+            return False
+        actual = hashlib.pbkdf2_hmac("sha256", plaintext.encode("utf-8"), salt, iterations)
+        return secrets.compare_digest(actual, expected)
+    if AUTH_PASS:
+        return secrets.compare_digest(plaintext.encode("utf-8"), AUTH_PASS.encode("utf-8"))
+    return False
+
+
+def _check_token(token: str) -> bool:
+    """Return True if token is known and not expired; refresh sliding TTL."""
+    expiry = _session_tokens.get(token)
+    if expiry is None:
+        return False
+    now = time.time()
+    if now > expiry:
+        _session_tokens.pop(token, None)
+        return False
+    # Sliding refresh — every successful check pushes the expiry forward.
+    _session_tokens[token] = now + SESSION_TTL_SECONDS
+    return True
 
 
 def _check_auth(request: Request) -> bool:
@@ -85,9 +146,7 @@ def _check_auth(request: Request) -> bool:
         return True
     auth = request.headers.get("Authorization", "")
     if auth.startswith("Bearer "):
-        token = auth[7:]
-        if token in _session_tokens:
-            return True
+        return _check_token(auth[7:])
     return False
 
 
@@ -101,7 +160,109 @@ async def require_auth(request: Request):
     )
 
 
-app = FastAPI(title="Tracker Filter")
+# 6.3 — captured during the lifespan startup hook so worker threads
+# (run_in_executor callbacks) can schedule coroutines back onto the
+# main loop with asyncio.run_coroutine_threadsafe(coro, _main_loop).
+# In a worker thread asyncio.get_event_loop() returns a *different*
+# loop (or a new one in 3.12+), so it cannot be used for that.
+_main_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _broadcast_threadsafe(message: dict) -> None:
+    """Schedule ws_manager.broadcast on the main loop from any thread.
+
+    Safe to call from worker threads spawned by `run_in_executor` —
+    grabs `_main_loop` (captured in lifespan startup) and submits the
+    coroutine cross-thread. If the loop hasn't been captured yet
+    (e.g. broadcast attempted before startup completed), silently
+    drops the message rather than raising.
+    """
+    if _main_loop is None or _main_loop.is_closed():
+        return
+    try:
+        asyncio.run_coroutine_threadsafe(ws_manager.broadcast(message), _main_loop)
+    except Exception as e:
+        print(f"[WS] threadsafe broadcast failed: {type(e).__name__}: {e}")
+
+
+# 6.1 — replaces the deprecated @app.on_event("startup"/"shutdown")
+# decorators with a single lifespan async context manager. The body
+# above the `yield` is the startup phase; the body below `yield` is
+# shutdown. The body references names defined later in the module
+# (task_queue, _wal_checkpoint_task, running_processes, _init_rezka_session)
+# — Python resolves these at call time (during ASGI startup), so the
+# forward references are fine.
+@asynccontextmanager
+async def lifespan(_app):
+    # ── startup ────────────────────────────────────────────────────
+    print("[SERVER] Startup event triggered")
+    # 6.3 — capture the running loop so threads spawned via
+    # run_in_executor can schedule coroutines back on it via
+    # asyncio.run_coroutine_threadsafe.
+    global _main_loop
+    _main_loop = asyncio.get_running_loop()
+    # Make sure the DB schema is up-to-date on every boot. Both
+    # init_schema (CREATE TABLE IF NOT EXISTS) and check_and_migrate_schema
+    # are idempotent; together they cover both fresh databases and
+    # installs whose schema predates a recently-added migration
+    # (e.g. filter_rules / audit_log added in 0002, tmdb_id in 0003).
+    # Running schema setup inside the FastAPI lifespan instead of at
+    # module import time means any DAO call that hits a new table
+    # will see it on the very first request after upgrade.
+    try:
+        db.init_schema()
+        db.check_and_migrate_schema()
+    except Exception as e:
+        print(f"[DB] schema init failed: {type(e).__name__}: {e}")
+    task_queue.start()
+    try:
+        db.ensure_fts_indexed()
+    except Exception as e:
+        print(f"[FTS5] Index init skipped: {e}")
+    # Run one checkpoint at boot so the *previous* run's WAL is reaped
+    # immediately rather than waiting WAL_CHECKPOINT_INTERVAL_SECONDS.
+    try:
+        await asyncio.to_thread(db.wal_checkpoint, "TRUNCATE")
+    except Exception as e:
+        print(f"[WAL] startup checkpoint skipped: {type(e).__name__}: {e}")
+    global _wal_checkpoint_task
+    _wal_checkpoint_task = asyncio.create_task(_wal_checkpoint_loop())
+    # 6.2 — get_running_loop() is the modern, non-deprecated way; it
+    # raises if called outside an async context (good — we are inside
+    # one here) instead of get_event_loop()'s creates-a-loop fallback.
+    await asyncio.get_running_loop().run_in_executor(None, _init_rezka_session)
+
+    yield
+
+    # ── shutdown ───────────────────────────────────────────────────
+    print("[SERVER] Shutdown event triggered")
+    if _wal_checkpoint_task is not None:
+        _wal_checkpoint_task.cancel()
+        try:
+            await _wal_checkpoint_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        _wal_checkpoint_task = None
+    config = load_config()
+    graceful_timeout = config.get("shutdown", {}).get("graceful_timeout", 5)
+    for key, proc in running_processes.items():
+        if key in ("active_pipeline_proc", "active_pipeline_key"):
+            continue
+        if proc and proc.returncode is None:
+            print(f"[SHUTDOWN] Writing stop flag for: {key}")
+            with open(f"stop_{key}.flag", "w") as f:
+                f.write("stop")
+    await asyncio.sleep(min(graceful_timeout, 2))
+    for key, proc in running_processes.items():
+        if key in ("active_pipeline_proc", "active_pipeline_key"):
+            continue
+        if proc and proc.returncode is None:
+            print(f"[SHUTDOWN] Force terminating: {key}")
+            proc.terminate()
+    task_queue.stop()
+
+
+app = FastAPI(title="Tracker Filter", lifespan=lifespan)
 
 
 class ConnectionManager:
@@ -117,14 +278,25 @@ class ConnectionManager:
             self.active.remove(ws)
 
     async def broadcast(self, message: dict):
-        to_remove = []
-        for ws in self.active:
-            try:
-                await ws.send_json(message)
-            except Exception:
-                to_remove.append(ws)
-        for ws in to_remove:
-            self.disconnect(ws)
+        # 6.4 — fan out send_json calls in parallel via asyncio.gather.
+        # Previously this was a sequential `for ws in self.active: await
+        # ws.send_json(...)` loop; a slow/disconnected client would
+        # block every other client behind it (the WS spec doesn't time
+        # out send_json, the kernel buffers do, and a TCP send to a
+        # half-closed socket can sit for ~minutes). Fanning out keeps
+        # broadcast latency at max(slowest client) rather than
+        # sum(all clients). return_exceptions=True so a single failing
+        # client doesn't abort the whole gather.
+        if not self.active:
+            return
+        sockets = list(self.active)
+        results = await asyncio.gather(
+            *(ws.send_json(message) for ws in sockets),
+            return_exceptions=True,
+        )
+        for ws, result in zip(sockets, results, strict=True):
+            if isinstance(result, BaseException):
+                self.disconnect(ws)
 
 
 ws_manager = ConnectionManager()
@@ -155,26 +327,114 @@ def _init_rezka_session():
         rezka_session = None
 
 
+# 6.7 — re-login detection.
+#
+# Rezka quietly invalidates the cookie when (a) the session expires
+# from inactivity (~weeks) or (b) the same account logs in from
+# another device. Symptoms: the GET / POST returns either 401, 302
+# back to /login, or 200 with the public login-popup HTML. None of
+# these raise a Python exception, so the previous code happily
+# treated a logged-out session as "everything is fine" and silently
+# dropped favorites.
+#
+# `_rezka_session_dead` sniffs a response and decides whether the
+# cookie is still good; `_rezka_request` is a tiny wrapper around
+# requests.get/post that, on detected logout, calls
+# `_init_rezka_session()` once to re-login and retries the original
+# request with the fresh cookies. Subsequent failures fall through
+# to the caller — re-login should be cheap, but spinning on it is
+# never useful.
+_REZKA_LOGIN_MARKERS = (
+    b"b-loginpopup",
+    b"forgot_password",
+    b'name="login_name"',
+    b'id="login_email"',
+)
+
+
+def _rezka_session_dead(resp) -> bool:
+    """Return True if `resp` looks like rezka has logged us out."""
+    if resp is None:
+        return False
+    # 401/403 are the obvious "auth required" markers.
+    if resp.status_code in (401, 403):
+        return True
+    # rezka.ag uses a 302 to /login.html for some auth-required
+    # endpoints (e.g. /favorites/). Without follow_redirects the
+    # status will be 302; with follow_redirects it'll be 200 but
+    # the URL will end at /login.html — both checked.
+    location = (resp.headers.get("Location") or "").lower()
+    final_url = (getattr(resp, "url", "") or "").lower()
+    if any(needle in location for needle in ("/login", "/auth")):
+        return True
+    if any(needle in final_url for needle in ("/login.html", "/auth")):
+        return True
+    # Content sniff: the public login popup ships these markers, the
+    # logged-in HTML does not. Avoid false positives by checking the
+    # body length is non-trivial first.
+    body = resp.content or b""
+    if len(body) >= 256 and any(m in body for m in _REZKA_LOGIN_MARKERS):
+        # The favorites page itself doesn't ship these markers when
+        # logged in; if we see them on /favorites/ the session is
+        # gone.
+        return True
+    return False
+
+
+def _rezka_request(method: str, url: str, **kwargs):
+    """requests.request(...) with one transparent re-login retry.
+
+    Caller should pass `cookies=rezka_session.cookies` themselves —
+    the helper updates them in-place after a successful re-login.
+    Returns the final response (whether or not retry happened) or
+    None when no rezka_session is configured.
+    """
+    if rezka_session is None:
+        return None
+    import requests as _req
+
+    resp = _req.request(method, url, **kwargs)
+    if not _rezka_session_dead(resp):
+        return resp
+    print(f"[REZKA] session looks dead (status={resp.status_code}, url={url}); re-login")
+    try:
+        _init_rezka_session()
+    except Exception as e:
+        print(f"[REZKA] re-login failed: {type(e).__name__}: {e}")
+        return resp
+    if rezka_session is None:
+        # Re-login itself failed (e.g. credentials wrong now).
+        return resp
+    # Refresh the caller's cookie jar reference so the retry has
+    # the new auth cookie.
+    kwargs["cookies"] = rezka_session.cookies
+    return _req.request(method, url, **kwargs)
+
+
 def _refresh_rezka_folders_cache():
     global rezka_session_folders_cache
     if not rezka_session:
         return
     try:
         import re as _re
-        import requests as _req
+
         from bs4 import BeautifulSoup as _BS
+
         from app_core import normalize_title
 
-        resp = _req.get(
+        resp = _rezka_request(
+            "GET",
             "https://rezka.ag/favorites/",
             headers={"User-Agent": "Mozilla/5.0"},
             cookies=rezka_session.cookies,
             timeout=15,
         )
+        if resp is None:
+            return
         soup = _BS(resp.content, "html.parser")
-        sidebar = soup.find(
-            "div", class_="b-favorites_content__sidebarbar"
-        ) or soup.find("div", class_="b-favorites_content__sidebar")
+        sidebar = soup.find("div", class_="b-favorites_content__sidebarbar") or soup.find(
+            "div", class_="b-favorites_content__sidebar"
+        )
         folders = {}
         if sidebar:
             for a in sidebar.find_all("a", href=True):
@@ -194,7 +454,15 @@ def _refresh_rezka_folders_cache():
 
 
 @app.websocket("/ws")
-async def websocket_endpoint(ws: WebSocket):
+async def websocket_endpoint(ws: WebSocket, token: str | None = None):
+    # WebSocket upgrades bypass HTTP middleware, so we must enforce auth here
+    # ourselves when it is enabled. Token is passed as a query parameter
+    # because browsers do not allow setting custom headers on WebSocket open.
+    if _auth_enabled and (not token or not _check_token(token)):
+        # 4401 is an application-defined close code in the 4000-4999 range
+        # reserved for app use; we use it to mean "unauthenticated".
+        await ws.close(code=4401)
+        return
     await ws_manager.connect(ws)
     try:
         progress = {}
@@ -212,10 +480,12 @@ async def websocket_endpoint(ws: WebSocket):
 
 
 def _read_progress(key):
+    if not _is_valid_status_key(key):
+        return {"current": 0, "total": 0}
     p_file = f"progress_{key}.json"
     if os.path.exists(p_file):
         try:
-            with open(p_file, "r") as f:
+            with open(p_file) as f:
                 return json.load(f)
         except Exception:
             return {"current": 0, "total": 0}
@@ -227,18 +497,128 @@ async def login(request: Request):
     if not _auth_enabled:
         return {"token": "none", "auth_enabled": False}
     body = await request.json()
-    user = body.get("username", "")
-    password = body.get("password", "")
-    if user == AUTH_USER and password == AUTH_PASS:
+    user = body.get("username", "") or ""
+    password = body.get("password", "") or ""
+    # Constant-time on both username and password to avoid leaking whether
+    # the username is correct via timing.
+    user_ok = secrets.compare_digest(user.encode("utf-8"), AUTH_USER.encode("utf-8"))
+    pass_ok = _verify_password(password)
+    if user_ok and pass_ok:
         token = secrets.token_hex(32)
-        _session_tokens[token] = True
+        _session_tokens[token] = time.time() + SESSION_TTL_SECONDS
         return {"token": token, "auth_enabled": True}
     raise HTTPException(status_code=401, detail="Invalid credentials")
+
+
+@app.post("/api/logout")
+async def logout(request: Request):
+    """Invalidate the bearer token from the request, if any.
+
+    Always returns 200 — even if the token was unknown, expired or missing —
+    so callers can use this as a fire-and-forget on the way out.
+    """
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        _session_tokens.pop(auth[7:], None)
+    return {"ok": True}
 
 
 @app.get("/api/auth_status")
 async def auth_status():
     return {"auth_enabled": _auth_enabled}
+
+
+# 6.5 — liveness + readiness probe.
+#
+# Designed for Docker HEALTHCHECK, k8s probes, and uptime monitors.
+# Returns 200 with {ok: true, ...} when the process is alive AND the
+# SQLite database is reachable; returns 503 with the failure reason
+# when the DB ping fails. Intentionally exempt from auth (see
+# auth_middleware) so probes work with or without `AUTH_USER` set.
+#
+# The DB ping is a parameter-less `SELECT 1` wrapped in
+# `asyncio.to_thread` so we don't block the event loop on a slow
+# disk. The check intentionally does NOT touch any user data — it
+# only proves that the connection pool / WAL / schema are usable.
+@app.get("/health")
+async def health():
+    db_ok = True
+    db_error: str | None = None
+    user_version: int | None = None
+    try:
+
+        def _ping() -> int:
+            with db._conn() as c:
+                _ = c.execute("SELECT 1").fetchone()
+                return int(c.execute("PRAGMA user_version").fetchone()[0])
+
+        user_version = await asyncio.to_thread(_ping)
+    except Exception as e:
+        db_ok = False
+        db_error = f"{type(e).__name__}: {e}"
+
+    payload: dict = {
+        "ok": db_ok,
+        "service": "par2",
+        "db": {"ok": db_ok, "user_version": user_version},
+        "queue": {
+            "size": task_queue.queue.qsize() if task_queue.queue else 0,
+            "worker_active": (
+                task_queue.worker_task is not None and not task_queue.worker_task.done()
+            ),
+        },
+    }
+    if db_error:
+        payload["db"]["error"] = db_error
+    return JSONResponse(payload, status_code=200 if db_ok else 503)
+
+
+# Single Content-Security-Policy and a small set of supporting headers.
+# Notes on the policy:
+#   * The frontend is a single index.html that pulls Vue 3, Tailwind Play
+#     and SortableJS straight off public CDNs, so script-src has to allow
+#     those origins and 'unsafe-eval' (Vue runtime templates + Tailwind
+#     play compile JS at runtime) and 'unsafe-inline' (Tailwind injects
+#     <style> tags).
+#   * Posters come from arbitrary external hosts (TMDB, Kinopoisk, Rezka)
+#     so img-src has to allow https: and data:.
+#   * connect-src has to allow ws:/wss: for the /ws endpoint, plus any
+#     same-origin XHRs.
+#   * frame-ancestors 'none' replicates X-Frame-Options: DENY in modern
+#     browsers; we send both for compatibility.
+_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' "
+    "https://unpkg.com https://cdn.tailwindcss.com https://cdn.jsdelivr.net; "
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+    "font-src 'self' https://fonts.gstatic.com; "
+    "img-src 'self' data: https:; "
+    "media-src 'self' blob: https:; "
+    "connect-src 'self' ws: wss: https:; "
+    "frame-src 'self' https://www.youtube.com https://www.youtube-nocookie.com; "
+    "worker-src 'self' blob:; "
+    "frame-ancestors 'none'; "
+    "base-uri 'self'; "
+    "form-action 'self'"
+)
+_SECURITY_HEADERS = {
+    "Content-Security-Policy": _CSP,
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "same-origin",
+    "Permissions-Policy": (
+        "geolocation=(), camera=(), microphone=(), payment=(), usb=(), interest-cohort=()"
+    ),
+}
+
+
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    response = await call_next(request)
+    for header, value in _SECURITY_HEADERS.items():
+        # Don't clobber a header set explicitly by an endpoint.
+        response.headers.setdefault(header, value)
+    return response
 
 
 @app.middleware("http")
@@ -248,7 +628,13 @@ async def auth_middleware(request: Request, call_next):
     path = request.url.path
     if path in (
         "/api/login",
+        "/api/logout",
         "/api/auth_status",
+        # 6.5 — /health is intentionally unauthenticated so that
+        # liveness/readiness probes (Docker HEALTHCHECK, k8s, uptime
+        # monitors) work even with auth turned on. The endpoint
+        # discloses only whether the DB is reachable, no row data.
+        "/health",
         "/",
         "/manifest.json",
         "/icon.png",
@@ -261,49 +647,53 @@ async def auth_middleware(request: Request, call_next):
     return await call_next(request)
 
 
-@app.on_event("startup")
-async def startup_event():
-    print("[SERVER] Startup event triggered")
-    task_queue.start()
-    try:
-        db.ensure_fts_indexed()
-    except Exception as e:
-        print(f"[FTS5] Index init skipped: {e}")
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, _init_rezka_session)
+# Periodic SQLite WAL checkpoint (4.1).
+# In WAL mode, every committed write goes into <db>-wal first and is
+# only folded back into the main file by the auto-checkpoint heuristic
+# (default ~1000 frames, ~4 MB). Long sync / reprocess runs commit
+# faster than auto-checkpoint can drain, so the WAL sidecar can grow
+# to hundreds of MB and stay that big until restart. Forcing a
+# TRUNCATE checkpoint at startup and on a slow timer pins the WAL to
+# zero bytes between bursts.
+WAL_CHECKPOINT_INTERVAL_SECONDS = 30 * 60  # 30 minutes
+_wal_checkpoint_task: asyncio.Task | None = None
 
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    print("[SERVER] Shutdown event triggered")
-    config = load_config()
-    graceful_timeout = config.get("shutdown", {}).get("graceful_timeout", 5)
-    for key, proc in running_processes.items():
-        if key in ("active_pipeline_proc", "active_pipeline_key"):
-            continue
-        if proc and proc.returncode is None:
-            print(f"[SHUTDOWN] Writing stop flag for: {key}")
-            with open(f"stop_{key}.flag", "w") as f:
-                f.write("stop")
-    await asyncio.sleep(min(graceful_timeout, 2))
-    for key, proc in running_processes.items():
-        if key in ("active_pipeline_proc", "active_pipeline_key"):
-            continue
-        if proc and proc.returncode is None:
-            print(f"[SHUTDOWN] Force terminating: {key}")
-            proc.terminate()
-    task_queue.stop()
+async def _wal_checkpoint_loop() -> None:
+    while True:
+        await asyncio.sleep(WAL_CHECKPOINT_INTERVAL_SECONDS)
+        try:
+            busy, log_pages, ckpt_pages = await asyncio.to_thread(db.wal_checkpoint, "TRUNCATE")
+            if busy:
+                # A long-running reader/writer held the WAL; not fatal,
+                # the next tick will retry. Worth logging once so the
+                # operator knows why the sidecar didn't shrink.
+                print(f"[WAL] checkpoint busy (log_pages={log_pages}, checkpointed={ckpt_pages})")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            print(f"[WAL] checkpoint error: {type(e).__name__}: {e}")
 
 
 @app.get("/api/debug/queue")
 async def debug_queue():
-    """Отладочный эндпоинт для проверки состояния очереди."""
-    loop = asyncio.get_event_loop()
+    """Отладочный эндпоинт для проверки состояния очереди.
+
+    Выдаёт состояние очереди задач и `process_status` — это потенциально
+    чувствительная инфо (внутренние ключи, состояние worker-а), поэтому
+    эндпоинт доступен только при включённой авторизации (HTTP-middleware
+    в этом случае требует Bearer-токен; без auth эндпоинт не существует).
+    """
+    if not _auth_enabled:
+        raise HTTPException(status_code=404)
+    # 6.2 — inside a coroutine, asyncio.get_running_loop() is the
+    # modern API; get_event_loop() is deprecated and on Python 3.12+
+    # may create a brand-new loop if none is set.
+    loop = asyncio.get_running_loop()
     return {
         "loop_type": str(type(loop)),
         "queue_size": task_queue.queue.qsize(),
-        "worker_active": task_queue.worker_task is not None
-        and not task_queue.worker_task.done(),
+        "worker_active": task_queue.worker_task is not None and not task_queue.worker_task.done(),
         "process_status": process_status,
     }
 
@@ -319,9 +709,40 @@ def get_manifest():
     return FileResponse("manifest.json")
 
 
+def _sw_version() -> str:
+    """Build a cache-bust token for the service worker.
+
+    Hashes (mtime, size) of index.html + sw.js + manifest.json so any
+    deploy-time change to those files yields a new SW body and the
+    browser re-installs the worker (which clears prior caches in the
+    activate handler — see sw.js:24).
+    """
+    parts: list[str] = []
+    for fname in ("index.html", "sw.js", "manifest.json"):
+        try:
+            st = os.stat(fname)
+            parts.append(f"{fname}:{int(st.st_mtime)}:{st.st_size}")
+        except OSError:
+            parts.append(f"{fname}:missing")
+    return hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()[:12]
+
+
 @app.get("/sw.js")
 def get_sw():
-    return FileResponse("sw.js")
+    # 7.1 — substitute __SW_VERSION__ at request time so each deploy
+    # produces a different sw.js body (different bytes -> browser
+    # reinstalls the worker -> activate handler purges old caches).
+    try:
+        with open("sw.js", encoding="utf-8") as f:
+            body = f.read()
+    except OSError:
+        return JSONResponse({"error": "sw.js missing"}, status_code=500)
+    body = body.replace("__SW_VERSION__", _sw_version())
+    return HTMLResponse(
+        content=body,
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-cache, max-age=0"},
+    )
 
 
 @app.get("/icon.png")
@@ -331,42 +752,51 @@ def get_icon():
     return FileResponse("static/icon.png")
 
 
-# Состояние процессов: храним реальные объекты Popen
-running_processes = {
-    "sync_video": None,
-    "sync_other": None,
-    "fix": None,
-    "reprocess": None,
-    "user": None,
-    "cleanup": None,
-    "rezka": None,
-    "full_pipeline": None,
-    "single_update": None,
-    "active_pipeline_proc": None,
-    "active_pipeline_key": None,
-}
-process_status = {
-    "sync_video": "idle",
-    "sync_other": "idle",
-    "fix": "idle",
-    "poiskkino": "idle",
-    "reprocess": "idle",
-    "user": "idle",
-    "cleanup": "idle",
-    "rezka": "idle",
-    "rezka_collections": "idle",
-    "full_pipeline": "idle",
-    "single_update": "idle",
-}
+# Single source of truth for every background-process key the app knows
+# about. running_processes (real Popen objects) and process_status (idle /
+# queued / running / done / error) are both derived from this tuple so the
+# two dicts can never drift out of sync — previously running_processes was
+# missing 'poiskkino' and 'rezka_collections' even though both endpoints
+# wrote to it on start.
+#
+# active_pipeline_* are sentinel slots inside running_processes only; they
+# don't carry a status and aren't a "process key".
+PROCESS_KEYS: tuple[str, ...] = (
+    "sync_video",
+    "sync_other",
+    "fix",
+    "poiskkino",
+    "reprocess",
+    "user",
+    "cleanup",
+    "rezka",
+    "rezka_collections",
+    "full_pipeline",
+    "single_update",
+)
+
+running_processes: dict = {key: None for key in PROCESS_KEYS}
+running_processes["active_pipeline_proc"] = None
+running_processes["active_pipeline_key"] = None
+
+process_status: dict[str, str] = {key: "idle" for key in PROCESS_KEYS}
+
+# Whitelist of valid status keys, used to guard endpoints/IO that build
+# paths from a key (stop_<key>.flag, progress_<key>.json, etc.). Anything
+# outside this set must be rejected to prevent path traversal via
+# /api/stop/{key}.
+VALID_STATUS_KEYS = frozenset(PROCESS_KEYS)
 pipeline_stop_requested = False
+
+
+def _is_valid_status_key(key: str) -> bool:
+    return isinstance(key, str) and key in VALID_STATUS_KEYS
 
 
 async def run_script(script_name, status_key):
     global process_status, running_processes
     process_status[status_key] = "running"
-    await ws_manager.broadcast(
-        {"type": "status", "key": status_key, "value": "running"}
-    )
+    await ws_manager.broadcast({"type": "status", "key": status_key, "value": "running"})
 
     progress_file = f"progress_{status_key}.json"
     if os.path.exists(progress_file):
@@ -389,9 +819,7 @@ async def run_script(script_name, status_key):
         "STATUS_KEY": status_key,
     }
     try:
-        proc = await asyncio.create_subprocess_exec(
-            sys.executable, script_path, env=env
-        )
+        proc = await asyncio.create_subprocess_exec(sys.executable, script_path, env=env)
         running_processes[status_key] = proc
         await proc.wait()
         process_status[status_key] = "completed" if proc.returncode == 0 else "stopped"
@@ -453,9 +881,7 @@ async def run_pipeline_task():
 
             # Если шаг был остановлен или упал с ошибкой - прерываем цепочку
             if process_status[key] in ["stopped", "error"]:
-                print(
-                    f"Шаг {key} завершился со статусом {process_status[key]}. Прерываю цикл."
-                )
+                print(f"Шаг {key} завершился со статусом {process_status[key]}. Прерываю цикл.")
                 break
 
         if pipeline_stop_requested:
@@ -487,9 +913,7 @@ async def start_sync_video(
 
     log_file = "sync_video_log.txt"
     with open(log_file, "w", encoding="utf-8") as f:
-        f.write(
-            f"=== Запуск парсинга ВИДЕО ({datetime.now().strftime('%H:%M:%S')}) ===\n"
-        )
+        f.write(f"=== Запуск парсинга ВИДЕО ({datetime.now().strftime('%H:%M:%S')}) ===\n")
         if min_date:
             f.write(f"Ручная дата начала: {min_date}\n")
         if min_year:
@@ -517,9 +941,7 @@ async def start_sync_other(
 
     log_file = "sync_other_log.txt"
     with open(log_file, "w", encoding="utf-8") as f:
-        f.write(
-            f"=== Запуск парсинга ИГР и СОФТА ({datetime.now().strftime('%H:%M:%S')}) ===\n"
-        )
+        f.write(f"=== Запуск парсинга ИГР и СОФТА ({datetime.now().strftime('%H:%M:%S')}) ===\n")
         if min_date:
             f.write(f"Ручная дата начала: {min_date}\n")
 
@@ -538,9 +960,7 @@ async def run_script_with_args(
 ):
     global process_status, running_processes
     process_status[status_key] = "running"
-    await ws_manager.broadcast(
-        {"type": "status", "key": status_key, "value": "running"}
-    )
+    await ws_manager.broadcast({"type": "status", "key": status_key, "value": "running"})
 
     start_time = datetime.now()
     last_progress_broadcast = 0
@@ -616,7 +1036,11 @@ async def run_script_with_args(
                         }
                     )
 
-                    now = asyncio.get_event_loop().time()
+                    # 6.2 — `time.monotonic()` is exactly what
+                    # `loop.time()` returns under the hood (see
+                    # asyncio source) and avoids the deprecated
+                    # `get_event_loop()` call here.
+                    now = time.monotonic()
                     if now - last_progress_broadcast > 1.0:
                         last_progress_broadcast = now
                         prog = _read_progress(status_key)
@@ -689,7 +1113,7 @@ async def run_script_with_args(
         total_items = 0
         if os.path.exists(progress_file):
             try:
-                with open(progress_file, "r") as f:
+                with open(progress_file) as f:
                     data = json.load(f)
                     items_processed = data.get("current", 0)
                     total_items = data.get("total", 0)
@@ -716,18 +1140,18 @@ async def start_sync_rezka():
 
     log_file = "sync_rezka_log.txt"
     with open(log_file, "w", encoding="utf-8") as f:
-        f.write(
-            f"=== Запуск синхронизации REZKA ({datetime.now().strftime('%H:%M:%S')}) ===\n"
-        )
+        f.write(f"=== Запуск синхронизации REZKA ({datetime.now().strftime('%H:%M:%S')}) ===\n")
 
-    await task_queue.add_task(
-        run_script_with_args, "rezka", "rezka_sync.py", [], "rezka", log_file
-    )
+    await task_queue.add_task(run_script_with_args, "rezka", "rezka_sync.py", [], "rezka", log_file)
     return {"status": "started"}
 
 
 @app.post("/api/start_cleanup")
 async def start_cleanup():
+    # cleanup_duplicates rewrites items/releases/collection_items and may
+    # delete rows; it must never run alongside another job (e.g. sync_job
+    # or reprocess_database) that mutates the same tables.
+    check_any_running()
     log_file = "cleanup_log.txt"
     with open(log_file, "w", encoding="utf-8") as f:
         f.write("=== Запуск очистки дубликатов ===\n")
@@ -739,12 +1163,16 @@ async def start_cleanup():
         "cleanup",
         log_file,
     )
+    return {"status": "started"}
 
 
 @app.post("/api/start_rezka_collections")
 async def start_rezka_collections():
-    if check_any_running():
-        raise HTTPException(400, "Другой процесс уже запущен")
+    # check_any_running() raises HTTPException itself when something is busy
+    # and returns None otherwise; calling it as a boolean was misleading
+    # (the if branch only ever fired through the raised exception inside
+    # check_any_running, never via the truthiness check). Call it directly.
+    check_any_running()
     log_file = "rezka_collections_log.txt"
     with open(log_file, "w", encoding="utf-8") as f:
         f.write("=== Синхронизация коллекций Rezka ===\n")
@@ -763,13 +1191,16 @@ async def start_rezka_collections():
 async def stop_process(key: str):
     global pipeline_stop_requested
 
+    if not _is_valid_status_key(key):
+        raise HTTPException(status_code=400, detail="Unknown process key")
+
     config = load_config()
     graceful_timeout = config.get("shutdown", {}).get("graceful_timeout", 5)
 
     if key == "full_pipeline":
         pipeline_stop_requested = True
         active_key = running_processes.get("active_pipeline_key")
-        if active_key:
+        if active_key and _is_valid_status_key(active_key):
             with open(f"stop_{active_key}.flag", "w") as f:
                 f.write("stop")
         proc = running_processes.get("active_pipeline_proc")
@@ -818,9 +1249,7 @@ async def start_fix_poisk():
 
     log_file = "fix_poiskkino_log.txt"
     with open(log_file, "w", encoding="utf-8") as f:
-        f.write(
-            f"=== Поиск (PoiskKino API) {datetime.now().strftime('%H:%M:%S')} ===\n"
-        )
+        f.write(f"=== Поиск (PoiskKino API) {datetime.now().strftime('%H:%M:%S')} ===\n")
     await task_queue.add_task(
         run_script_with_args,
         "poiskkino",
@@ -838,9 +1267,7 @@ async def start_reprocess(force: bool = False):
 
     log_file = "reprocess_log.txt"
     with open(log_file, "w", encoding="utf-8") as f:
-        f.write(
-            f"=== Полное обновление базы {datetime.now().strftime('%H:%M:%S')} ===\n"
-        )
+        f.write(f"=== Полное обновление базы {datetime.now().strftime('%H:%M:%S')} ===\n")
 
     args = []
     if force:
@@ -884,7 +1311,7 @@ def get_process_status():
         p_file = f"progress_{key}.json"
         if os.path.exists(p_file):
             try:
-                with open(p_file, "r") as f:
+                with open(p_file) as f:
                     progress[key] = json.load(f)
             except Exception:
                 progress[key] = {"current": 0, "total": 0}
@@ -992,13 +1419,142 @@ def delete_collection(id: int):
     return {"status": "success"}
 
 
+# 8.2 — collections export/import.
+#
+# Two formats:
+#   * JSON (default) — full structure, preserves added_at, sort_order
+#     and all item identifiers. Round-trips losslessly.
+#   * CSV — flat (collection_name, kp_id, imdb_id, rezka_url, title,
+#     original_title, year, added_at, sort_order). Easier to edit by
+#     hand or pipe through a spreadsheet; still re-importable.
+#
+# Items are referenced by external identity (kp_id / imdb_id /
+# rezka_url / title+year), NOT by autoincrement id, so an export
+# from one par2 DB can be merged into another instance whose ids
+# differ. See `Database.export_collections` / `import_collections`.
+@app.get("/api/collections/export")
+def collections_export(fmt: str = "json"):
+    payload = db.export_collections()
+    if fmt == "csv":
+        out = io.StringIO()
+        writer = csv.writer(out)
+        writer.writerow(
+            [
+                "collection_name",
+                "sort_order",
+                "kp_id",
+                "imdb_id",
+                "rezka_url",
+                "title",
+                "original_title",
+                "year",
+                "added_at",
+            ]
+        )
+        for col in payload:
+            name = col["name"]
+            sort_order = col.get("sort_order") or 0
+            items = col.get("items") or []
+            if not items:
+                # 8.2 — also emit a row for an empty collection so
+                # round-trip preserves the collection itself.
+                writer.writerow([name, sort_order, "", "", "", "", "", "", ""])
+                continue
+            for it in items:
+                writer.writerow(
+                    [
+                        name,
+                        sort_order,
+                        it.get("kp_id") or "",
+                        it.get("imdb_id") or "",
+                        it.get("rezka_url") or "",
+                        it.get("title") or "",
+                        it.get("original_title") or "",
+                        it.get("year") or "",
+                        it.get("added_at") or "",
+                    ]
+                )
+        from fastapi.responses import Response as _Resp
+
+        return _Resp(
+            content=out.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=collections.csv"},
+        )
+    return JSONResponse(
+        {"version": 1, "collections": payload},
+        headers={"Content-Disposition": "attachment; filename=collections.json"},
+    )
+
+
+class CollectionsImport(BaseModel):
+    # Accept the export shape directly. Either pass {collections: [...]}
+    # (the same envelope the /export endpoint emits) or a raw list.
+    # `replace` controls whether existing membership is wiped or merged.
+    collections: list[dict]
+    replace: bool = False
+
+
+@app.post("/api/collections/import")
+def collections_import(data: CollectionsImport):
+    return db.import_collections(data.collections, replace=data.replace)
+
+
+# 8.2 — CSV import is a separate endpoint so the JSON one stays
+# strictly typed via pydantic. CSV is parsed on the server (so the
+# UI can just upload the raw file) and translated to the same
+# `import_collections` call.
+@app.post("/api/collections/import_csv")
+async def collections_import_csv(request: Request, replace: bool = False):
+    body = await request.body()
+    try:
+        text = body.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = body.decode("latin-1")
+    reader = csv.DictReader(io.StringIO(text))
+    grouped: dict[str, dict] = {}
+    for row in reader:
+        name = (row.get("collection_name") or "").strip()
+        if not name:
+            continue
+        sort_order_raw = (row.get("sort_order") or "").strip()
+        try:
+            sort_order = int(sort_order_raw) if sort_order_raw else 0
+        except ValueError:
+            sort_order = 0
+        coll = grouped.setdefault(name, {"name": name, "sort_order": sort_order, "items": []})
+        # An empty marker row (no identifiers, no title) just creates
+        # the collection — skip the item part of the row.
+        has_any_ref = any(
+            (row.get(k) or "").strip() for k in ("kp_id", "imdb_id", "rezka_url", "title")
+        )
+        if not has_any_ref:
+            continue
+        year_raw = (row.get("year") or "").strip()
+        try:
+            year = int(year_raw) if year_raw else None
+        except ValueError:
+            year = None
+        coll["items"].append(
+            {
+                "kp_id": (row.get("kp_id") or "").strip() or None,
+                "imdb_id": (row.get("imdb_id") or "").strip() or None,
+                "rezka_url": (row.get("rezka_url") or "").strip() or None,
+                "title": (row.get("title") or "").strip() or None,
+                "original_title": (row.get("original_title") or "").strip() or None,
+                "year": year,
+                "added_at": (row.get("added_at") or "").strip() or None,
+            }
+        )
+    return db.import_collections(list(grouped.values()), replace=replace)
+
+
 class CollectionItemRequest(BaseModel):
     item_id: int
 
 
 def _sync_rezka_folder(action, collection_id, item_id):
     try:
-        import requests as _req
         from app_core import normalize_title
 
         if not rezka_session:
@@ -1042,7 +1598,11 @@ def _sync_rezka_folder(action, collection_id, item_id):
         if action == "removed":
             data["del"] = "1"
 
-        _req.post(
+        # 6.7 — POST through the helper so a stale cookie triggers
+        # a single re-login + retry instead of silently dropping
+        # the favorite.
+        _rezka_request(
+            "POST",
             "https://rezka.ag/ajax/favorites/",
             data=data,
             headers={
@@ -1065,22 +1625,22 @@ def _sync_rezka_folder_wrapper(action, collection_id, item_id):
     try:
         _sync_rezka_folder(action, collection_id, item_id)
     except Exception as e:
-        import asyncio as _a
-
-        try:
-            _a.get_event_loop().create_task(
-                ws_manager.broadcast(
-                    {
-                        "type": "rezka_sync_error",
-                        "message": f"Ошибка синхронизации с Rezka: {e}",
-                        "item_id": item_id,
-                        "collection_id": collection_id,
-                        "action": action,
-                    }
-                )
-            )
-        except Exception:
-            pass
+        # 6.3 — this runs in a worker thread (run_in_executor), so
+        # we cannot call `asyncio.get_event_loop().create_task(...)`
+        # from here — that would (a) try to attach to a per-thread
+        # loop that doesn't exist, and (b) even if it did, it
+        # wouldn't be the FastAPI main loop where ws_manager lives.
+        # `_broadcast_threadsafe` does a thread-safe submit onto
+        # `_main_loop` captured during lifespan startup.
+        _broadcast_threadsafe(
+            {
+                "type": "rezka_sync_error",
+                "message": f"Ошибка синхронизации с Rezka: {e}",
+                "item_id": item_id,
+                "collection_id": collection_id,
+                "action": action,
+            }
+        )
 
 
 @app.post("/api/collections/{collection_id}/toggle")
@@ -1088,10 +1648,10 @@ async def toggle_collection_item(collection_id: int, data: CollectionItemRequest
     action = db.toggle_collection_item(collection_id, data.item_id)
 
     if action in ("added", "removed") and rezka_session:
-        loop = asyncio.get_event_loop()
-        loop.run_in_executor(
-            None, _sync_rezka_folder_wrapper, action, collection_id, data.item_id
-        )
+        # 6.2 — get_running_loop() inside an async endpoint is the
+        # modern, non-deprecated API.
+        loop = asyncio.get_running_loop()
+        loop.run_in_executor(None, _sync_rezka_folder_wrapper, action, collection_id, data.item_id)
 
     return {"status": "success", "action": action}
 
@@ -1162,9 +1722,9 @@ def get_stream_info(item_id: int):
 @app.get("/api/stream/{item_id}")
 def get_stream(
     item_id: int,
-    season: Optional[str] = None,
-    episode: Optional[str] = None,
-    translator: Optional[str] = None,
+    season: str | None = None,
+    episode: str | None = None,
+    translator: str | None = None,
 ):
     from HdRezkaApi import HdRezkaApi
 
@@ -1216,13 +1776,13 @@ def get_stream(
 @app.get("/api/stream_m3u/{item_id}")
 def get_stream_m3u(
     item_id: int,
-    season: Optional[str] = None,
-    episode: Optional[str] = None,
-    translator: Optional[str] = None,
-    quality: Optional[str] = None,
+    season: str | None = None,
+    episode: str | None = None,
+    translator: str | None = None,
+    quality: str | None = None,
 ):
-    from HdRezkaApi import HdRezkaApi
     from fastapi.responses import Response as R
+    from HdRezkaApi import HdRezkaApi
 
     row = (
         db.get_connection()
@@ -1231,9 +1791,7 @@ def get_stream_m3u(
         .fetchone()
     )
     if not row or not row["rezka_url"]:
-        return R(
-            content="error: no rezka_url", media_type="text/plain", status_code=404
-        )
+        return R(content="error: no rezka_url", media_type="text/plain", status_code=404)
 
     try:
         cookies = rezka_session.cookies if rezka_session else {"hdmbbs": "1"}
@@ -1270,19 +1828,13 @@ def get_stream_m3u(
 
         url = stream.videos[quality][0] if stream.videos[quality] else None
         if not url:
-            return R(
-                content="error: no stream url", media_type="text/plain", status_code=500
-            )
+            return R(content="error: no stream url", media_type="text/plain", status_code=500)
 
         title = row["title"]
         if season and episode:
             title += f" - S{season}E{episode}"
 
-        safe_title = (
-            re.sub(r'[<>:"/\\|?*]', "", title)
-            .encode("ascii", "replace")
-            .decode("ascii")
-        )
+        safe_title = re.sub(r'[<>:"/\\|?*]', "", title).encode("ascii", "replace").decode("ascii")
         m3u = f"#EXTM3U\n#EXTINF:-1,{title}\n{url}\n"
         return R(
             content=m3u.encode("utf-8"),
@@ -1298,9 +1850,7 @@ def mark_season_seen(item_id: int):
     row = (
         db.get_connection()
         .cursor()
-        .execute(
-            "SELECT latest_season, latest_episode FROM items WHERE id = ?", (item_id,)
-        )
+        .execute("SELECT latest_season, latest_episode FROM items WHERE id = ?", (item_id,))
         .fetchone()
     )
     if not row:
@@ -1308,9 +1858,7 @@ def mark_season_seen(item_id: int):
     key = f"rezka_seen_{item_id}"
     value = f"s{row['latest_season']}e{row['latest_episode']}"
     conn = db.get_connection()
-    conn.execute(
-        "INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)", (key, value)
-    )
+    conn.execute("INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)", (key, value))
     conn.commit()
     conn.close()
     return {"status": "success"}
@@ -1328,7 +1876,7 @@ def save_collections_order(data: SaveOrderRequest):
 
 @app.get("/", response_class=HTMLResponse)
 def get_index():
-    with open("index.html", "r", encoding="utf-8") as f:
+    with open("index.html", encoding="utf-8") as f:
         return f.read()
 
 
@@ -1352,11 +1900,9 @@ def get_sync_log(log_type: str = "video"):
             content={"log": "Неизвестный тип лога", "filename": ""}, status_code=400
         )
 
-    from fastapi.responses import JSONResponse
-
     log_content = "Пусто"
     if os.path.exists(filename):
-        with open(filename, "r", encoding="utf-8", errors="replace") as f:
+        with open(filename, encoding="utf-8", errors="replace") as f:
             log_content = "".join(f.readlines()[-100:])
 
     return JSONResponse(
@@ -1415,8 +1961,38 @@ async def sync_user_data():
     return {"status": "started"}
 
 
-import csv
-import io
+# 6.6 — on-demand DB backup download.
+#
+# Generates a fresh consistent snapshot of the SQLite database and
+# streams it back as a file attachment. Behind auth_middleware so
+# only logged-in clients can pull it. The snapshot is written via
+# `Database.backup_to()` (SQLite online backup API) so the live
+# app keeps serving while the copy runs.
+#
+# The backup is staged in `backups/` (auto-created) and named
+# `app_data-<UTC-timestamp>.db`; the same file is served back. The
+# caller can also drive periodic snapshots from cron via
+# `python backup_db.py --rotate N`.
+@app.get("/api/backup/download")
+async def backup_download():
+    out_dir = "backups"
+    os.makedirs(out_dir, exist_ok=True)
+    stamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    dest = os.path.join(out_dir, f"app_data-{stamp}.db")
+    try:
+        # SQLite backup is blocking I/O; push it off the loop.
+        size = await asyncio.to_thread(db.backup_to, dest)
+    except Exception as e:
+        return JSONResponse(
+            {"error": f"{type(e).__name__}: {e}"},
+            status_code=500,
+        )
+    print(f"[BACKUP] wrote {dest} ({size} bytes)")
+    return FileResponse(
+        dest,
+        media_type="application/octet-stream",
+        filename=os.path.basename(dest),
+    )
 
 
 @app.get("/api/export")
@@ -1429,15 +2005,13 @@ def export_data(fmt: str = "json", category_id: int = -1):
             writer = csv.DictWriter(output, fieldnames=items[0].keys())
             writer.writeheader()
             writer.writerows(items)
-        from fastapi.responses import Response
+        from fastapi.responses import Response as _Response
 
-        return Response(
+        return _Response(
             content=output.getvalue(),
             media_type="text/csv",
             headers={"Content-Disposition": "attachment; filename=export.csv"},
         )
-
-    from fastapi.responses import JSONResponse
 
     return JSONResponse(
         content=items,
@@ -1446,13 +2020,393 @@ def export_data(fmt: str = "json", category_id: int = -1):
 
 
 class SetIdsRequest(BaseModel):
-    kp_id: Optional[str] = None
-    imdb_id: Optional[str] = None
+    kp_id: str | None = None
+    imdb_id: str | None = None
 
 
 @app.post("/api/set_ids/{item_id}")
 def set_ids(item_id: int, data: SetIdsRequest):
     db.set_ids(item_id, kp_id=data.kp_id, imdb_id=data.imdb_id)
+    return {"status": "success"}
+
+
+# 8.17 — manual rebind of KP/IMDb/Rezka identifiers from the card UI.
+# Captures the prior values into audit_log so 8.18 / undo can restore them.
+class RebindRequest(BaseModel):
+    kp_id: str | None = None
+    imdb_id: str | None = None
+    rezka_url: str | None = None
+
+
+@app.post("/api/rebind/{item_id}")
+def rebind_item(item_id: int, data: RebindRequest):
+    import json as _json
+
+    with db._conn() as c:
+        row = c.execute(
+            "SELECT kp_id, imdb_id, rezka_url FROM items WHERE id = ?",
+            (item_id,),
+        ).fetchone()
+        if row is None:
+            return JSONResponse({"error": "item not found"}, status_code=404)
+        before = {
+            "kp_id": row["kp_id"],
+            "imdb_id": row["imdb_id"],
+            "rezka_url": row["rezka_url"],
+        }
+
+    after = {**before}
+    sets: list[str] = []
+    params: list = []
+    if data.kp_id is not None:
+        after["kp_id"] = data.kp_id.strip() or None
+        sets.append("kp_id = ?")
+        params.append(after["kp_id"])
+        sets.extend(["checked_poiskkino = 0", "checked_tech = 0", "checked_rezka = 0"])
+    if data.imdb_id is not None:
+        after["imdb_id"] = data.imdb_id.strip() or None
+        sets.append("imdb_id = ?")
+        params.append(after["imdb_id"])
+        sets.append("checked_rezka = 0")
+    if data.rezka_url is not None:
+        after["rezka_url"] = data.rezka_url.strip() or None
+        sets.append("rezka_url = ?")
+        params.append(after["rezka_url"])
+    if not sets:
+        return {"status": "noop"}
+    sets.extend(["is_metadata_fixed = 0", "is_reprocessed = 0"])
+    params.append(item_id)
+    with db._conn() as c:
+        c.execute(f"UPDATE items SET {', '.join(sets)} WHERE id = ?", params)
+
+    db.append_audit(
+        action="rebind",
+        item_id=item_id,
+        field="kp_id,imdb_id,rezka_url",
+        old_value=_json.dumps(before, ensure_ascii=False),
+        new_value=_json.dumps(after, ensure_ascii=False),
+    )
+    return {"status": "success", "before": before, "after": after}
+
+
+# 8.5 — filter rules CRUD endpoints.
+class FilterRuleCreate(BaseModel):
+    name: str
+    field: str
+    pattern: str
+    action: str
+    enabled: bool = True
+
+
+class FilterRuleUpdate(BaseModel):
+    name: str | None = None
+    field: str | None = None
+    pattern: str | None = None
+    action: str | None = None
+    enabled: bool | None = None
+
+
+@app.get("/api/filter_rules")
+def filter_rules_list():
+    return db.list_filter_rules()
+
+
+@app.post("/api/filter_rules")
+def filter_rules_create(data: FilterRuleCreate):
+    try:
+        rid = db.create_filter_rule(
+            name=data.name,
+            field=data.field,
+            pattern=data.pattern,
+            action=data.action,
+            enabled=data.enabled,
+        )
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return {"id": rid}
+
+
+@app.put("/api/filter_rules/{rule_id}")
+def filter_rules_update(rule_id: int, data: FilterRuleUpdate):
+    try:
+        ok = db.update_filter_rule(
+            rule_id,
+            name=data.name,
+            field=data.field,
+            pattern=data.pattern,
+            action=data.action,
+            enabled=data.enabled,
+        )
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    if not ok:
+        return JSONResponse({"error": "rule not found"}, status_code=404)
+    return {"status": "success"}
+
+
+@app.delete("/api/filter_rules/{rule_id}")
+def filter_rules_delete(rule_id: int):
+    ok = db.delete_filter_rule(rule_id)
+    if not ok:
+        return JSONResponse({"error": "rule not found"}, status_code=404)
+    return {"status": "success"}
+
+
+# 8.7 — TMDB trailers. Returns the highest-confidence YouTube key
+# for the requested item, picking an official trailer when available.
+@app.get("/api/trailer/{item_id}")
+def get_trailer(item_id: int):
+    from tmdb_client import TMDBClient
+
+    with db._conn() as c:
+        row = c.execute(
+            "SELECT id, imdb_id, tmdb_id, title, original_title, year FROM items WHERE id = ?",
+            (item_id,),
+        ).fetchone()
+        if not row:
+            return JSONResponse({"error": "item not found"}, status_code=404)
+
+    client = TMDBClient()
+    if not client.api_key:
+        return JSONResponse({"error": "TMDB_API_KEY not configured"}, status_code=503)
+
+    tmdb_id = row["tmdb_id"]
+    media_type = "movie"
+    if not tmdb_id and row["imdb_id"]:
+        meta = client.find_by_imdb_id(row["imdb_id"], return_meta=True)
+        if meta and meta.get("tmdb_id"):
+            tmdb_id = str(meta["tmdb_id"])
+            media_type = meta.get("media_type") or "movie"
+            with db._conn() as c:
+                c.execute(
+                    "UPDATE items SET tmdb_id = ? WHERE id = ?",
+                    (tmdb_id, item_id),
+                )
+    if not tmdb_id:
+        return JSONResponse(
+            {"error": "no TMDB id for this item; set imdb_id first"},
+            status_code=404,
+        )
+
+    videos = client.get_videos(media_type, tmdb_id) or []
+
+    # Prefer YouTube + Trailer + Official.
+    def _score(v: dict) -> int:
+        s = 0
+        if (v.get("site") or "").lower() == "youtube":
+            s += 100
+        if (v.get("type") or "").lower() == "trailer":
+            s += 50
+        if v.get("official"):
+            s += 25
+        return s
+
+    videos.sort(key=_score, reverse=True)
+    # Return up to 5 YouTube candidates so the frontend can fall back
+    # to the next one if a video has embedding disabled (YouTube error
+    # 101 / 150 / 153). TMDB doesn't expose an embed-allowed flag, so
+    # serial fallback is the only reliable workaround.
+    youtube_candidates = [
+        {
+            "youtube_key": v["key"],
+            "name": v.get("name") or "",
+            "type": v.get("type") or "",
+            "official": bool(v.get("official")),
+        }
+        for v in videos
+        if (v.get("site") or "").lower() == "youtube" and v.get("key")
+    ][:5]
+    if not youtube_candidates:
+        return JSONResponse({"error": "no trailer available"}, status_code=404)
+    primary = youtube_candidates[0]
+    return {
+        # Backwards-compatible flat fields (first / best candidate).
+        "youtube_key": primary["youtube_key"],
+        "name": primary["name"],
+        "type": primary["type"],
+        "official": primary["official"],
+        # New: ranked list for client-side embed fallback.
+        "candidates": youtube_candidates,
+        "tmdb_id": tmdb_id,
+        "media_type": media_type,
+    }
+
+
+# 8.12 — same lookup as /api/stream_m3u but returns the resolved
+# direct URL as JSON so the frontend can render an embedded player
+# (HTML5 <video> / hls.js) instead of triggering an m3u download.
+@app.get("/api/stream_url/{item_id}")
+def get_stream_url(
+    item_id: int,
+    season: str | None = None,
+    episode: str | None = None,
+    translator: str | None = None,
+    quality: str | None = None,
+):
+    from HdRezkaApi import HdRezkaApi
+
+    with db._conn() as c:
+        row = c.execute("SELECT rezka_url, title FROM items WHERE id = ?", (item_id,)).fetchone()
+    if not row or not row["rezka_url"]:
+        return JSONResponse({"error": "no rezka_url"}, status_code=404)
+
+    try:
+        cookies = rezka_session.cookies if rezka_session else {"hdmbbs": "1"}
+        rezka = HdRezkaApi(row["rezka_url"], cookies=cookies)
+        if not rezka.ok:
+            return JSONResponse({"error": "failed to load page"}, status_code=502)
+        kwargs: dict = {}
+        if translator:
+            kwargs["translation"] = translator
+        if season and episode:
+            stream = rezka.getStream(season, episode, **kwargs)
+        else:
+            stream = rezka.getStream(**kwargs)
+
+        if not quality or quality not in stream.videos:
+            quality = max(
+                stream.videos.keys(),
+                key=lambda q: {
+                    "4K": 7,
+                    "2K": 6,
+                    "1080p Ultra": 5,
+                    "1080p": 4,
+                    "720p": 3,
+                    "480p": 2,
+                    "360p": 1,
+                }.get(q, 0),
+            )
+        url = stream.videos[quality][0] if stream.videos[quality] else None
+        if not url:
+            return JSONResponse({"error": "no stream url"}, status_code=502)
+        is_hls = ".m3u8" in url.lower()
+        return {
+            "url": url,
+            "quality": quality,
+            "title": row["title"],
+            "is_hls": is_hls,
+        }
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+
+
+# 8.12 — subtitle CORS proxy. Rezka serves VTT/SRT files without
+# Access-Control-Allow-Origin, so the browser refuses to attach them
+# to a <track> element. We re-fetch and stream the body back with
+# permissive CORS so HTML5 captions render. Only forwards http(s)
+# URLs whose host belongs to a small allow-list (rezka mirrors).
+_SUBTITLE_HOST_ALLOWLIST = (
+    "rezka.ag",
+    "hdrezka",
+    "rezka.cdnstream",
+    "voidboost",
+    "videocdn",
+)
+
+
+@app.get("/api/subtitle_proxy")
+def subtitle_proxy(url: str):
+    from urllib.parse import urlparse
+
+    from fastapi.responses import Response
+
+    if not url or not url.startswith(("http://", "https://")):
+        return JSONResponse({"error": "invalid url"}, status_code=400)
+    host = (urlparse(url).hostname or "").lower()
+    if not any(host.endswith(h) or h in host for h in _SUBTITLE_HOST_ALLOWLIST):
+        return JSONResponse({"error": f"host {host} not allowed"}, status_code=403)
+    try:
+        # Subtitle files live on CDNs (no auth required) — use a plain
+        # requests.get rather than `_rezka_request`, which would no-op
+        # when the user hasn't configured Rezka credentials.
+        import requests as _req
+
+        resp = _req.get(url, timeout=10)
+        if resp.status_code != 200:
+            return JSONResponse(
+                {"error": f"upstream HTTP {resp.status_code}"},
+                status_code=502,
+            )
+        # Pick a Content-Type that the browser will accept for <track>.
+        ct = resp.headers.get("Content-Type") or ""
+        if "vtt" in ct.lower() or url.lower().endswith(".vtt"):
+            ct = "text/vtt; charset=utf-8"
+        else:
+            # Most rezka subtitles are SRT — convert lazily so the
+            # browser <track> element accepts them as captions.
+            ct = "text/plain; charset=utf-8"
+        body = resp.content
+        # If the file is SRT (common on rezka), do a quick conversion
+        # to WebVTT — browsers only render captions in VTT format.
+        if b"WEBVTT" not in body[:64] and (url.lower().endswith(".srt") or b"-->" in body[:512]):
+            try:
+                txt = body.decode("utf-8-sig", errors="replace")
+                txt = txt.replace("\r\n", "\n")
+                # SRT timestamps use comma; VTT uses dot.
+                import re as _re
+
+                txt = _re.sub(
+                    r"(\d{2}:\d{2}:\d{2}),(\d{3})",
+                    r"\1.\2",
+                    txt,
+                )
+                body = ("WEBVTT\n\n" + txt).encode("utf-8")
+                ct = "text/vtt; charset=utf-8"
+            except Exception:
+                pass
+        return Response(
+            content=body,
+            media_type=ct,
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Cache-Control": "public, max-age=3600",
+            },
+        )
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+
+
+# 8.18 — audit log endpoints + undo.
+@app.get("/api/audit_log")
+def audit_log_list(limit: int = 50, item_id: int | None = None):
+    return db.list_audit(limit=limit, item_id=item_id)
+
+
+@app.post("/api/audit_log/{audit_id}/undo")
+def audit_log_undo(audit_id: int):
+    import json as _json
+
+    with db._conn() as c:
+        row = c.execute("SELECT * FROM audit_log WHERE id = ?", (audit_id,)).fetchone()
+        if row is None:
+            return JSONResponse({"error": "audit entry not found"}, status_code=404)
+        if row["undone"]:
+            return JSONResponse({"error": "already undone"}, status_code=400)
+
+        action = row["action"]
+        if action == "rebind":
+            try:
+                before = _json.loads(row["old_value"] or "{}")
+            except Exception:
+                return JSONResponse({"error": "corrupt audit row"}, status_code=500)
+            sets: list[str] = []
+            params: list = []
+            for col in ("kp_id", "imdb_id", "rezka_url"):
+                if col in before:
+                    sets.append(f"{col} = ?")
+                    params.append(before[col])
+            if sets:
+                params.append(row["item_id"])
+                c.execute(
+                    f"UPDATE items SET {', '.join(sets)} WHERE id = ?",
+                    params,
+                )
+        else:
+            return JSONResponse(
+                {"error": f"undo not supported for action: {action}"},
+                status_code=400,
+            )
+        c.execute("UPDATE audit_log SET undone = 1 WHERE id = ?", (audit_id,))
     return {"status": "success"}
 
 

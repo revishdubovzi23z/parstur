@@ -4,9 +4,20 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Antigravity Tracker</title>
-    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <!--
+      7.4 — SRI на CDN-скриптах. Используем версионные URL и
+      sha384-хеши, чтобы при подмене файла на CDN браузер заблокировал
+      загрузку. Tailwind Play (cdn.tailwindcss.com) не отдаёт стабильный
+      хешируемый бандл (содержимое разное между запросами), поэтому
+      оставлен без integrity, но залочен через CSP whitelist.
+    -->
+    <script src="https://unpkg.com/vue@3.4.27/dist/vue.global.prod.js"
+            integrity="sha384-bkD9qcJiDlQRpeIQtZSHgyQEMvRBzmOI9lw2SZHkLOrliAdnLtxNIucoEAVG9QVA"
+            crossorigin="anonymous"></script>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"
+            integrity="sha384-eeLEhtwdMwD3X9y+8P3Cn7Idl/M+w8H4uZqkgD/2eJVkWIN1yKzEj6XegJ9dL3q0"
+            crossorigin="anonymous"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
     <style>
         body { font-family: 'Inter', sans-serif; background-color: #f8fafc; color: #1e293b; }
@@ -99,6 +110,10 @@
                             </div>
                             <span class="text-[9px] font-mono text-slate-500 shrink-0">
                                 {{ currentLogFilename }}
+                            </span>
+                            <!-- 7.6 — длительность активного процесса для текущего лога. -->
+                            <span v-if="currentProcessElapsedText" class="text-[9px] font-bold text-emerald-400 shrink-0 tabular-nums">
+                                ⏱ {{ currentProcessElapsedText }}
                             </span>
                         </div>
                         <div class="flex items-center gap-1.5 shrink-0">
@@ -241,6 +256,11 @@
                             <label class="text-[10px] font-bold text-slate-400 uppercase tracking-widest cursor-pointer group-hover:text-slate-600 transition-colors">ЗАКЛАДКИ</label>
                             <div class="flex items-center gap-3">
                                 <button @click.stop="showAddCollection = !showAddCollection" class="text-indigo-600 hover:text-indigo-800 text-[10px] font-black uppercase">Создать</button>
+                                <!-- 8.2 — collections export/import controls -->
+                                <button @click.stop="exportCollections('json')" title="Экспорт коллекций в JSON" class="text-slate-500 hover:text-slate-800 text-[10px] font-black uppercase">JSON</button>
+                                <button @click.stop="exportCollections('csv')" title="Экспорт коллекций в CSV" class="text-slate-500 hover:text-slate-800 text-[10px] font-black uppercase">CSV</button>
+                                <button @click.stop="$refs.collectionsImportFile.click()" title="Импорт коллекций из JSON или CSV" class="text-slate-500 hover:text-slate-800 text-[10px] font-black uppercase">⬆</button>
+                                <input ref="collectionsImportFile" type="file" accept=".json,.csv,application/json,text/csv" class="hidden" @change="onCollectionsImportFile">
                                 <svg class="w-4 h-4 text-slate-300 transition-transform duration-300" :class="{'rotate-180': !showCollectionsList}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
                             </div>
                         </div>
@@ -469,6 +489,8 @@
                      <div class="mt-auto grid grid-cols-2 gap-2">
                          <button @click="fetchStats" class="px-4 py-3 bg-slate-100 text-slate-600 rounded-xl font-bold text-xs hover:bg-slate-200">📊 СТАТИСТИКА</button>
                          <button @click="toggleLogs" class="px-4 py-3 bg-slate-800 text-white rounded-xl font-bold text-xs hover:bg-black shadow-lg transition-all flex items-center justify-center gap-2">📜 ЛОГИ</button>
+                         <button @click="openRulesManager" class="px-4 py-3 bg-yellow-100 text-yellow-800 rounded-xl font-bold text-xs hover:bg-yellow-200">🏷 ПРАВИЛА</button>
+                         <button @click="openAuditLog" class="px-4 py-3 bg-amber-100 text-amber-800 rounded-xl font-bold text-xs hover:bg-amber-200">↶ АУДИТ</button>
                          <div class="col-span-2 relative group">
                              <button @click="startCleanup" :disabled="statuses.cleanup === 'running'" 
                                      :class="['w-full px-4 py-3 rounded-xl font-bold text-xs transition-all', statuses.cleanup === 'running' ? 'bg-indigo-600 text-white animate-pulse' : 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100']">
@@ -641,10 +663,55 @@
                                     <a v-if="item.imdb_id" :href="'https://www.imdb.com/title/' + item.imdb_id + '/'" target="_blank" 
                                        class="px-2 py-1 bg-yellow-50 text-yellow-700 text-[9px] font-black rounded-lg hover:bg-yellow-100 transition-colors">IMDB</a>
                                 </div>
+                                <!-- 8.8 — release timeline. Compact when collapsed, full
+                                     vertical timeline when expanded. The data is already
+                                     batch-loaded into item.releases by get_feed (3.6),
+                                     so this is purely presentational. -->
+                                <div v-if="item.releases && item.releases.length > 0" class="text-[10px]">
+                                    <button @click.stop="toggleReleaseTimeline(item.id)"
+                                            class="w-full flex items-center justify-between px-2 py-1 bg-slate-50 hover:bg-slate-100 rounded-lg text-slate-600 font-bold transition-colors">
+                                        <span>📅 Релизов: {{ item.releases.length }}</span>
+                                        <span class="text-slate-400">{{ formatReleaseDate(item.releases[0].date_added) }}</span>
+                                    </button>
+                                    <div v-show="expandedReleaseTimelines[item.id]"
+                                         class="mt-1 max-h-44 overflow-y-auto pl-2 border-l-2 border-slate-200 space-y-1.5 py-1">
+                                        <div v-for="(rel, ri) in item.releases" :key="rel.id || ri"
+                                             class="relative pl-3 leading-tight">
+                                            <span class="absolute -left-[5px] top-1 w-2 h-2 rounded-full"
+                                                  :class="ri === 0 ? 'bg-red-500' : 'bg-slate-300'"></span>
+                                            <div class="flex items-baseline gap-1.5">
+                                                <span class="text-[9px] font-black text-slate-700">{{ formatReleaseDate(rel.date_added) }}</span>
+                                                <span v-if="rel.quality" class="text-[9px] font-bold text-purple-600 uppercase">{{ rel.quality }}</span>
+                                                <span v-if="rel.size" class="text-[9px] text-slate-500">{{ rel.size }}</span>
+                                            </div>
+                                            <a v-if="rel.link" :href="rel.link" target="_blank"
+                                               class="text-[10px] text-slate-600 hover:text-red-600 line-clamp-1 break-all">{{ rel.torrent_title || rel.link }}</a>
+                                            <span v-else class="text-[10px] text-slate-600 line-clamp-1">{{ rel.torrent_title }}</span>
+                                        </div>
+                                    </div>
+                                </div>
                                 <button v-if="item.rezka_url" @click="openStream(item)" 
                                    class="w-full py-1.5 bg-green-600 text-white text-[10px] font-black rounded-lg shadow-sm hover:bg-green-700 transition-colors">
                                     ▶ СМОТРЕТЬ
                                 </button>
+                                <!-- 8.7 / 8.17 — trailer + manual rebind (compact action row). -->
+                                <div class="grid grid-cols-2 gap-1 mt-1">
+                                    <button @click="openTrailer(item)"
+                                       class="py-1.5 bg-rose-500 text-white text-[10px] font-black rounded-lg shadow-sm hover:bg-rose-600 transition-colors">
+                                        🎬 ТРЕЙЛЕР
+                                    </button>
+                                    <button @click="openRebind(item)"
+                                       class="py-1.5 bg-slate-200 text-slate-700 text-[10px] font-black rounded-lg shadow-sm hover:bg-slate-300 transition-colors">
+                                        ✏ ПРИВЯЗАТЬ
+                                    </button>
+                                </div>
+                                <!-- 8.5 — rule highlight badges. -->
+                                <div v-if="item.matched_rules && item.matched_rules.length" class="flex flex-wrap gap-1 mt-1">
+                                    <span v-for="r in item.matched_rules" :key="r"
+                                          class="px-1.5 py-0.5 bg-yellow-200 text-yellow-900 text-[9px] font-black rounded">
+                                        🏷 {{ r }}
+                                    </span>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -697,13 +764,16 @@
 
         <!-- Дашборд / Статистика -->
         <transition name="fade">
-            <div v-if="showStreamModal" @click="showStreamModal = false" class="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-[100] flex items-center justify-center p-4">
-                <div @click.stop class="bg-white w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden">
-                    <div class="p-5 border-b border-slate-100 flex justify-between items-center">
-                        <h3 class="text-lg font-black text-slate-900 tracking-tight">{{ streamItem?.title }}</h3>
-                        <button @click="showStreamModal = false" class="text-slate-400 hover:text-slate-900 text-xl">✕</button>
+            <div v-if="showStreamModal" @click="showStreamModal = false" class="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-[100] flex items-start sm:items-center justify-center p-2 sm:p-4 overflow-y-auto">
+                <!-- max-h-[90vh] + overflow-y-auto on the inner panel keeps the modal
+                     usable when there are many subtitle/episode rows + embedded video.
+                     Sticky header keeps the close button reachable while scrolling. -->
+                <div @click.stop class="bg-white w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden my-4 max-h-[90vh] flex flex-col">
+                    <div class="p-5 border-b border-slate-100 flex justify-between items-center sticky top-0 bg-white z-10">
+                        <h3 class="text-lg font-black text-slate-900 tracking-tight truncate">{{ streamItem?.title }}</h3>
+                        <button @click="showStreamModal = false" class="text-slate-400 hover:text-slate-900 text-xl flex-shrink-0">✕</button>
                     </div>
-                    <div class="p-5 space-y-4">
+                    <div ref="streamModalScroll" class="p-5 space-y-4 overflow-y-auto">
                         <div v-if="streamLoading" class="text-center py-8 text-slate-400 font-bold">Загрузка...</div>
                         <div v-else-if="streamError" class="text-center py-8 text-red-500 font-bold">{{ streamError }}</div>
                         <template v-else>
@@ -728,15 +798,21 @@
                                     <option v-for="(name, e) in streamEpisodes" :key="e" :value="e">{{ name }}</option>
                                 </select>
                             </div>
-                            <!-- Quality buttons -->
+                            <!-- Quality buttons. The currently-playing quality
+                                 gets a darker tone + ring + check mark so the
+                                 user can see at a glance what's selected. -->
                             <div v-if="streamVideos">
                                 <label class="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-2 block">Качество</label>
                                 <div class="grid grid-cols-3 gap-2">
-                                    <button v-for="(url, q) in streamVideos" :key="q" @click="playStream(q)" 
-                                        :disabled="!url" 
+                                    <button v-for="(url, q) in streamVideos" :key="q" @click="playStream(q)"
+                                        :disabled="!url"
                                         class="py-2.5 rounded-xl text-xs font-black transition-all"
-                                        :class="url ? 'bg-green-600 text-white hover:bg-green-700 shadow-sm' : 'bg-slate-100 text-slate-400 cursor-not-allowed'">
-                                        {{ q }}
+                                        :class="!url
+                                            ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                                            : (q === streamCurrentQuality
+                                                ? 'bg-emerald-700 text-white ring-2 ring-emerald-300 shadow-md'
+                                                : 'bg-green-600 text-white hover:bg-green-700 shadow-sm')">
+                                        <span v-if="q === streamCurrentQuality">✓ </span>{{ q }}
                                     </button>
                                 </div>
                             </div>
@@ -760,7 +836,169 @@
                                     </a>
                                 </div>
                             </div>
+                            <!-- 8.12 — embedded HLS / mp4 player. Renders only on demand.
+                                 max-h-[60vh] keeps the controls (seek/volume/fullscreen)
+                                 inside the visible area even on tall modals (long
+                                 episode/subtitle lists). -->
+                            <div v-if="streamCurrentUrl" class="pt-2">
+                                <button @click="playInBrowser" class="w-full py-2 bg-emerald-600 text-white text-xs font-black rounded-lg hover:bg-emerald-700 transition-colors">
+                                    {{ embeddedPlayer.active ? '⟳ Перезагрузить плеер' : '▶ Встроенный плеер' }}
+                                </button>
+                                <video v-if="embeddedPlayer.active" ref="embeddedVideo" controls autoplay
+                                       crossorigin="anonymous"
+                                       class="w-full mt-2 rounded-lg bg-black aspect-video max-h-[60vh] object-contain"
+                                       :src="embeddedPlayer.directSrc">
+                                    <!-- 8.12 — pipe Rezka subtitle tracks (Russian/English/etc.)
+                                         straight into the native HTML5 player. The browser renders
+                                         the CC menu automatically when at least one <track> is
+                                         present. Default 'subtitles' kind matches Rezka's VTT/SRT
+                                         output. The first track is marked default if present. -->
+                                    <track v-for="(sub, lang, idx) in (streamSubtitles || {})"
+                                           :key="lang"
+                                           kind="subtitles"
+                                           :label="sub.title || lang"
+                                           :srclang="lang"
+                                           :src="'/api/subtitle_proxy?url=' + encodeURIComponent(sub.link)"
+                                           :default="idx === 0" />
+                                </video>
+                                <p v-if="embeddedPlayer.error" class="text-[10px] text-red-500 mt-1">{{ embeddedPlayer.error }}</p>
+                                <p v-if="embeddedPlayer.active && streamSubtitles && Object.keys(streamSubtitles).length"
+                                   class="text-[10px] text-slate-500 mt-1">
+                                    💬 Включите субтитры в плеере (CC) — доступно {{ Object.keys(streamSubtitles).length }} дорожек.
+                                </p>
+                            </div>
                         </template>
+                    </div>
+                </div>
+            </div>
+        </transition>
+
+        <!-- 8.7 — Trailer modal (TMDB → YouTube embed) with fallback chain. -->
+        <transition name="fade">
+            <div v-if="showTrailerModal" @click="closeTrailer" class="fixed inset-0 bg-slate-900/85 backdrop-blur-md z-[100] flex items-center justify-center p-4">
+                <div @click.stop class="bg-white w-full max-w-3xl rounded-2xl shadow-2xl overflow-hidden">
+                    <div class="p-4 border-b border-slate-100 flex justify-between items-center">
+                        <h3 class="text-base font-black text-slate-900 tracking-tight truncate">Трейлер: {{ trailerItem?.title }}</h3>
+                        <button @click="closeTrailer" class="text-slate-400 hover:text-slate-900 text-xl">✕</button>
+                    </div>
+                    <div class="p-2 bg-black">
+                        <div v-if="trailerLoading" class="text-center text-white py-12 font-bold">Загрузка...</div>
+                        <div v-else-if="trailerError && !trailerKey" class="text-center text-red-300 py-12 font-bold text-sm">{{ trailerError }}</div>
+                        <div v-else-if="trailerKey" class="aspect-video w-full relative">
+                            <!-- enablejsapi=1 lets us subscribe to onError via the
+                                 IFrame API and switch to the next candidate when a
+                                 video disables embedding (error 101 / 150 / 153). -->
+                            <iframe :key="trailerKey" ref="trailerFrame" class="w-full h-full"
+                                    :src="'https://www.youtube.com/embed/' + trailerKey + '?autoplay=1&rel=0&playsinline=1&enablejsapi=1'"
+                                    allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>
+                        </div>
+                    </div>
+                    <!-- Always-visible fallback row: open on YouTube + cycle if multiple candidates. -->
+                    <div v-if="trailerKey" class="px-4 py-3 bg-slate-50 border-t border-slate-100 flex flex-wrap items-center gap-2">
+                        <a :href="'https://www.youtube.com/watch?v=' + trailerKey" target="_blank" rel="noopener"
+                           class="px-3 py-1.5 bg-red-600 text-white text-[11px] font-black rounded-lg hover:bg-red-700">▶ Открыть на YouTube</a>
+                        <button v-if="(trailerCandidates?.length || 0) > 1"
+                                @click="cycleTrailerCandidate"
+                                class="px-3 py-1.5 bg-slate-200 text-slate-700 text-[11px] font-black rounded-lg hover:bg-slate-300">
+                            ↻ Другой вариант ({{ trailerCandidateIndex + 1 }}/{{ trailerCandidates.length }})
+                        </button>
+                        <span class="text-[10px] text-slate-500 ml-auto truncate" :title="trailerCandidates?.[trailerCandidateIndex]?.name">
+                            {{ trailerCandidates?.[trailerCandidateIndex]?.name }}
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </transition>
+
+        <!-- 8.17 — Manual rebind modal. -->
+        <transition name="fade">
+            <div v-if="showRebindModal" @click="closeRebind" class="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-[100] flex items-center justify-center p-4">
+                <div @click.stop class="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden">
+                    <div class="p-4 border-b border-slate-100 flex justify-between items-center">
+                        <h3 class="text-base font-black text-slate-900 tracking-tight truncate">Привязать: {{ rebindItem?.title }}</h3>
+                        <button @click="closeRebind" class="text-slate-400 hover:text-slate-900 text-xl">✕</button>
+                    </div>
+                    <div class="p-5 space-y-3">
+                        <label class="block text-[10px] font-black uppercase text-slate-400 tracking-widest">KP id</label>
+                        <input v-model="rebindForm.kp_id" type="text" placeholder="kinopoisk id" class="w-full bg-slate-100 rounded-lg px-3 py-2 text-sm border-none focus:ring-2 focus:ring-slate-900" />
+                        <label class="block text-[10px] font-black uppercase text-slate-400 tracking-widest">IMDb id</label>
+                        <input v-model="rebindForm.imdb_id" type="text" placeholder="tt1234567" class="w-full bg-slate-100 rounded-lg px-3 py-2 text-sm border-none focus:ring-2 focus:ring-slate-900" />
+                        <label class="block text-[10px] font-black uppercase text-slate-400 tracking-widest">Rezka URL</label>
+                        <input v-model="rebindForm.rezka_url" type="text" placeholder="https://hdrezka..." class="w-full bg-slate-100 rounded-lg px-3 py-2 text-sm border-none focus:ring-2 focus:ring-slate-900" />
+                        <p v-if="rebindError" class="text-xs text-red-500">{{ rebindError }}</p>
+                        <div class="flex gap-2 pt-2">
+                            <button @click="submitRebind" :disabled="rebindLoading" class="flex-1 py-2 bg-slate-900 text-white text-xs font-black rounded-lg hover:bg-slate-700 disabled:opacity-50">Сохранить</button>
+                            <button @click="closeRebind" class="px-4 py-2 bg-slate-100 text-slate-700 text-xs font-black rounded-lg hover:bg-slate-200">Отмена</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </transition>
+
+        <!-- 8.5 — Filter rules manager. -->
+        <transition name="fade">
+            <div v-if="showRulesModal" @click="showRulesModal = false" class="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-[100] flex items-center justify-center p-4">
+                <div @click.stop class="bg-white w-full max-w-2xl max-h-[85vh] rounded-2xl shadow-2xl overflow-hidden flex flex-col">
+                    <div class="p-4 border-b border-slate-100 flex justify-between items-center">
+                        <h3 class="text-base font-black text-slate-900 tracking-tight">Фильтр-правила</h3>
+                        <button @click="showRulesModal = false" class="text-slate-400 hover:text-slate-900 text-xl">✕</button>
+                    </div>
+                    <div class="p-4 space-y-3 overflow-y-auto">
+                        <!-- Existing rules -->
+                        <div v-for="rule in filterRules" :key="rule.id" class="border border-slate-200 rounded-lg p-3 flex items-center gap-2">
+                            <input type="checkbox" :checked="rule.enabled" @change="toggleRule(rule)" class="w-4 h-4" />
+                            <div class="flex-1 min-w-0">
+                                <div class="font-black text-sm truncate">{{ rule.name }}</div>
+                                <div class="text-[10px] text-slate-500 truncate"><span class="px-1 bg-slate-100 rounded font-mono">{{ rule.field }}</span> <span class="px-1 bg-slate-100 rounded font-mono">{{ rule.action }}</span> /{{ rule.pattern }}/</div>
+                            </div>
+                            <button @click="deleteRule(rule)" class="px-2 py-1 bg-red-50 text-red-600 text-[10px] font-black rounded hover:bg-red-100">✕</button>
+                        </div>
+                        <p v-if="!filterRules.length" class="text-center text-slate-400 text-sm py-4">Правил пока нет</p>
+                        <!-- New rule -->
+                        <div class="border-t pt-3 space-y-2">
+                            <h4 class="text-xs font-black uppercase tracking-widest text-slate-500">Новое правило</h4>
+                            <input v-model="newRule.name" placeholder="Название" class="w-full bg-slate-100 rounded-lg px-3 py-2 text-sm border-none focus:ring-2 focus:ring-slate-900" />
+                            <div class="grid grid-cols-2 gap-2">
+                                <select v-model="newRule.field" class="bg-slate-100 rounded-lg px-3 py-2 text-sm border-none focus:ring-2 focus:ring-slate-900">
+                                    <option value="title">title</option>
+                                    <option value="original_title">original_title</option>
+                                    <option value="description">description</option>
+                                </select>
+                                <select v-model="newRule.action" class="bg-slate-100 rounded-lg px-3 py-2 text-sm border-none focus:ring-2 focus:ring-slate-900">
+                                    <option value="hide">hide (скрыть)</option>
+                                    <option value="highlight">highlight (выделить)</option>
+                                </select>
+                            </div>
+                            <input v-model="newRule.pattern" placeholder="regex (Python re)" class="w-full bg-slate-100 rounded-lg px-3 py-2 text-sm border-none font-mono focus:ring-2 focus:ring-slate-900" />
+                            <p v-if="newRuleError" class="text-xs text-red-500">{{ newRuleError }}</p>
+                            <button @click="createRule" class="w-full py-2 bg-slate-900 text-white text-xs font-black rounded-lg hover:bg-slate-700">+ Добавить</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </transition>
+
+        <!-- 8.18 — Audit log + undo. -->
+        <transition name="fade">
+            <div v-if="showAuditModal" @click="showAuditModal = false" class="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-[100] flex items-center justify-center p-4">
+                <div @click.stop class="bg-white w-full max-w-2xl max-h-[85vh] rounded-2xl shadow-2xl overflow-hidden flex flex-col">
+                    <div class="p-4 border-b border-slate-100 flex justify-between items-center">
+                        <h3 class="text-base font-black text-slate-900 tracking-tight">Аудит / откат</h3>
+                        <button @click="showAuditModal = false" class="text-slate-400 hover:text-slate-900 text-xl">✕</button>
+                    </div>
+                    <div class="p-4 space-y-2 overflow-y-auto">
+                        <div v-for="row in auditEntries" :key="row.id" class="border border-slate-200 rounded-lg p-3 flex items-center gap-3"
+                             :class="row.undone ? 'opacity-60' : ''">
+                            <div class="flex-1 min-w-0">
+                                <div class="text-xs font-black">#{{ row.id }} — {{ row.action }} <span v-if="row.item_id" class="text-slate-500">item {{ row.item_id }}</span></div>
+                                <div class="text-[10px] text-slate-500 truncate font-mono">{{ row.old_value }} → {{ row.new_value }}</div>
+                                <div class="text-[10px] text-slate-400">{{ row.created_at }}</div>
+                            </div>
+                            <button v-if="!row.undone" @click="undoAudit(row)"
+                                    class="px-3 py-1.5 bg-amber-500 text-white text-[10px] font-black rounded hover:bg-amber-600">↶ Отменить</button>
+                            <span v-else class="text-[10px] text-slate-400 font-black">отменено</span>
+                        </div>
+                        <p v-if="!auditEntries.length" class="text-center text-slate-400 text-sm py-4">История пуста</p>
                     </div>
                 </div>
             </div>
@@ -884,8 +1122,16 @@
                     sortableInstance: null,
                     activeCollectionMenuId: null, itemCollections: {},
                     activeResetMenuId: null, selectedResetFields: [],
+                    // 8.8 — release timeline expansion state, keyed by item.id.
+                    expandedReleaseTimelines: {},
                     logTypes: { 'reprocess': 'Обновление', 'video': 'Видео', 'other': 'Остальное', 'fix': 'Поиск', 'fix_poiskkino': 'PoiskKino', 'rezka': 'Rezka', 'rezka_collections': 'Rezka Папки', 'user': 'CSV', 'cleanup': 'Чистка', 'single_update': 'Карточка' },
                     statuses: { sync_video: 'idle', sync_other: 'idle', reprocess: 'idle', poiskkino: 'idle', rezka: 'idle', user: 'idle', cleanup: 'idle', full_pipeline: 'idle', single_update: 'idle' },
+                    // 7.6 — момент старта каждого ключа (epoch ms),
+                    // выставляется WS-обработчиком при value === 'running' и
+                    // зачищается на 'completed' | 'stopped' | 'error'.
+                    processStartTimes: {},
+                    // 7.6 — пересчитываемая «сейчас» для длительности в logPanel.
+                    nowTick: Date.now(),
                     progress: { sync_video: {current:0, total:0}, sync_other: {current:0, total:0}, reprocess: {current:0, total:0}, poiskkino: {current:0, total:0}, rezka: {current:0, total:0}, user: {current:0, total:0}, cleanup: {current:0, total:0}, full_pipeline: {current:0, total:0}, single_update: {current:0, total:0} },
                     userSelectedLog: false,
                     hideWatched: localStorage.getItem('hideWatched') === 'true',
@@ -905,6 +1151,25 @@
                     streamItem: null, streamInfo: null, streamLoading: false, streamError: null,
                     streamTranslator: null, streamSeason: null, streamEpisode: null,
                     streamVideos: null, streamSubtitles: null, streamCurrentUrl: null, streamCurrentQuality: null,
+                    // 8.12 — embedded HTML5 / hls.js player state.
+                    embeddedPlayer: { active: false, directSrc: null, error: null, hls: null },
+                    // 8.7 — TMDB trailer state. trailerCandidates is the
+                    // ranked YouTube list returned by /api/trailer; we
+                    // step through it on YouTube IFrame API onError (101
+                    // / 150 / 153 = "embed not allowed by uploader").
+                    showTrailerModal: false, trailerItem: null, trailerKey: null,
+                    trailerCandidates: [], trailerCandidateIndex: 0,
+                    trailerLoading: false, trailerError: null,
+                    // 8.17 — manual rebind modal state.
+                    showRebindModal: false, rebindItem: null,
+                    rebindForm: { kp_id: '', imdb_id: '', rezka_url: '' },
+                    rebindLoading: false, rebindError: null,
+                    // 8.5 — filter rules manager state.
+                    showRulesModal: false, filterRules: [],
+                    newRule: { name: '', field: 'title', pattern: '', action: 'hide' },
+                    newRuleError: null,
+                    // 8.18 — audit log state.
+                    showAuditModal: false, auditEntries: [],
                     editImdbId: '',
                     authEnabled: false,
                     authToken: sessionStorage.getItem('authToken') || '',
@@ -957,6 +1222,21 @@
                         'single_update': 'single_update' 
                     };
                     return maps[this.selectedLogType] || '';
+                },
+                // 7.6 — длительность текущего процесса для отображения в logPanel.
+                // Реактивно зависит от nowTick, который тикает раз в секунду
+                // пока что-то 'running' (см. mounted).
+                currentProcessElapsedText() {
+                    const key = this.currentStatusKey;
+                    const start = key && this.processStartTimes[key];
+                    if (!start) return '';
+                    const elapsed = Math.max(0, Math.floor((this.nowTick - start) / 1000));
+                    if (elapsed < 60) return `${elapsed}с`;
+                    const m = Math.floor(elapsed / 60);
+                    const s = elapsed % 60;
+                    if (m < 60) return `${m}м ${s}с`;
+                    const h = Math.floor(m / 60);
+                    return `${h}ч ${m % 60}м`;
                 }
             },
             watch: {
@@ -977,11 +1257,41 @@
                 maxKp(val) { sessionStorage.setItem('f_maxKp', val); },
                 minImdb(val) { sessionStorage.setItem('f_minImdb', val); },
                 maxImdb(val) { sessionStorage.setItem('f_maxImdb', val); },
-                page(val) { sessionStorage.setItem('f_page', val); }
+                page(val) { sessionStorage.setItem('f_page', val); },
+                // 8.7 — when a new trailer key is set, send the YouTube
+                // IFrame API "listening" handshake so the iframe begins
+                // posting events (including onError) back to us.
+                trailerKey(val) {
+                    if (!val) return;
+                    this.$nextTick(() => {
+                        const f = this.$refs.trailerFrame;
+                        if (!f || !f.contentWindow) return;
+                        try {
+                            f.contentWindow.postMessage(
+                                JSON.stringify({ event: 'listening' }),
+                                'https://www.youtube.com'
+                            );
+                        } catch (_) { /* cross-origin posts are fire-and-forget */ }
+                    });
+                },
+                // 8.12 — when the stream modal closes, dispose any
+                // active hls.js instance so we don't leak workers
+                // or media buffers across re-opens.
+                showStreamModal(val) {
+                    if (!val) {
+                        if (this.embeddedPlayer.hls) {
+                            try { this.embeddedPlayer.hls.destroy(); } catch (_) {}
+                        }
+                        this.embeddedPlayer = { active: false, directSrc: null, error: null, hls: null };
+                    }
+                }
             },
             mounted() { 
-                this.connectWebSocket();
                 this.checkAuth().then(() => {
+                    // Connect WS after we know the auth state; if a token is
+                    // required but missing, connectWebSocket() is a no-op until
+                    // doLogin() succeeds.
+                    this.connectWebSocket();
                     if (!this.authEnabled || this.authToken) {
                         this.loadFilters();
                         this.fetchCategories(); 
@@ -996,12 +1306,31 @@
                 document.addEventListener('click', () => { this.activeCollectionMenuId = null; });
                 window.addEventListener('scroll', this.saveScroll);
                 window.addEventListener('beforeunload', () => { this.markVisited(); });
+                // 7.6 — раз в секунду триггерим пересчёт длительности
+                // активного процесса в logPanel. nowTick меняется,
+                // currentProcessElapsedText переcчитывается, Vue ререндерит.
+                this._nowTickInterval = setInterval(() => { this.nowTick = Date.now(); }, 1000);
+                // 8.7 — listen for YouTube IFrame API messages so we can
+                // detect onError(101/150/153) and auto-cycle to the next
+                // candidate trailer when the current one disables embed.
+                this._youTubeListener = (e) => this._handleYouTubeMessage(e);
+                window.addEventListener('message', this._youTubeListener);
+            },
+            beforeUnmount() {
+                if (this._nowTickInterval) clearInterval(this._nowTickInterval);
+                if (this._youTubeListener) window.removeEventListener('message', this._youTubeListener);
             },
             methods: {
                 connectWebSocket() {
                     if (this.ws && this.ws.readyState <= 1) return;
+                    // If the server requires auth but we don't have a token yet,
+                    // skip connecting — doLogin() will call us again after login.
+                    if (this.authEnabled && !this.authToken) return;
                     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-                    this.ws = new WebSocket(`${proto}//${location.host}/ws`);
+                    const tokenQs = this.authToken
+                        ? `?token=${encodeURIComponent(this.authToken)}`
+                        : '';
+                    this.ws = new WebSocket(`${proto}//${location.host}/ws${tokenQs}`);
                     this.ws.onopen = () => {
                         this.wsConnected = true;
                         this.connectionError = false;
@@ -1018,8 +1347,26 @@
                         if (msg.type === 'status') {
                             if (msg.statuses) {
                                 this.statuses = msg.statuses;
+                                // 7.6 — на полном снимке статусов (login/reconnect)
+                                // зафиксируем стартовые таймстемпы для всего, что
+                                // прямо сейчас 'running'.
+                                for (const k in msg.statuses) {
+                                    if (msg.statuses[k] === 'running' && !this.processStartTimes[k]) {
+                                        this.processStartTimes[k] = Date.now();
+                                    } else if (msg.statuses[k] !== 'running' && this.processStartTimes[k]) {
+                                        delete this.processStartTimes[k];
+                                    }
+                                }
                             } else {
                                 this.statuses[msg.key] = msg.value;
+                                // 7.6 — отслеживаем длительность активного процесса.
+                                if (msg.value === 'running') {
+                                    if (!this.processStartTimes[msg.key]) {
+                                        this.processStartTimes[msg.key] = Date.now();
+                                    }
+                                } else {
+                                    delete this.processStartTimes[msg.key];
+                                }
                                 if (msg.value === 'completed' || msg.value === 'stopped' || msg.value === 'error') {
                                     this.fetchCategories();
                                     this.fetchCollections();
@@ -1063,6 +1410,12 @@
                     if (res.status === 401 && this.authEnabled) {
                         this.authToken = '';
                         sessionStorage.removeItem('authToken');
+                        // Drop the (now-unauthenticated) WS so it doesn't loop
+                        // forever trying to reconnect with a stale token.
+                        if (this.ws) {
+                            try { this.ws.close(); } catch (_) {}
+                            this.ws = null;
+                        }
                         this.showLogin = true;
                         throw new Error('Unauthorized');
                     }
@@ -1095,6 +1448,7 @@
                             this.showLogin = false;
                             this.loginUser = '';
                             this.loginPass = '';
+                            this.connectWebSocket();
                             this.fetchCategories();
                             this.fetchCollections();
                             this.fetchFeed();
@@ -1266,6 +1620,88 @@
                     this.fetchCollections();
                     this.fetchFeed();
                 },
+                // 8.2 — collections export/import.
+                //
+                // Server returns the file with Content-Disposition; we
+                // pull it as a Blob and trigger a download client-side
+                // so cookies/auth still apply.
+                async exportCollections(fmt) {
+                    try {
+                        const res = await this.apiFetch(`/api/collections/export?fmt=${fmt}`);
+                        if (!res.ok) {
+                            this.showToast(`Экспорт не удался: ${res.status}`);
+                            return;
+                        }
+                        const blob = await res.blob();
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+                        a.download = `collections-${ts}.${fmt}`;
+                        document.body.appendChild(a);
+                        a.click();
+                        a.remove();
+                        URL.revokeObjectURL(url);
+                    } catch (e) {
+                        this.showToast(`Ошибка экспорта: ${e}`);
+                    }
+                },
+                async onCollectionsImportFile(ev) {
+                    const file = ev.target.files && ev.target.files[0];
+                    // Reset the input so picking the same file twice fires the event again.
+                    ev.target.value = '';
+                    if (!file) return;
+                    const replace = confirm(
+                        'Заменить состав уже существующих коллекций?\n\n' +
+                        'OK — для каждой коллекции из файла перезаписать список карточек.\n' +
+                        'Отмена — добавить новое поверх существующего (дубликаты пропускаются).'
+                    );
+                    try {
+                        const text = await file.text();
+                        let res;
+                        if (file.name.toLowerCase().endsWith('.csv')) {
+                            res = await this.apiFetch(
+                                `/api/collections/import_csv?replace=${replace ? 'true' : 'false'}`,
+                                {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'text/csv' },
+                                    body: text
+                                }
+                            );
+                        } else {
+                            // JSON: accept either {"collections": [...]} (the export envelope)
+                            // or a bare list — translate the latter into the envelope shape.
+                            let parsed;
+                            try {
+                                parsed = JSON.parse(text);
+                            } catch (e) {
+                                this.showToast('Файл не является валидным JSON');
+                                return;
+                            }
+                            const cols = Array.isArray(parsed) ? parsed : (parsed.collections || []);
+                            res = await this.apiFetch('/api/collections/import', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ collections: cols, replace })
+                            });
+                        }
+                        if (!res.ok) {
+                            this.showToast(`Импорт не удался: ${res.status}`);
+                            return;
+                        }
+                        const report = await res.json();
+                        this.showToast(
+                            `Импорт завершён: создано ${report.created_collections || 0}, ` +
+                            `обновлено ${report.updated_collections || 0}, ` +
+                            `добавлено ${report.added_items || 0}, ` +
+                            `не найдено ${report.missing_items || 0}`
+                        );
+                        this.fetchCollections();
+                        this.fetchFeed();
+                    } catch (e) {
+                        this.showToast(`Ошибка импорта: ${e}`);
+                    }
+                },
                 selectCollection(id) {
                     this.selectedCollectionId = id;
                     this.page = 1;
@@ -1420,7 +1856,7 @@
                     if (params.length > 0) url += '?' + params.join('&');
                     this.syncLogs = 'Запуск процесса...';
                     try {
-                        const res = await fetch(url, { method: 'POST' });
+                        const res = await this.apiFetch(url, { method: 'POST' });
                         if (res.status === 400) {
                             const data = await res.json();
                             this.showToast(data.detail);
@@ -1430,7 +1866,11 @@
                         this.showLogs = true;
                         this.switchLog(mode === 'video' ? 'video' : 'other');
                         this.startLogPolling();
-                    } catch (e) { alert("Ошибка запуска"); }
+                    } catch (e) {
+                        // apiFetch already handled 401 (showed login modal); only
+                        // surface a generic error for genuine network failures.
+                        if (e && e.message !== 'Unauthorized') this.showToast("Ошибка запуска");
+                    }
                 },
                 async startFix(type) {
                     let url = '/api/start_reprocess';
@@ -1439,7 +1879,7 @@
                     if (type === 'legacy') url = '/api/start_fix';
                     this.syncLogs = 'Запуск...';
                     try {
-                        const res = await fetch(url, { method: 'POST' });
+                        const res = await this.apiFetch(url, { method: 'POST' });
                         if (res.status === 400) {
                             const data = await res.json();
                             this.showToast(data.detail);
@@ -1451,7 +1891,9 @@
                         else if (type === 'poiskkino') this.switchLog('fix_poiskkino');
                         else if (type === 'legacy') this.switchLog('fix');
                         this.startLogPolling();
-                    } catch (e) { alert("Ошибка запуска"); }
+                    } catch (e) {
+                        if (e && e.message !== 'Unauthorized') this.showToast("Ошибка запуска");
+                    }
                 },
                 async startRezkaSync() {
                     try {
@@ -1465,21 +1907,21 @@
                         this.showLogs = true;
                         this.switchLog('rezka');
                         this.startLogPolling();
-                    } catch (e) { alert("Ошибка запуска синхронизации Rezka"); }
+                    } catch (e) { this.showToast("Ошибка запуска синхронизации Rezka"); }
                 },
                 async startFullPipeline() {
                     try {
                         const res = await this.apiFetch('/api/start_full_pipeline', { method: 'POST' });
                         if (res.status === 400) {
                             const data = await res.json();
-                            alert(data.detail);
+                            this.showToast(data.detail);
                             return;
                         }
                         this.showLogPanel = true;
                         this.showLogs = true;
                         this.switchLog('video');
                         this.startLogPolling();
-                    } catch (e) { alert("Ошибка запуска полного цикла"); }
+                    } catch (e) { this.showToast("Ошибка запуска полного цикла"); }
                 },
 
                 async stopProcess(key) { 
@@ -1507,13 +1949,29 @@
                         this.showDashboard = true;
                     } catch (e) {
                         console.error("Dashboard error:", e);
-                        alert("Не удалось загрузить статистику");
+                        this.showToast("Не удалось загрузить статистику");
                     }
                 },
                 formatDate(dateStr) {
                     if (!dateStr) return '—';
                     const d = new Date(dateStr);
                     return d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+                },
+                // 8.8 — date formatter for the release timeline. Releases come
+                // from the rutor parser as 'YYYY-MM-DD HH:MM' strings; we want
+                // a compact, sortable, locale-friendly form (e.g. '15.04.2025').
+                formatReleaseDate(dateStr) {
+                    if (!dateStr) return '—';
+                    const d = new Date(dateStr);
+                    if (isNaN(d.getTime())) return dateStr;
+                    return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
+                },
+                // 8.8 — toggle the timeline expansion for a single card.
+                // Vue 3 reactivity: assigning a fresh object isn't needed
+                // because we only mutate top-level keys, but `this.x[id] = !x`
+                // works because expandedReleaseTimelines was declared in data().
+                toggleReleaseTimeline(itemId) {
+                    this.expandedReleaseTimelines[itemId] = !this.expandedReleaseTimelines[itemId];
                 },
                 formatDuration(seconds) {
                     if (!seconds) return '—';
@@ -1535,7 +1993,7 @@
                         this.showLogs = true;
                         this.switchLog('user');
                         this.startLogPolling();
-                    } catch (e) { alert("Ошибка запуска"); }
+                    } catch (e) { this.showToast("Ошибка запуска"); }
                 },
                 async startCleanup() {
                     try {
@@ -1545,7 +2003,7 @@
                         this.showLogs = true;
                         this.switchLog('cleanup');
                         this.startLogPolling();
-                    } catch (e) { alert("Ошибка запуска очистки"); }
+                    } catch (e) { this.showToast("Ошибка запуска очистки"); }
                 },
                 async startRezkaCollections() {
                     try {
@@ -1555,7 +2013,7 @@
                         this.showLogs = true;
                         this.switchLog('rezka_collections');
                         this.startLogPolling();
-                    } catch (e) { alert("Ошибка запуска синхронизации Rezka папок"); }
+                    } catch (e) { this.showToast("Ошибка запуска синхронизации Rezka папок"); }
                 },
                 async ignoreItem(id) {
                     await this.apiFetch(`/api/ignore/${id}`, { method: 'POST' });
@@ -1702,6 +2160,274 @@
                     }
                 },
                 showToast(msg) { this.toast.message = msg; this.toast.show = true; setTimeout(() => this.toast.show = false, 3000); },
+
+                // ── 8.7 — TMDB trailer modal ─────────────────────────
+                async openTrailer(item) {
+                    this.trailerItem = item;
+                    this.trailerKey = null;
+                    this.trailerCandidates = [];
+                    this.trailerCandidateIndex = 0;
+                    this.trailerError = null;
+                    this.trailerLoading = true;
+                    this.showTrailerModal = true;
+                    try {
+                        const res = await this.apiFetch(`/api/trailer/${item.id}`);
+                        const data = await res.json();
+                        if (!res.ok) {
+                            this.trailerError = data.error || `HTTP ${res.status}`;
+                        } else {
+                            // `candidates` is the ranked list (8.7 backend
+                            // change). Older backends only returned
+                            // `youtube_key` — handle both shapes.
+                            this.trailerCandidates = Array.isArray(data.candidates) && data.candidates.length
+                                ? data.candidates
+                                : [{ youtube_key: data.youtube_key, name: data.name, type: data.type, official: data.official }];
+                            this.trailerCandidateIndex = 0;
+                            this.trailerKey = this.trailerCandidates[0].youtube_key;
+                        }
+                    } catch (e) {
+                        this.trailerError = String(e);
+                    } finally {
+                        this.trailerLoading = false;
+                    }
+                },
+                cycleTrailerCandidate() {
+                    if (!this.trailerCandidates.length) return;
+                    this.trailerCandidateIndex = (this.trailerCandidateIndex + 1) % this.trailerCandidates.length;
+                    this.trailerKey = this.trailerCandidates[this.trailerCandidateIndex].youtube_key;
+                },
+                _handleYouTubeMessage(event) {
+                    // YouTube IFrame API posts JSON messages to the parent
+                    // when enablejsapi=1. We listen for `onError` events
+                    // (101/150/153 = embed disabled) and auto-cycle to the
+                    // next candidate when the modal is open.
+                    if (!this.showTrailerModal || !event.data) return;
+                    if (typeof event.origin === 'string' &&
+                        event.origin.indexOf('youtube') === -1) return;
+                    let payload = event.data;
+                    if (typeof payload === 'string') {
+                        try { payload = JSON.parse(payload); } catch (_) { return; }
+                    }
+                    if (!payload || payload.event !== 'onError') return;
+                    const code = Number(payload.info);
+                    if ([101, 150, 153].includes(code) && this.trailerCandidates.length > 1
+                        && this.trailerCandidateIndex < this.trailerCandidates.length - 1) {
+                        // Try the next candidate automatically.
+                        this.cycleTrailerCandidate();
+                    } else {
+                        // No more candidates; surface a hint without
+                        // hiding the iframe so the "Open on YouTube"
+                        // fallback is still usable.
+                        this.trailerError = `YouTube error ${code} — встроенное воспроизведение запрещено владельцем. Откройте на YouTube.`;
+                    }
+                },
+                closeTrailer() {
+                    // Force unmount of the iframe so YouTube stops audio.
+                    this.showTrailerModal = false;
+                    this.trailerKey = null;
+                    this.trailerItem = null;
+                    this.trailerCandidates = [];
+                    this.trailerCandidateIndex = 0;
+                },
+
+                // ── 8.17 — manual rebind ─────────────────────────────
+                openRebind(item) {
+                    this.rebindItem = item;
+                    this.rebindForm = {
+                        kp_id: item.kp_id || '',
+                        imdb_id: item.imdb_id || '',
+                        rezka_url: item.rezka_url || '',
+                    };
+                    this.rebindError = null;
+                    this.showRebindModal = true;
+                },
+                closeRebind() {
+                    this.showRebindModal = false;
+                    this.rebindItem = null;
+                    this.rebindError = null;
+                },
+                async submitRebind() {
+                    if (!this.rebindItem) return;
+                    this.rebindLoading = true;
+                    this.rebindError = null;
+                    const payload = {};
+                    for (const k of ['kp_id', 'imdb_id', 'rezka_url']) {
+                        const v = (this.rebindForm[k] || '').trim();
+                        // Only send fields the user actually changed.
+                        if (v !== (this.rebindItem[k] || '')) payload[k] = v;
+                    }
+                    if (!Object.keys(payload).length) {
+                        this.rebindError = 'Ничего не изменено';
+                        this.rebindLoading = false;
+                        return;
+                    }
+                    try {
+                        const res = await this.apiFetch(`/api/rebind/${this.rebindItem.id}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload),
+                        });
+                        const data = await res.json();
+                        if (!res.ok) {
+                            this.rebindError = data.error || `HTTP ${res.status}`;
+                        } else {
+                            this.showToast('ID обновлены, можно запустить пересбор');
+                            this.closeRebind();
+                            this.fetchFeed();
+                        }
+                    } catch (e) {
+                        this.rebindError = String(e);
+                    } finally {
+                        this.rebindLoading = false;
+                    }
+                },
+
+                // ── 8.5 — filter rules manager ───────────────────────
+                async openRulesManager() {
+                    this.showRulesModal = true;
+                    await this.refreshFilterRules();
+                },
+                async refreshFilterRules() {
+                    try {
+                        const res = await this.apiFetch('/api/filter_rules');
+                        this.filterRules = await res.json();
+                    } catch (e) {
+                        this.showToast('Не удалось загрузить правила');
+                    }
+                },
+                async createRule() {
+                    this.newRuleError = null;
+                    if (!this.newRule.name.trim() || !this.newRule.pattern.trim()) {
+                        this.newRuleError = 'Имя и regex обязательны';
+                        return;
+                    }
+                    try {
+                        const res = await this.apiFetch('/api/filter_rules', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(this.newRule),
+                        });
+                        const data = await res.json();
+                        if (!res.ok) {
+                            this.newRuleError = data.error || `HTTP ${res.status}`;
+                            return;
+                        }
+                        this.newRule = { name: '', field: 'title', pattern: '', action: 'hide' };
+                        await this.refreshFilterRules();
+                        this.fetchFeed();
+                    } catch (e) {
+                        this.newRuleError = String(e);
+                    }
+                },
+                async toggleRule(rule) {
+                    try {
+                        await this.apiFetch(`/api/filter_rules/${rule.id}`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ enabled: !rule.enabled }),
+                        });
+                        await this.refreshFilterRules();
+                        this.fetchFeed();
+                    } catch (e) {
+                        this.showToast('Не удалось переключить правило');
+                    }
+                },
+                async deleteRule(rule) {
+                    if (!confirm(`Удалить правило "${rule.name}"?`)) return;
+                    try {
+                        await this.apiFetch(`/api/filter_rules/${rule.id}`, { method: 'DELETE' });
+                        await this.refreshFilterRules();
+                        this.fetchFeed();
+                    } catch (e) {
+                        this.showToast('Ошибка удаления');
+                    }
+                },
+
+                // ── 8.18 — audit log ─────────────────────────────────
+                async openAuditLog() {
+                    this.showAuditModal = true;
+                    await this.refreshAudit();
+                },
+                async refreshAudit() {
+                    try {
+                        const res = await this.apiFetch('/api/audit_log?limit=100');
+                        this.auditEntries = await res.json();
+                    } catch (e) {
+                        this.showToast('Не удалось загрузить аудит');
+                    }
+                },
+                async undoAudit(row) {
+                    if (!confirm(`Откатить #${row.id} (${row.action})?`)) return;
+                    try {
+                        const res = await this.apiFetch(`/api/audit_log/${row.id}/undo`, { method: 'POST' });
+                        const data = await res.json();
+                        if (!res.ok) {
+                            this.showToast(data.error || `HTTP ${res.status}`);
+                            return;
+                        }
+                        this.showToast('Откачено');
+                        await this.refreshAudit();
+                        this.fetchFeed();
+                    } catch (e) {
+                        this.showToast('Ошибка отката');
+                    }
+                },
+
+                // ── 8.12 — embedded player ───────────────────────────
+                async playInBrowser() {
+                    if (!this.streamItem || !this.streamCurrentQuality) return;
+                    // Dispose previous hls.js instance before re-init (e.g.
+                    // when the user changes quality and clicks again).
+                    if (this.embeddedPlayer.hls) {
+                        try { this.embeddedPlayer.hls.destroy(); } catch (_) {}
+                    }
+                    this.embeddedPlayer = { active: true, directSrc: null, error: null, hls: null };
+                    let url = `/api/stream_url/${this.streamItem.id}?quality=${this.streamCurrentQuality}`;
+                    if (this.streamTranslator) url += `&translator=${this.streamTranslator}`;
+                    if (this.streamSeason) url += `&season=${this.streamSeason}`;
+                    if (this.streamEpisode) url += `&episode=${this.streamEpisode}`;
+                    try {
+                        const res = await this.apiFetch(url);
+                        const data = await res.json();
+                        if (!res.ok || data.error) {
+                            this.embeddedPlayer.error = data.error || `HTTP ${res.status}`;
+                            return;
+                        }
+                        // Native HLS works on Safari + iOS; Chrome/FF need hls.js.
+                        const v = await this.$nextTick().then(() => this.$refs.embeddedVideo);
+                        if (data.is_hls && v && !v.canPlayType('application/vnd.apple.mpegurl')) {
+                            await this._ensureHlsJs();
+                            const hls = new window.Hls();
+                            hls.loadSource(data.url);
+                            hls.attachMedia(v);
+                            this.embeddedPlayer.hls = hls;
+                        } else {
+                            this.embeddedPlayer.directSrc = data.url;
+                        }
+                        // Scroll the embedded <video> into the modal's visible
+                        // area so the seek bar / controls aren't clipped on
+                        // tall content (many episodes, many subtitle rows).
+                        this.$nextTick(() => {
+                            const el = this.$refs.embeddedVideo;
+                            if (el && typeof el.scrollIntoView === 'function') {
+                                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            }
+                        });
+                    } catch (e) {
+                        this.embeddedPlayer.error = String(e);
+                    }
+                },
+                _ensureHlsJs() {
+                    if (window.Hls) return Promise.resolve();
+                    return new Promise((resolve, reject) => {
+                        const s = document.createElement('script');
+                        s.src = 'https://cdn.jsdelivr.net/npm/hls.js@1.5.15/dist/hls.min.js';
+                        s.onload = resolve;
+                        s.onerror = () => reject(new Error('hls.js load failed'));
+                        document.head.appendChild(s);
+                    });
+                },
+
                 async openStream(item) {
                     this.streamItem = item;
                     this.streamInfo = null;
@@ -1805,6 +2531,17 @@
                 }
             }
         }).mount('#app');
+
+        // 7.1 — регистрируем service worker (sw.js на сервере получает
+        // динамический __SW_VERSION__, поэтому каждый деплой index.html
+        // вызывает install -> activate с очисткой старого кеша).
+        if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js').catch((err) => {
+                    console.warn('[SW] registration failed:', err);
+                });
+            });
+        }
     </script>
 </body>
 </html>

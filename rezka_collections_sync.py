@@ -1,6 +1,8 @@
 import os
 import re
+
 from dotenv import load_dotenv
+
 from app_core import normalize_title
 from db import Database
 from logger import setup_tee_logger
@@ -31,7 +33,7 @@ def _login():
 
     session = HdRezkaSession(REZKA_ORIGIN)
     session.login(REZKA_EMAIL, REZKA_PASSWORD)
-    print(f"  [+] Rezka login OK")
+    print("  [+] Rezka login OK")
     return session
 
 
@@ -113,9 +115,7 @@ def _add_to_rezka_folder(post_id, cat_id, session):
 
 
 def _extract_post_id(url):
-    m = re.search(
-        r"/(?:films|series|cartoons|animation|show|telecasts)/[^/]+/(\d+)-", url
-    )
+    m = re.search(r"/(?:films|series|cartoons|animation|show|telecasts)/[^/]+/(\d+)-", url)
     return m.group(1) if m else None
 
 
@@ -135,9 +135,7 @@ def _extract_kp_imdb_ids(soup):
     for block in rate_blocks:
         kp_link = block.find("a", href=re.compile(r"kinopoisk\.ru"))
         if kp_link:
-            kp_m = re.search(
-                r"/film/(\d+)|/series/(\d+)|/(\d+)/", str(kp_link.get("href", ""))
-            )
+            kp_m = re.search(r"/film/(\d+)|/series/(\d+)|/(\d+)/", str(kp_link.get("href", "")))
             if kp_m:
                 kp_id = next((g for g in kp_m.groups() if g), None)
         imdb_link = block.find("a", href=re.compile(r"imdb\.com"))
@@ -256,9 +254,7 @@ def _search_rezka_url(title, year, session):
         q = clean_title_for_search(p_clean)
         if q and len(q) > 1:
             search_queries.append(q)
-    search_queries = sorted(
-        search_queries, key=lambda x: (not x.isascii(), len(x)), reverse=True
-    )
+    search_queries = sorted(search_queries, key=lambda x: (not x.isascii(), len(x)), reverse=True)
 
     for q in search_queries:
         for suffix in [f" {year}", ""]:
@@ -368,15 +364,11 @@ def sync_rezka_collections():
         coll_name = coll["name"]
         cat_id = folder["id"]
         label = (
-            folder["name"]
-            if folder["name"] == coll_name
-            else f"{folder['name']} -> {coll_name}"
+            folder["name"] if folder["name"] == coll_name else f"{folder['name']} -> {coll_name}"
         )
         print(f"\n  [sync] '{label}' (cat_id={cat_id}, coll_id={coll_id})")
 
-        rezka_urls = (
-            _get_folder_items(folder["url"], session) if folder["count"] > 0 else []
-        )
+        rezka_urls = _get_folder_items(folder["url"], session) if folder["count"] > 0 else []
         rezka_item_ids = set()
         new_items_from_rezka = []
 
@@ -387,16 +379,14 @@ def sync_rezka_collections():
             else:
                 new_items_from_rezka.append(rz_url)
 
-        c.execute(
-            "SELECT item_id FROM collection_items WHERE collection_id = ?", (coll_id,)
-        )
+        c.execute("SELECT item_id FROM collection_items WHERE collection_id = ?", (coll_id,))
         project_item_ids = {r[0] for r in c.fetchall()}
 
         for rz_url in new_items_from_rezka:
             print(f"    [new] Parsing Rezka page to create card: {rz_url}")
             parsed = _parse_rezka_page(rz_url, session)
             if not parsed:
-                print(f"      [-] Failed to parse page")
+                print("      [-] Failed to parse page")
                 continue
 
             item_id = db.insert_item(parsed, conn=conn)
@@ -436,14 +426,10 @@ def sync_rezka_collections():
 
             rz_url = info.get("rezka_url")
             if not rz_url:
-                print(
-                    f"    [search] Looking for Rezka URL: {info['title']} ({info['year']})"
-                )
+                print(f"    [search] Looking for Rezka URL: {info['title']} ({info['year']})")
                 rz_url = _search_rezka_url(info["title"], info["year"], session)
                 if rz_url:
-                    db.fill_item_metadata(
-                        item_id, conn=conn, rezka_url=rz_url, checked_rezka=1
-                    )
+                    db.fill_item_metadata(item_id, conn=conn, rezka_url=rz_url, checked_rezka=1)
                     conn.commit()
                     url_to_item[rz_url] = item_id
                     all_items[item_id]["rezka_url"] = rz_url
@@ -451,7 +437,7 @@ def sync_rezka_collections():
                     total_new_urls += 1
                     print(f"      [+] Found: {rz_url}")
                 else:
-                    print(f"      [-] Not found on Rezka")
+                    print("      [-] Not found on Rezka")
                     continue
 
             post_id = _extract_post_id(rz_url)
@@ -470,7 +456,7 @@ def sync_rezka_collections():
         final_count = len(rezka_item_ids & (project_item_ids | only_on_rezka))
         print(f"    Collection '{coll_name}' total: {final_count + pushed} items")
 
-    print(f"\n=== SYNC COMPLETE ===")
+    print("\n=== SYNC COMPLETE ===")
     print(f"  Rezka -> Project: +{total_rezka_to_project} items added to collections")
     print(f"  Project -> Rezka: +{total_project_to_rezka} items pushed to Rezka")
     print(f"  New cards created from Rezka: {total_new_items}")

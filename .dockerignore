@@ -1,0 +1,69 @@
+# 5.8: keep the docker context lean. Anything that ends up in the
+# build context becomes a layer hash input, so we exclude
+# everything not needed inside the image.
+
+# Local environments / virtualenvs
+.env
+.venv/
+venv/
+env/
+
+# Python bytecode caches
+__pycache__/
+*.py[cod]
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+
+# Tooling state
+.git/
+.github/
+.gitignore
+.pre-commit-config.yaml
+
+# Local databases / WAL sidecars / caches
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+api_cache.db.sqlite
+
+# Logs / progress files / per-run state
+*.log
+*_log.txt
+progress_*.json
+checkpoint_*.json
+stop_*.flag
+
+# Project artifacts the runtime container doesn't need
+pars.zip
+rutor_check_*.html
+rutor_test.html
+temp_csv_head.txt
+IMDBOCENKI.csv
+kinopoiskocenki.csv
+
+# Docs / dev-only bits
+*.md
+!README.md
+TODO.md
+TOP_OPTIMIZATIONS.md
+SECURITY.md
+par2_progress.md
+
+# Tests don't run inside the production image
+tests/
+
+# Editor / OS noise
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Tooling configs only matter for dev
+pyproject.toml
+requirements.in
+requirements-dev.in

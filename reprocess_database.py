@@ -1,14 +1,19 @@
-import time
-import requests
-import re
 import json
 import os
-from bs4 import BeautifulSoup
-from tmdb_client import TMDBClient
+import re
+import time
+
+import requests
+
 from app_core import VIDEO_CATEGORY_IDS
-from script_utils import load_config, should_stop, clear_stop_flag
 from db import Database
 from logger import setup_tee_logger
+from script_utils import clear_stop_flag, load_config, should_stop
+from tmdb_client import TMDBClient
+
+# HTTPS by default; the env var matches the one used in rutor_parser.py so
+# both modules read from the same source of truth.
+RUTOR_MIRROR = os.getenv("RUTOR_MIRROR", "https://rutor.info").rstrip("/")
 
 GARBAGE_KEYWORDS = [
     "S01",
@@ -39,11 +44,6 @@ REPROCESS_REQUEST_DELAY = _config.get("reprocess", {}).get("request_delay", 0.5)
 STATUS_KEY = os.getenv("STATUS_KEY", "reprocess")
 
 
-class RutorParser:
-    def __init__(self):
-        self.mirror = "http://rutor.info"
-
-
 def has_garbage_title(title):
     return any(x in (title or "").upper() for x in GARBAGE_KEYWORDS)
 
@@ -62,20 +62,20 @@ def reprocess_all(force_all=False, specific_id=None):
     db = Database()
     conn = db.get_connection()
 
-    print(f"Подключено к БД. Режим WAL включен.", flush=True)
+    print("Подключено к БД. Режим WAL включен.", flush=True)
 
-    ids_str = ",".join(map(str, VIDEO_CATEGORY_IDS))
+    cats_ph = ",".join(["?"] * len(VIDEO_CATEGORY_IDS))
     garbage_like = " OR ".join(["items.title LIKE ?" for _ in GARBAGE_KEYWORDS[:6]])
     garbage_params = [f"%{kw}%" for kw in GARBAGE_KEYWORDS[:6]]
 
     if specific_id:
         where_clause = "items.id = ?"
-        where_params = [specific_id]
+        where_params: list = [specific_id]
     else:
-        where_clause = f"items.category_id IN ({ids_str}) AND items.is_reprocessed = 0"
-        where_params = []
+        where_clause = f"items.category_id IN ({cats_ph}) AND items.is_reprocessed = 0"
+        where_params = list(VIDEO_CATEGORY_IDS)
     if not force_all:
-        where_clause += """
+        where_clause += f"""
           AND (items.is_metadata_fixed = 0 OR items.kp_id IS NULL OR items.kp_id = '' OR items.imdb_id IS NULL OR items.imdb_id = '')
           AND (
             items.poster_url   IS NULL OR items.poster_url   = '' OR
@@ -85,11 +85,10 @@ def reprocess_all(force_all=False, specific_id=None):
             items.imdb_rating  IS NULL OR items.imdb_rating  = 0  OR
             {garbage_like}
           )
-        """.format(garbage_like=garbage_like)
+        """
         where_params.extend(garbage_params)
 
     tmdb = TMDBClient()
-    rutor = RutorParser()
 
     mode_str = "ПОЛНОЕ ОБНОВЛЕНИЕ" if force_all else "УМНАЯ ПРОВЕРКА"
     print(f"=== ЗАПУСК: {mode_str} ===", flush=True)
@@ -100,6 +99,7 @@ def reprocess_all(force_all=False, specific_id=None):
     total_updated = 0
     total_fixed_all = 0
 
+    batch_size = int(REPROCESS_BATCH_SIZE)
     while True:
         cursor = conn.cursor()
         cursor.execute(
@@ -115,9 +115,9 @@ def reprocess_all(force_all=False, specific_id=None):
             WHERE {where_clause}
             GROUP BY items.id
             ORDER BY items.id DESC
-            LIMIT {REPROCESS_BATCH_SIZE}
-        """,
-            where_params,
+            LIMIT ?
+            """,
+            [*where_params, batch_size],
         )
         items = [dict(r) for r in cursor.fetchall()]
 
@@ -179,25 +179,26 @@ def reprocess_all(force_all=False, specific_id=None):
             changes = []
 
             if not kp_id or not imdb_id:
-                rels = db.get_rutor_ids_for_item(item_id, conn=conn)
+                # Only probe the first 3 releases. An item can accumulate
+                # dozens of releases over its lifetime; if neither KP nor
+                # IMDb id is present in the first three Rutor pages, the
+                # rest almost never have it either, and the additional
+                # round-trips push the per-item budget into seconds.
+                rels = db.get_rutor_ids_for_item(item_id, conn=conn)[:3]
                 for rel_idx, rel_rutor_id in enumerate(rels):
                     if kp_id and imdb_id:
                         break
                     try:
                         time.sleep(0.3)
-                        MIRROR = "http://rutor.info"
+                        MIRROR = RUTOR_MIRROR
                         print(
                             f"  🔍 Рутор (1.1): {MIRROR}/torrent/{rel_rutor_id}",
                             flush=True,
                         )
-                        resp = requests.get(
-                            f"{MIRROR}/torrent/{rel_rutor_id}", timeout=20
-                        )
+                        resp = requests.get(f"{MIRROR}/torrent/{rel_rutor_id}", timeout=20)
                         if resp.status_code == 200:
                             if not kp_id:
-                                m = re.search(
-                                    r"kinopoisk\.ru/rating/(\d+)\.gif", resp.text
-                                )
+                                m = re.search(r"kinopoisk\.ru/rating/(\d+)\.gif", resp.text)
                                 if not m:
                                     m = re.search(
                                         r"kinopoisk\.ru/(?:level/1/)?(?:film|series)/(\d+)",
@@ -219,20 +220,13 @@ def reprocess_all(force_all=False, specific_id=None):
                         print(f"    ⚠️ Ошибка глубокого поиска: {e}", flush=True)
 
             tmdb_data = None
-            if (
-                not poster
-                or not desc
-                or not imdb_rating
-                or has_garbage_title(old_title)
-            ):
+            if not poster or not desc or not imdb_rating or has_garbage_title(old_title):
                 try:
                     if imdb_id:
                         tmdb_data = tmdb.find_by_imdb_id(imdb_id)
                     if not tmdb_data:
                         t_parts = old_title.split(" / ")
-                        ru_part = re.sub(
-                            r"\s*\(\d{4}\)\s*", "", t_parts[0].split("/")[0]
-                        ).strip()
+                        ru_part = re.sub(r"\s*\(\d{4}\)\s*", "", t_parts[0].split("/")[0]).strip()
                         en_part = None
                         if len(t_parts) > 1:
                             en_part = re.sub(
@@ -240,16 +234,12 @@ def reprocess_all(force_all=False, specific_id=None):
                             ).strip()
                         search_primary = en_part or ru_part
                         search_alt = ru_part if en_part else None
-                        tmdb_data = tmdb.search_movie(
-                            search_primary, year, alt_title=search_alt
-                        )
+                        tmdb_data = tmdb.search_movie(search_primary, year, alt_title=search_alt)
                     if tmdb_data:
                         print("  ✅ Данные в TMDB получены", flush=True)
                         if not imdb_id and tmdb_data.get("imdb_id"):
                             imdb_id = tmdb_data["imdb_id"]
-                            changes.append(
-                                f"    🎯 Нашел IMDb ID (через TMDB): {imdb_id}"
-                            )
+                            changes.append(f"    🎯 Нашел IMDb ID (через TMDB): {imdb_id}")
                         if not poster and tmdb_data.get("poster_url"):
                             poster = tmdb_data["poster_url"]
                             changes.append("    ✅ Постер добавлен")
@@ -258,9 +248,7 @@ def reprocess_all(force_all=False, specific_id=None):
                             changes.append("    ✅ Описание добавлено")
                         if tmdb_data.get("title"):
                             new_ru = tmdb_data["title"]
-                            new_orig = tmdb_data.get("original_title") or tmdb_data.get(
-                                "title"
-                            )
+                            new_orig = tmdb_data.get("original_title") or tmdb_data.get("title")
                             if new_ru.lower() != new_orig.lower():
                                 new_title = f"{new_ru} / {new_orig}"
                             else:
@@ -269,9 +257,7 @@ def reprocess_all(force_all=False, specific_id=None):
                                 new_title += f" ({year})"
                             if new_title != old_title:
                                 final_title = new_title
-                                changes.append(
-                                    f"    ✨ Название обновлено: {final_title}"
-                                )
+                                changes.append(f"    ✨ Название обновлено: {final_title}")
                             if new_orig:
                                 original_title = new_orig
                     else:
@@ -312,13 +298,9 @@ def reprocess_all(force_all=False, specific_id=None):
                     kp_id=kp_id,
                     kp_rating=kp_rating,
                     imdb_rating=imdb_rating,
-                    original_title=tmdb_data.get("original_title")
-                    if tmdb_data
-                    else None,
+                    original_title=tmdb_data.get("original_title") if tmdb_data else None,
                 )
-                db.update_item(
-                    item_id, conn=conn, is_metadata_fixed=is_fixed, is_reprocessed=1
-                )
+                db.update_item(item_id, conn=conn, is_metadata_fixed=is_fixed, is_reprocessed=1)
                 conn.commit()
                 total_updated += 1
             except Exception:
@@ -334,9 +316,7 @@ def reprocess_all(force_all=False, specific_id=None):
                     db.update_item(existing_id, conn=conn, is_reprocessed=1)
                     db.delete_item(item_id, conn=conn)
                     conn.commit()
-                    print(
-                        f"  ✅ Успешно слито с карточкой ID {existing_id}", flush=True
-                    )
+                    print(f"  ✅ Успешно слито с карточкой ID {existing_id}", flush=True)
                 else:
                     db.update_item(item_id, conn=conn, is_reprocessed=1)
                     conn.commit()

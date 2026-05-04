@@ -29,5 +29,10 @@ class TeeWriter:
 
 def setup_tee_logger(name: str, log_file: str) -> logging.Logger:
     log = setup_logger(name, log_file)
-    sys.stdout = TeeWriter(log)
+    # Tee both stdout and stderr. Previously only stdout was captured,
+    # which meant tracebacks and any stderr-routed errors only landed
+    # in the live console and were lost to the persistent log — the
+    # one place a user is likely to look after the process has ended.
+    sys.stdout = TeeWriter(log, sys.__stdout__)
+    sys.stderr = TeeWriter(log, sys.__stderr__)
     return log

@@ -1,12 +1,13 @@
-import time
+import os
 import re
 import sys
-import os
-from kinopoisk_client import KinopoiskClient
-from poiskkino_client import PoiskKinoClient
-from script_utils import load_config, should_stop, clear_stop_flag
+import time
+
 from db import Database
+from kinopoisk_client import KinopoiskClient
 from logger import setup_tee_logger
+from poiskkino_client import PoiskKinoClient
+from script_utils import clear_stop_flag, load_config, should_stop
 
 _config = load_config()
 FIX_BATCH_SIZE = _config.get("fix_posters", {}).get("batch_size", 300)
@@ -25,19 +26,10 @@ def fix_metadata(api_type="tech"):
         api_name = "PoiskKino (Dev)"
 
     print(f"\n\n=== ЗАПУСК: {api_name} ({time.strftime('%H:%M:%S')}) ===")
-    cats_str = "(1, 4, 5, 16, 7)"
     check_col = f"checked_{api_type}"
 
     db = Database()
     conn = db.get_connection()
-
-    cursor = conn.cursor()
-    cursor.execute(f"""
-        UPDATE items SET kp_rating = 0, imdb_rating = 0, is_metadata_fixed = 0
-        WHERE category_id IN {cats_str}
-        AND kp_rating > 0 AND imdb_rating > 0 AND kp_rating = imdb_rating
-    """)
-    conn.commit()
 
     items = db.get_items_needing_metadata(check_col, FIX_BATCH_SIZE, conn=conn)
 
@@ -47,11 +39,11 @@ def fix_metadata(api_type="tech"):
     else:
         for idx, item_data in enumerate(items, 1):
             if should_stop(STATUS_KEY):
-                print(f"\n[STOP] Graceful shutdown requested.")
+                print("\n[STOP] Graceful shutdown requested.")
                 break
 
             if client.is_limited:
-                print(f"\n[!] Лимит API исчерпан. Остановка.")
+                print("\n[!] Лимит API исчерпан. Остановка.")
                 break
 
             item_id = item_data["id"]
@@ -150,11 +142,11 @@ def fix_metadata(api_type="tech"):
                 if found_parts:
                     for p in found_parts:
                         print(f"    {p}")
-                    print(f"  ✅ Данные обновлены")
+                    print("  ✅ Данные обновлены")
                 else:
-                    print(f"  💎 Новых данных не найдено.")
+                    print("  💎 Новых данных не найдено.")
             else:
-                print(f"  ❌ API не вернул данных.")
+                print("  ❌ API не вернул данных.")
 
             if not client.is_limited:
                 db.mark_checked(item_id, api_type, conn=conn)
@@ -163,11 +155,11 @@ def fix_metadata(api_type="tech"):
             time.sleep(FIX_REQUEST_DELAY)
 
     total, no_p, no_r = db.get_db_stats(conn=conn)
-    print(f"\n=== ИТОГОВАЯ СТАТИСТИКА ===")
+    print("\n=== ИТОГОВАЯ СТАТИСТИКА ===")
     print(f"Всего видео: {total}")
     print(f"Осталось БЕЗ постеров: {no_p}")
     print(f"Осталось БЕЗ оценок: {no_r}")
-    print(f"===========================\n")
+    print("===========================\n")
 
     conn.close()
 

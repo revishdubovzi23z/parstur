@@ -1,19 +1,14 @@
-import requests
-from bs4 import BeautifulSoup
-import re
 import os
-import time
-import unicodedata
+
 from dotenv import load_dotenv
-from tmdb_client import TMDBClient
+
 from app_core import normalize_title
-from script_utils import load_config
 from db import Database
 from logger import setup_tee_logger
+from script_utils import load_config
+from tmdb_client import TMDBClient
 
 load_dotenv()
-
-import sys
 
 
 class UserSync:
@@ -65,7 +60,7 @@ class UserSync:
         if os.path.exists(imdb_path):
             print(f"Загрузка IMDb: {imdb_path}")
             try:
-                with open(imdb_path, "r", encoding="utf-8-sig") as f:
+                with open(imdb_path, encoding="utf-8-sig") as f:
                     reader = csv.DictReader(f)
                     for row in reader:
                         imdb_id = row.get("Const")
@@ -111,7 +106,7 @@ class UserSync:
             content = None
             for enc in encodings:
                 try:
-                    with open(kp_path, "r", encoding=enc) as f:
+                    with open(kp_path, encoding=enc) as f:
                         content = f.read()
                         break
                 except Exception:
@@ -120,40 +115,24 @@ class UserSync:
             if content:
                 try:
                     lines = content.splitlines()
-                    delimiter = (
-                        "\t" if "\t" in lines[0] else (";" if ";" in lines[0] else ",")
-                    )
+                    delimiter = "\t" if "\t" in lines[0] else (";" if ";" in lines[0] else ",")
                     reader = csv.DictReader(lines, delimiter=delimiter)
                     for row in reader:
                         row = {
-                            k.strip('"').strip(): v.strip('"').strip()
-                            for k, v in row.items()
-                            if k
+                            k.strip('"').strip(): v.strip('"').strip() for k, v in row.items() if k
                         }
                         row_l = {k.lower(): v for k, v in row.items()}
 
-                        title = (
-                            row.get("Title")
-                            or row_l.get("name")
-                            or row_l.get("название")
-                        )
-                        orig_title = row.get("Original Title") or row_l.get(
-                            "original title"
-                        )
+                        title = row.get("Title") or row_l.get("name") or row_l.get("название")
+                        orig_title = row.get("Original Title") or row_l.get("original title")
                         kp_id = row.get("backup_id") or row_l.get("id")
                         year = row.get("Year") or row_l.get("год")
-                        rating = (
-                            row.get("My rating")
-                            or row_l.get("rating")
-                            or row_l.get("оценка")
-                        )
+                        rating = row.get("My rating") or row_l.get("rating") or row_l.get("оценка")
 
                         if not title or not rating:
                             continue
                         try:
-                            year_int = (
-                                int(year) if year and str(year).isdigit() else None
-                            )
+                            year_int = int(year) if year and str(year).isdigit() else None
                             rating_int = int(float(rating.replace(",", ".")))
                             if rating_int == 0:
                                 continue
@@ -228,8 +207,8 @@ if __name__ == "__main__":
 
     try:
         total_ratings = sync.db.get_user_ratings_count()
-        print(f"\n==========================================")
+        print("\n==========================================")
         print(f"ИТОГО В ВАШЕЙ БАЗЕ СОХРАНЕНО: {total_ratings} ОЦЕНОК")
-        print(f"==========================================\n")
+        print("==========================================\n")
     except Exception as e:
         print(f"Ошибка при подсчете оценок: {e}")

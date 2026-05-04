@@ -1,25 +1,100 @@
 import asyncio
-import aiohttp
-import re
-import os
 import json
-import time
+import os
+import re
 from collections import defaultdict
+
+import aiohttp
 from bs4 import BeautifulSoup
-from app_core import normalize_title, clean_title_for_search
-from script_utils import load_config, should_stop, clear_stop_flag
+
+from app_core import clean_title_for_search, normalize_title
 from db import Database
 from logger import setup_tee_logger
+from script_utils import clear_stop_flag, load_config, should_stop
 
 _config = load_config()
-REZKA_CONCURRENCY = _config.get("rezka", {}).get("concurrency", 3)
+
+
+# Concurrency precedence (4.4): CLI flag (set in __main__) > env >
+# config.yml > 6. The historical default of 3 was chosen to be safe
+# against captcha; rezka tolerates 6 simultaneous requests in
+# practice — measurable speedup on a 10 k-row catalog without
+# triggering the WAF. Operators with a logged-in session can push
+# higher via REZKA_CONCURRENCY env or `--concurrency`.
+def _initial_concurrency() -> int:
+    env = os.getenv("REZKA_CONCURRENCY")
+    if env:
+        try:
+            return max(1, int(env))
+        except ValueError:
+            print(
+                f"[rezka] ignoring non-integer REZKA_CONCURRENCY={env!r}",
+                flush=True,
+            )
+    return int(_config.get("rezka", {}).get("concurrency", 6))
+
+
+REZKA_CONCURRENCY = _initial_concurrency()
 STATUS_KEY = os.getenv("STATUS_KEY", "rezka")
 REZKA_ORIGIN = "https://rezka.ag"
 REZKA_SEARCH_URL = f"{REZKA_ORIGIN}/engine/ajax/search.php"
 REZKA_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.138 Safari/537.36"
 }
+# Default anonymous cookies. The 'hdmbbs=1' flag flips the rezka mirror
+# into the lower-friction layout. _login_cookies() (below) overrides
+# these with a logged-in session whenever REZKA_EMAIL / REZKA_PASSWORD
+# are configured — without that, each request fights the captcha and
+# the search endpoint regularly returns empty results.
 REZKA_COOKIES = {"hdmbbs": "1"}
+REZKA_EMAIL = os.getenv("REZKA_EMAIL", "")
+REZKA_PASSWORD = os.getenv("REZKA_PASSWORD", "")
+
+# 5.11 — score thresholds (previously hard-coded -150 / 70 / -50).
+# Operators occasionally need to retune these when rezka changes how
+# its search ranks results. Reading them from config.json gives a
+# knob without code changes. Field meanings:
+#   score_min_with_ids     — minimum score during initial sync when
+#                            the source row already has a kp_id or
+#                            imdb_id. The negative default lets weak
+#                            title matches through because the id is
+#                            the real evidence.
+#   score_min_without_ids  — the strict floor when no external id is
+#                            available; only solid title matches pass.
+#   score_min_resync_with_ids — the floor on the periodic re-sync
+#                            pass. Tighter than the initial pass
+#                            because we already have a verified row
+#                            and don't want a stale candidate to
+#                            steal the slot.
+_REZKA_CFG = _config.get("rezka", {})
+SCORE_MIN_WITH_IDS = int(_REZKA_CFG.get("score_min_with_ids", -150))
+SCORE_MIN_WITHOUT_IDS = int(_REZKA_CFG.get("score_min_without_ids", 70))
+SCORE_MIN_RESYNC_WITH_IDS = int(_REZKA_CFG.get("score_min_resync_with_ids", -50))
+
+
+def _login_cookies() -> dict:
+    """Return cookies for a logged-in HdRezka session, falling back to
+    anonymous defaults when no creds are present or login fails. The
+    returned dict is safe to feed into aiohttp.ClientSession(cookies=...).
+    """
+    if not REZKA_EMAIL or not REZKA_PASSWORD:
+        return dict(REZKA_COOKIES)
+    try:
+        from HdRezkaApi.session import HdRezkaSession  # type: ignore
+
+        session = HdRezkaSession()
+        session.login(REZKA_EMAIL, REZKA_PASSWORD)
+        cookies = dict(REZKA_COOKIES)
+        # requests-style cookiejar to plain dict.
+        for cookie in session.cookies:  # type: ignore[attr-defined]
+            cookies[cookie.name] = cookie.value
+        return cookies
+    except Exception as e:
+        print(
+            f"[rezka] login failed ({type(e).__name__}: {e}); falling back to anonymous cookies",
+            flush=True,
+        )
+        return dict(REZKA_COOKIES)
 
 
 def report_progress(current, total, status_key="rezka"):
@@ -42,9 +117,7 @@ def _parse_title(title):
         q = clean_title_for_search(p)
         if q and len(q) > 1:
             search_queries.append(q)
-    search_queries = sorted(
-        search_queries, key=lambda x: (not x.isascii(), len(x)), reverse=True
-    )
+    search_queries = sorted(search_queries, key=lambda x: (not x.isascii(), len(x)), reverse=True)
     return clean_parts, search_queries
 
 
@@ -115,9 +188,7 @@ def _extract_kp_imdb_ids(soup):
     for block in rate_blocks:
         kp_link = block.find("a", href=re.compile(r"kinopoisk\.ru"))
         if kp_link:
-            kp_m = re.search(
-                r"/film/(\d+)|/series/(\d+)|/(\d+)/", str(kp_link.get("href", ""))
-            )
+            kp_m = re.search(r"/film/(\d+)|/series/(\d+)|/(\d+)/", str(kp_link.get("href", "")))
             if kp_m:
                 kp_id = next((g for g in kp_m.groups() if g), None)
         imdb_link = block.find("a", href=re.compile(r"imdb\.com"))
@@ -173,23 +244,24 @@ def _extract_ratings_from_soup(soup):
     return kp_rating, imdb_rating
 
 
-def _verify_candidate_soup(soup, scored_item, year, kp_id, imdb_id):
-    page_kp_id, page_imdb_id = _extract_kp_imdb_ids(soup)
+def _evaluate_candidate(
+    page_kp_id,
+    page_imdb_id,
+    page_year,
+    scored_item,
+    year,
+    kp_id,
+    imdb_id,
+    *,
+    print_id_check_line: bool = False,
+):
+    """Shared verdict logic.
 
-    page_year = scored_item.get("year")
-    if not page_year:
-        y_m = re.search(r"(?:Год|Дата выхода):.*?(\d{4})", str(soup), re.S | re.I)
-        if y_m:
-            page_year = int(y_m.group(1))
-        else:
-            year_link = soup.select_one(
-                '.b-content__main .b-post__info a[href*="/year/"]'
-            )
-            if year_link:
-                ym2 = re.search(r"\d{4}", str(year_link.get("href", "")))
-                if ym2:
-                    page_year = int(ym2.group(0))
-
+    `_verify_candidate_soup` and `_verify_candidate` previously had two
+    almost-identical copies of the score-adjustment + id-match decision
+    block (3.21). Refactored: each wrapper just extracts `page_kp_id`,
+    `page_imdb_id`, `page_year` from its source object and delegates here.
+    """
     score = scored_item["score"]
     current_score = score
     if not scored_item.get("year") and page_year and year:
@@ -225,6 +297,12 @@ def _verify_candidate_soup(soup, scored_item, year, kp_id, imdb_id):
             print(f"      [-] CONFLICT IMDb ID: {imdb_id} != {page_imdb_id}")
             id_conflict = True
 
+    if print_id_check_line:
+        print(
+            f"      [?] ID Check: DB({kp_id or '-'}, {imdb_id or '-'}) vs "
+            f"Rezka({page_kp_id or '-'}, {page_imdb_id or '-'})"
+        )
+
     if id_conflict:
         return False, page_kp_id, page_imdb_id, current_score, "conflict"
 
@@ -235,8 +313,13 @@ def _verify_candidate_soup(soup, scored_item, year, kp_id, imdb_id):
         reason = "id_match"
     elif (kp_id or imdb_id) and not (page_kp_id or page_imdb_id):
         if current_score >= 90:
+            if print_id_check_line:
+                print(f"      [+] Trusting by title (Score: {current_score})")
             is_valid = True
             reason = "trust_by_title"
+        else:
+            if print_id_check_line:
+                print(f"      [-] Not enough data (Score: {current_score})")
     elif not (kp_id or imdb_id) and current_score >= 90:
         is_valid = True
         reason = "high_score"
@@ -246,6 +329,26 @@ def _verify_candidate_soup(soup, scored_item, year, kp_id, imdb_id):
         reason = "page_ids_high_score"
 
     return is_valid, page_kp_id, page_imdb_id, current_score, reason
+
+
+def _verify_candidate_soup(soup, scored_item, year, kp_id, imdb_id):
+    page_kp_id, page_imdb_id = _extract_kp_imdb_ids(soup)
+
+    page_year = scored_item.get("year")
+    if not page_year:
+        y_m = re.search(r"(?:Год|Дата выхода):.*?(\d{4})", str(soup), re.S | re.I)
+        if y_m:
+            page_year = int(y_m.group(1))
+        else:
+            year_link = soup.select_one('.b-content__main .b-post__info a[href*="/year/"]')
+            if year_link:
+                ym2 = re.search(r"\d{4}", str(year_link.get("href", "")))
+                if ym2:
+                    page_year = int(ym2.group(0))
+
+    return _evaluate_candidate(
+        page_kp_id, page_imdb_id, page_year, scored_item, year, kp_id, imdb_id
+    )
 
 
 def _extract_metadata_from_soup(soup, kp_rating, imdb_rating):
@@ -275,7 +378,6 @@ def _extract_metadata_from_soup(soup, kp_rating, imdb_rating):
 
 
 def _verify_candidate(rezka_obj, scored_item, year, kp_id, imdb_id):
-    score = scored_item["score"]
     page_kp_id, page_imdb_id = None, None
     if rezka_obj.soup:
         page_kp_id, page_imdb_id = _extract_kp_imdb_ids(rezka_obj.soup)
@@ -289,68 +391,16 @@ def _verify_candidate(rezka_obj, scored_item, year, kp_id, imdb_id):
     if not page_year:
         page_year = scored_item.get("year")
 
-    current_score = score
-    if not scored_item.get("year") and page_year and year:
-        diff = abs(year - page_year)
-        if diff == 0:
-            current_score += 60
-        elif diff == 1:
-            current_score += 50
-        elif diff <= 3:
-            current_score -= 40
-        else:
-            current_score -= 80
-
-    if page_year:
-        print(f"      [*] Год на странице: {page_year}")
-
-    id_match = False
-    id_conflict = False
-
-    if kp_id and page_kp_id:
-        if str(kp_id) == str(page_kp_id):
-            print(f"      [+] MATCH KP ID: {kp_id}")
-            id_match = True
-        else:
-            print(f"      [-] CONFLICT KP ID: {kp_id} != {page_kp_id}")
-            id_conflict = True
-
-    if imdb_id and page_imdb_id:
-        if str(imdb_id) == str(page_imdb_id):
-            print(f"      [+] MATCH IMDb ID: {imdb_id}")
-            id_match = True
-        else:
-            print(f"      [-] CONFLICT IMDb ID: {imdb_id} != {page_imdb_id}")
-            id_conflict = True
-
-    print(
-        f"      [?] ID Check: DB({kp_id or '-'}, {imdb_id or '-'}) vs Rezka({page_kp_id or '-'}, {page_imdb_id or '-'})"
+    return _evaluate_candidate(
+        page_kp_id,
+        page_imdb_id,
+        page_year,
+        scored_item,
+        year,
+        kp_id,
+        imdb_id,
+        print_id_check_line=True,
     )
-
-    if id_conflict:
-        return False, page_kp_id, page_imdb_id, current_score, "conflict"
-
-    is_valid = False
-    reason = ""
-    if id_match:
-        is_valid = True
-        reason = "id_match"
-    elif (kp_id or imdb_id) and not (page_kp_id or page_imdb_id):
-        if current_score >= 90:
-            print(f"      [+] Trusting by title (Score: {current_score})")
-            is_valid = True
-            reason = "trust_by_title"
-        else:
-            print(f"      [-] Not enough data (Score: {current_score})")
-    elif not (kp_id or imdb_id) and current_score >= 90:
-        is_valid = True
-        reason = "high_score"
-
-    if not (kp_id or imdb_id) and (page_kp_id or page_imdb_id) and current_score >= 110:
-        is_valid = True
-        reason = "page_ids_high_score"
-
-    return is_valid, page_kp_id, page_imdb_id, current_score, reason
 
 
 def _extract_series_info(rezka_obj):
@@ -425,9 +475,7 @@ def _sync_load_rezka(url):
     return None
 
 
-def search_rezka_for_item(
-    title, year, kp_id=None, imdb_id=None, kp_rating=0, imdb_rating=0
-):
+def search_rezka_for_item(title, year, kp_id=None, imdb_id=None, kp_rating=0, imdb_rating=0):
     result = {
         "found": False,
         "rezka_url": None,
@@ -495,7 +543,7 @@ def search_rezka_for_item(
             pass
 
     if not all_results:
-        print(f"    [-] Ничего не найдено на Rezka.")
+        print("    [-] Ничего не найдено на Rezka.")
         return result
 
     print(f"    [*] Найдено {len(all_results)} результатов.")
@@ -503,7 +551,7 @@ def search_rezka_for_item(
     candidates = _score_candidates(all_results, clean_parts, year)
 
     has_ids = bool(kp_id or imdb_id)
-    min_score = -150 if has_ids else 70
+    min_score = SCORE_MIN_WITH_IDS if has_ids else SCORE_MIN_WITHOUT_IDS
 
     final_res = None
     final_data = {}
@@ -520,7 +568,7 @@ def search_rezka_for_item(
 
         rezka_obj = _sync_load_rezka(res["url"])
         if not rezka_obj:
-            print(f"      [!] Ошибка загрузки страницы.")
+            print("      [!] Ошибка загрузки страницы.")
             continue
 
         is_valid, page_kp_id, page_imdb_id, current_score, reason = _verify_candidate(
@@ -549,7 +597,7 @@ def search_rezka_for_item(
             continue
 
     if not final_res:
-        print(f"    [-] Подходящий результат не найден.")
+        print("    [-] Подходящий результат не найден.")
         return result
 
     print(f"    [+] ПОДТВЕРЖДЕНО: {final_res['title']} (Score: {final_data['score']})")
@@ -566,6 +614,29 @@ def search_rezka_for_item(
     result["latest_season"] = final_data.get("latest_season", 0)
     result["latest_episode"] = final_data.get("latest_episode", 0)
     return result
+
+
+# Per-batch error aggregation. Populated by the async helpers below
+# (3.14): instead of silently swallowing every transport error, each
+# call records (kind, key, error-class) so the caller can print a
+# rolled-up summary at the end of a phase.
+_BATCH_ERRORS: list[tuple[str, str, str]] = []
+
+
+def _reset_batch_errors() -> None:
+    _BATCH_ERRORS.clear()
+
+
+def _print_batch_errors(label: str) -> None:
+    if not _BATCH_ERRORS:
+        return
+    by_class: dict[str, int] = {}
+    for _kind, _key, cls in _BATCH_ERRORS:
+        by_class[cls] = by_class.get(cls, 0) + 1
+    print(
+        f"  [Phase {label}] aggregated transport errors: total={len(_BATCH_ERRORS)} "
+        + ", ".join(f"{k}={v}" for k, v in sorted(by_class.items()))
+    )
 
 
 async def _async_search(session, query, semaphore):
@@ -591,8 +662,12 @@ async def _async_search(session, query, semaphore):
                         rating = float(rating_span.get_text()) if rating_span else None
                         results.append({"title": t, "url": url, "rating": rating})
                     return query, results
+                # Non-200 also worth aggregating — they often indicate
+                # the search endpoint is shadow-blocking us.
+                _BATCH_ERRORS.append(("search", query, f"HTTP {resp.status}"))
                 return query, []
-        except Exception:
+        except Exception as e:
+            _BATCH_ERRORS.append(("search", query, type(e).__name__))
             return query, []
 
 
@@ -608,18 +683,24 @@ async def _async_load_page(session, url, semaphore):
                     content = await resp.read()
                     soup = BeautifulSoup(content, "html.parser")
                     return url, soup
+                _BATCH_ERRORS.append(("page", url, f"HTTP {resp.status}"))
                 return url, None
-        except Exception:
+        except Exception as e:
+            _BATCH_ERRORS.append(("page", url, type(e).__name__))
             return url, None
 
 
 async def _search_rezka_batch(items, db, conn):
     total = len(items)
+    print(f"[rezka] concurrency={REZKA_CONCURRENCY}", flush=True)
     semaphore = asyncio.Semaphore(REZKA_CONCURRENCY)
+    _reset_batch_errors()
 
+    # 3.15: prefer cookies from a logged-in HdRezka session — anonymous
+    # access is rate-limited and often returns empty search payloads.
     async with aiohttp.ClientSession(
         headers=REZKA_HEADERS,
-        cookies=REZKA_COOKIES,
+        cookies=_login_cookies(),
     ) as session:
         item_infos = []
         for row in items:
@@ -639,14 +720,14 @@ async def _search_rezka_batch(items, db, conn):
             for s_title in info["search_queries"]:
                 with_year_queries.add(f"{s_title} {year}")
 
-        print(
-            f"  [Phase 1a] {len(with_year_queries)} unique 'with year' queries for {total} items"
-        )
+        print(f"  [Phase 1a] {len(with_year_queries)} unique 'with year' queries for {total} items")
         coros = [_async_search(session, q, semaphore) for q in with_year_queries]
         raw = await asyncio.gather(*coros)
         with_year_results = {}
         for q, results in raw:
             with_year_results[q] = results
+        _print_batch_errors("1a")
+        _reset_batch_errors()
 
         if should_stop(STATUS_KEY):
             return 0, 0
@@ -666,9 +747,7 @@ async def _search_rezka_batch(items, db, conn):
                 need_no_year = True
                 for r in results:
                     res_name_norm = normalize_title(re.sub(r"\(.*?\)", "", r["title"]))
-                    name_match = any(
-                        res_name_norm == db_norm for db_norm in norm_db_titles
-                    )
+                    name_match = any(res_name_norm == db_norm for db_norm in norm_db_titles)
                     if name_match:
                         res_year_m = re.search(r"\((\d{4})\)", r["title"])
                         if not res_year_m:
@@ -689,6 +768,8 @@ async def _search_rezka_batch(items, db, conn):
             raw = await asyncio.gather(*coros)
             for q, results in raw:
                 no_year_results[q] = results
+            _print_batch_errors("1b")
+            _reset_batch_errors()
 
         if should_stop(STATUS_KEY):
             return 0, 0
@@ -725,6 +806,8 @@ async def _search_rezka_batch(items, db, conn):
             raw = await asyncio.gather(*coros)
             for q, results in raw:
                 fallback_results[q] = results
+            _print_batch_errors("1c")
+            _reset_batch_errors()
 
         # ── PHASE 1d: Collect & score ──
         print(f"  [Phase 1d] Scoring candidates for {total} items...")
@@ -759,11 +842,9 @@ async def _search_rezka_batch(items, db, conn):
             if all_results:
                 candidates = _score_candidates(all_results, clean_parts, year)
                 has_ids = bool(info["row"]["kp_id"] or info["row"]["imdb_id"])
-                min_score = -50 if has_ids else 70
+                min_score = SCORE_MIN_RESYNC_WITH_IDS if has_ids else SCORE_MIN_WITHOUT_IDS
                 viable = [
-                    c
-                    for c in candidates
-                    if c["score"] >= min_score or c.get("exact_name_match")
+                    c for c in candidates if c["score"] >= min_score or c.get("exact_name_match")
                 ]
                 if viable:
                     item_candidates[idx] = viable
@@ -783,9 +864,7 @@ async def _search_rezka_batch(items, db, conn):
         retry_round = 0
         while pending_items:
             retry_round += 1
-            phase_label = (
-                "Phase 2" if retry_round == 1 else f"Phase 2 (retry {retry_round - 1})"
-            )
+            phase_label = "Phase 2" if retry_round == 1 else f"Phase 2 (retry {retry_round - 1})"
 
             urls_needed = {}
             for idx in list(pending_items):
@@ -806,12 +885,12 @@ async def _search_rezka_batch(items, db, conn):
                 break
 
             print(f"  [{phase_label}] Loading {len(urls_needed)} candidate pages...")
-            coros = [
-                _async_load_page(session, url, semaphore) for url in urls_needed.keys()
-            ]
+            coros = [_async_load_page(session, url, semaphore) for url in urls_needed]
             raw = await asyncio.gather(*coros)
             for url, soup in raw:
                 page_soup_cache[url] = soup
+            _print_batch_errors(phase_label)
+            _reset_batch_errors()
 
             if should_stop(STATUS_KEY):
                 return 0, 0
@@ -893,7 +972,7 @@ async def _search_rezka_batch(items, db, conn):
                 break
 
         # ── PHASE 3: Write results ──
-        print(f"\n  [Phase 3] Writing results to database...")
+        print("\n  [Phase 3] Writing results to database...")
         found_count = 0
 
         for idx, row in enumerate(items):
@@ -965,4 +1044,21 @@ def search_rezka_metadata():
 
 
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Sync metadata from HDRezka")
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=None,
+        help=(
+            "Override the number of concurrent rezka requests "
+            "(takes precedence over REZKA_CONCURRENCY env and config.yml)"
+        ),
+    )
+    args = parser.parse_args()
+    if args.concurrency is not None:
+        if args.concurrency < 1:
+            parser.error("--concurrency must be >= 1")
+        REZKA_CONCURRENCY = args.concurrency
     search_rezka_metadata()
