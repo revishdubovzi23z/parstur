@@ -1673,6 +1673,68 @@ def batch_item_collections(data: BatchCollectionsRequest):
     return result
 
 
+def _recover_rezka_url(item_id: int, old_url: str) -> str | None:
+    from HdRezkaApi.search import HdRezkaSearch
+
+    row = (
+        db.get_connection()
+        .cursor()
+        .execute("SELECT title, year FROM items WHERE id = ?", (item_id,))
+        .fetchone()
+    )
+    if not row:
+        return None
+    title = row["title"]
+    year = row["year"]
+    from app_core import clean_title_for_search
+
+    clean = clean_title_for_search(title)
+    if not clean:
+        return None
+    try:
+        results = HdRezkaSearch("https://rezka.ag")(f"{clean} {year}")
+    except Exception:
+        return None
+    old_num = re.search(r"/(\d+)-", old_url)
+    if not old_num:
+        return None
+    old_id = old_num.group(1)
+    for r in results:
+        url = r.get("url", "")
+        if not url or url == old_url:
+            continue
+        new_num = re.search(r"/(\d+)-", url)
+        if new_num and new_num.group(1) == old_id:
+            conn = db.get_connection()
+            conn.execute("UPDATE items SET rezka_url = ? WHERE id = ?", (url, item_id))
+            conn.commit()
+            conn.close()
+            print(f"[REZKA] URL recovered for item {item_id}: {old_url} -> {url}")
+            return url
+    return None
+
+
+def _get_rezka_obj(item_id: int, rezka_url: str):
+    from HdRezkaApi import HdRezkaApi
+
+    cookies = rezka_session.cookies if rezka_session else {"hdmbbs": "1"}
+    try:
+        rezka = HdRezkaApi(rezka_url, cookies=cookies)
+        if rezka.ok:
+            return rezka, rezka_url
+    except Exception:
+        pass
+    new_url = _recover_rezka_url(item_id, rezka_url)
+    if new_url:
+        try:
+            rezka = HdRezkaApi(new_url, cookies=cookies)
+            if rezka.ok:
+                return rezka, new_url
+        except Exception:
+            pass
+    return None, rezka_url
+
+
 @app.get("/api/stream_info/{item_id}")
 def get_stream_info(item_id: int):
     from HdRezkaApi import HdRezkaApi
@@ -1687,12 +1749,11 @@ def get_stream_info(item_id: int):
     if not row or not row["rezka_url"]:
         return {"error": "no rezka_url"}
 
-    try:
-        cookies = rezka_session.cookies if rezka_session else {"hdmbbs": "1"}
-        rezka = HdRezkaApi(row["rezka_url"], cookies=cookies)
-        if not rezka.ok:
-            return {"error": "failed to load page"}
+    rezka, _ = _get_rezka_obj(item_id, row["rezka_url"])
+    if not rezka:
+        return {"error": "failed to load page"}
 
+    try:
         is_series = rezka.type == TVSeries
         result = {
             "type": "series" if is_series else "movie",
@@ -1726,8 +1787,6 @@ def get_stream(
     episode: str | None = None,
     translator: str | None = None,
 ):
-    from HdRezkaApi import HdRezkaApi
-
     row = (
         db.get_connection()
         .cursor()
@@ -1737,12 +1796,11 @@ def get_stream(
     if not row or not row["rezka_url"]:
         return {"error": "no rezka_url"}
 
-    try:
-        cookies = rezka_session.cookies if rezka_session else {"hdmbbs": "1"}
-        rezka = HdRezkaApi(row["rezka_url"], cookies=cookies)
-        if not rezka.ok:
-            return {"error": "failed to load page"}
+    rezka, _ = _get_rezka_obj(item_id, row["rezka_url"])
+    if not rezka:
+        return {"error": "failed to load page"}
 
+    try:
         kwargs = {}
         if translator:
             kwargs["translation"] = translator
@@ -1782,7 +1840,6 @@ def get_stream_m3u(
     quality: str | None = None,
 ):
     from fastapi.responses import Response as R
-    from HdRezkaApi import HdRezkaApi
 
     row = (
         db.get_connection()
@@ -1793,16 +1850,15 @@ def get_stream_m3u(
     if not row or not row["rezka_url"]:
         return R(content="error: no rezka_url", media_type="text/plain", status_code=404)
 
-    try:
-        cookies = rezka_session.cookies if rezka_session else {"hdmbbs": "1"}
-        rezka = HdRezkaApi(row["rezka_url"], cookies=cookies)
-        if not rezka.ok:
-            return R(
-                content="error: failed to load page",
-                media_type="text/plain",
-                status_code=500,
-            )
+    rezka, _ = _get_rezka_obj(item_id, row["rezka_url"])
+    if not rezka:
+        return R(
+            content="error: failed to load page",
+            media_type="text/plain",
+            status_code=500,
+        )
 
+    try:
         kwargs = {}
         if translator:
             kwargs["translation"] = translator
@@ -2243,18 +2299,15 @@ def get_stream_url(
     translator: str | None = None,
     quality: str | None = None,
 ):
-    from HdRezkaApi import HdRezkaApi
-
     with db._conn() as c:
         row = c.execute("SELECT rezka_url, title FROM items WHERE id = ?", (item_id,)).fetchone()
     if not row or not row["rezka_url"]:
         return JSONResponse({"error": "no rezka_url"}, status_code=404)
 
+    rezka, _ = _get_rezka_obj(item_id, row["rezka_url"])
+    if not rezka:
+        return JSONResponse({"error": "failed to load page"}, status_code=502)
     try:
-        cookies = rezka_session.cookies if rezka_session else {"hdmbbs": "1"}
-        rezka = HdRezkaApi(row["rezka_url"], cookies=cookies)
-        if not rezka.ok:
-            return JSONResponse({"error": "failed to load page"}, status_code=502)
         kwargs: dict = {}
         if translator:
             kwargs["translation"] = translator
