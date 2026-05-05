@@ -1753,33 +1753,70 @@ def get_online_sources(item_id: int):
 
     page_url = f"https://fbdomen.cfd/film/{kp_id}/" if kp_id else ""
 
-    try:
-        import requests as _req
+    all_players = {}
 
-        params: dict = {}
-        if kp_id:
-            params["kinopoisk"] = kp_id
-        if imdb_id:
-            params["imdb"] = imdb_id
+    def _merge_players(data):
+        if not isinstance(data, dict):
+            return
+        for p in data.get("data", []):
+            if not p.get("iframeUrl") or not p.get("type"):
+                continue
+            key = p["type"].lower()
+            if key not in all_players:
+                all_players[key] = {
+                    "type": p["type"],
+                    "iframeUrl": p["iframeUrl"],
+                    "translations": p.get("translations") or [],
+                }
 
-        r = _req.get(
-            "https://fbphdplay.top/api/players",
-            params=params,
-            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
-            timeout=10,
-        )
-        if r.status_code == 200:
-            data = r.json()
-            players = data.get("data", []) if isinstance(data, dict) else []
-            sources = [
-                {"type": p.get("type", ""), "iframeUrl": p.get("iframeUrl", "")}
-                for p in players
-                if p.get("iframeUrl") and p.get("type")
-            ]
-            return {"sources": sources, "pageUrl": page_url}
-    except Exception:
-        pass
-    return {"sources": [], "pageUrl": page_url}
+    def _fetch_kinobox_api(params):
+        try:
+            from curl_cffi import requests as _cf
+
+            r = _cf.get(
+                "https://api.kinobox.tv/api/players",
+                params=params,
+                impersonate="chrome",
+                timeout=10,
+            )
+            if r.status_code == 200:
+                _merge_players(r.json())
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _fetch_fbphdplay(params):
+        try:
+            import requests as _req
+
+            r = _req.get(
+                "https://fbphdplay.top/api/players",
+                params=params,
+                headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+                timeout=10,
+            )
+            if r.status_code == 200:
+                _merge_players(r.json())
+        except Exception:
+            pass
+
+    params_kp = {"kinopoisk": kp_id} if kp_id else {}
+    params_imdb = {"imdb": imdb_id} if imdb_id else {}
+
+    if kp_id:
+        _fetch_kinobox_api(params_kp)
+        _fetch_fbphdplay(params_kp)
+
+    if imdb_id and not all_players:
+        _fetch_kinobox_api(params_imdb)
+        _fetch_fbphdplay(params_imdb)
+
+    if not all_players and imdb_id:
+        _fetch_fbphdplay({**params_kp, **params_imdb})
+
+    sources = list(all_players.values())
+    return {"sources": sources, "pageUrl": page_url}
 
 
 @app.get("/api/stream_info/{item_id}")

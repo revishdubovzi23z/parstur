@@ -779,15 +779,14 @@
                         <div v-else-if="streamError && !onlineActive" class="text-center py-8 text-red-500 font-bold">{{ streamError }}</div>
                         <template v-else>
                             <!-- Source tabs -->
-                            <div v-if="streamInfo && (streamItem?.kp_id || streamItem?.imdb_id)" class="flex gap-1 mb-3">
-                                <button @click="onlineActive = false"
+                            <div v-if="streamInfo || (streamItem?.kp_id || streamItem?.imdb_id)" class="flex gap-1 mb-3">
+                                <button v-if="streamItem?.kp_id || streamItem?.imdb_id" @click="switchToOnline"
+                                    :class="['flex-1 py-2 rounded-xl text-xs font-black transition-all', onlineActive ? 'bg-violet-700 text-white shadow-md' : 'bg-slate-100 text-slate-600 hover:bg-slate-200']">
+                                    Онлайн
+                                </button>
+                                <button v-if="streamInfo" @click="switchToRezka"
                                     :class="['flex-1 py-2 rounded-xl text-xs font-black transition-all', !onlineActive ? 'bg-emerald-700 text-white shadow-md' : 'bg-slate-100 text-slate-600 hover:bg-slate-200']">
                                     Rezka
-                                </button>
-                                <button @click="switchToOnline"
-                                    :class="['flex-1 py-2 rounded-xl text-xs font-black transition-all', onlineActive ? 'bg-violet-700 text-white shadow-md' : 'bg-slate-100 text-slate-600 hover:bg-slate-200']">
-                                    Онлайн-кинотеатры
-                                    <span v-if="onlineSources.length" class="ml-1 opacity-70">({{ onlineSources.length }})</span>
                                 </button>
                             </div>
                             <!-- Online cinema sources -->
@@ -795,11 +794,17 @@
                                 <div v-if="onlineLoading" class="text-center py-8 text-slate-400 font-bold">Поиск источников...</div>
                                 <div v-else-if="onlineError" class="text-center py-6 text-red-400 font-bold text-sm">{{ onlineError }}</div>
                                 <template v-else>
-                                    <a v-if="onlinePageUrl" :href="onlinePageUrl" target="_blank" rel="noopener"
-                                        class="flex items-center justify-center py-3 px-4 bg-violet-700 text-white text-sm font-black rounded-xl shadow-md hover:bg-violet-800 transition-colors mb-3">
-                                        ▶ Смотреть онлайн (все плееры)
-                                    </a>
-                                    <p class="text-[10px] text-slate-400 text-center">Откроется страница с доступными плеерами (Alloha, Collaps, Turbo)</p>
+                                    <div class="space-y-2">
+                                        <a v-if="streamItem?.kp_id" :href="'https://on.kinohub.vip/movie/' + streamItem.kp_id" target="_blank" rel="noopener"
+                                            class="flex items-center justify-center py-3 px-4 bg-indigo-600 text-white text-sm font-black rounded-xl shadow-md hover:bg-indigo-700 transition-colors">
+                                            ▶ Kinohub (все плееры)
+                                        </a>
+                                        <a v-if="onlinePageUrl" :href="onlinePageUrl" target="_blank" rel="noopener"
+                                            class="flex items-center justify-center py-3 px-4 bg-violet-700 text-white text-sm font-black rounded-xl shadow-md hover:bg-violet-800 transition-colors">
+                                            ▶ Смотреть онлайн
+                                        </a>
+                                    </div>
+                                    <p class="text-[10px] text-slate-400 text-center mt-2">Плееры: Alloha, Collaps, Turbo и др.</p>
                                 </template>
                             </template>
                             <!-- Rezka player (original) -->
@@ -2463,7 +2468,7 @@
                     this.streamVideos = null;
                     this.streamSubtitles = null;
                     this.streamError = null;
-                    this.streamLoading = true;
+                    this.streamLoading = false;
                     this.streamTranslator = null;
                     this.streamSeason = null;
                     this.streamEpisode = null;
@@ -2471,20 +2476,20 @@
                     this.onlineSelectedSource = null;
                     this.onlineLoading = false;
                     this.onlineError = null;
-                    this.onlineActive = false;
+                    this.onlinePageUrl = null;
                     this.embeddedPlayer = { active: false, directSrc: null, error: null, hls: null };
                     this.showStreamModal = true;
+                    if (item.kp_id || item.imdb_id) {
+                        this.onlineActive = true;
+                        this.loadOnlineSources(item);
+                    } else {
+                        this.onlineActive = false;
+                    }
                     if (item.rezka_url) {
                         try {
                             const res = await this.apiFetch(`/api/stream_info/${item.id}`);
                             const data = await res.json();
-                            if (data.error) {
-                                this.streamError = data.error;
-                                if (item.kp_id || item.imdb_id) {
-                                    this.onlineActive = true;
-                                    await this.loadOnlineSources(item);
-                                }
-                            } else {
+                            if (!data.error) {
                                 this.streamInfo = data;
                                 if (data.translators) {
                                     const keys = Object.keys(data.translators);
@@ -2499,27 +2504,26 @@
                                         this.streamEpisode = Object.keys(si.episodes[this.streamSeason] || {})[0] || null;
                                     }
                                 }
-                                await this.loadStreamUrls();
+                                if (!this.onlineActive) {
+                                    await this.loadStreamUrls();
+                                }
                             }
-                        } catch (e) {
-                            this.streamError = 'Ошибка загрузки';
-                            if (item.kp_id || item.imdb_id) {
-                                this.onlineActive = true;
-                                await this.loadOnlineSources(item);
-                            }
-                        }
-                    } else if (item.kp_id || item.imdb_id) {
-                        this.onlineActive = true;
-                        await this.loadOnlineSources(item);
-                    } else {
+                        } catch (e) {}
+                    }
+                    if (!this.onlineActive && !this.streamInfo && !this.streamError) {
                         this.streamError = 'Нет источников';
                     }
-                    this.streamLoading = false;
                 },
                 switchToOnline() {
                     this.onlineActive = true;
                     if (this.onlineSources.length === 0 && !this.onlineLoading) {
                         this.loadOnlineSources(this.streamItem);
+                    }
+                },
+                switchToRezka() {
+                    this.onlineActive = false;
+                    if (this.streamInfo && !this.streamVideos && !this.streamCurrentUrl) {
+                        this.loadStreamUrls();
                     }
                 },
                 async loadOnlineSources(item) {
