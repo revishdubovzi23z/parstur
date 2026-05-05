@@ -1735,6 +1735,53 @@ def _get_rezka_obj(item_id: int, rezka_url: str):
     return None, rezka_url
 
 
+@app.get("/api/online_sources/{item_id}")
+def get_online_sources(item_id: int):
+    row = (
+        db.get_connection()
+        .cursor()
+        .execute("SELECT kp_id, imdb_id, title FROM items WHERE id = ?", (item_id,))
+        .fetchone()
+    )
+    if not row:
+        return JSONResponse({"error": "not found"}, status_code=404)
+
+    kp_id = row["kp_id"]
+    imdb_id = row["imdb_id"]
+    if not kp_id and not imdb_id:
+        return {"sources": []}
+
+    page_url = f"https://fbdomen.cfd/film/{kp_id}/" if kp_id else ""
+
+    try:
+        import requests as _req
+
+        params: dict = {}
+        if kp_id:
+            params["kinopoisk"] = kp_id
+        if imdb_id:
+            params["imdb"] = imdb_id
+
+        r = _req.get(
+            "https://fbphdplay.top/api/players",
+            params=params,
+            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+            timeout=10,
+        )
+        if r.status_code == 200:
+            data = r.json()
+            players = data.get("data", []) if isinstance(data, dict) else []
+            sources = [
+                {"type": p.get("type", ""), "iframeUrl": p.get("iframeUrl", "")}
+                for p in players
+                if p.get("iframeUrl") and p.get("type")
+            ]
+            return {"sources": sources, "pageUrl": page_url}
+    except Exception:
+        pass
+    return {"sources": [], "pageUrl": page_url}
+
+
 @app.get("/api/stream_info/{item_id}")
 def get_stream_info(item_id: int):
     from HdRezkaApi import HdRezkaApi

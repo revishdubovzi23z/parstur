@@ -691,7 +691,7 @@
                                         </div>
                                     </div>
                                 </div>
-                                <button v-if="item.rezka_url" @click="openStream(item)" 
+                                <button v-if="item.rezka_url || item.kp_id || item.imdb_id" @click="openStream(item)" 
                                    class="w-full py-1.5 bg-green-600 text-white text-[10px] font-black rounded-lg shadow-sm hover:bg-green-700 transition-colors">
                                     ▶ СМОТРЕТЬ
                                 </button>
@@ -776,8 +776,34 @@
                     </div>
                     <div ref="streamModalScroll" class="p-5 space-y-4 overflow-y-auto">
                         <div v-if="streamLoading" class="text-center py-8 text-slate-400 font-bold">Загрузка...</div>
-                        <div v-else-if="streamError" class="text-center py-8 text-red-500 font-bold">{{ streamError }}</div>
+                        <div v-else-if="streamError && !onlineActive" class="text-center py-8 text-red-500 font-bold">{{ streamError }}</div>
                         <template v-else>
+                            <!-- Source tabs -->
+                            <div v-if="streamInfo && (streamItem?.kp_id || streamItem?.imdb_id)" class="flex gap-1 mb-3">
+                                <button @click="onlineActive = false"
+                                    :class="['flex-1 py-2 rounded-xl text-xs font-black transition-all', !onlineActive ? 'bg-emerald-700 text-white shadow-md' : 'bg-slate-100 text-slate-600 hover:bg-slate-200']">
+                                    Rezka
+                                </button>
+                                <button @click="switchToOnline"
+                                    :class="['flex-1 py-2 rounded-xl text-xs font-black transition-all', onlineActive ? 'bg-violet-700 text-white shadow-md' : 'bg-slate-100 text-slate-600 hover:bg-slate-200']">
+                                    Онлайн-кинотеатры
+                                    <span v-if="onlineSources.length" class="ml-1 opacity-70">({{ onlineSources.length }})</span>
+                                </button>
+                            </div>
+                            <!-- Online cinema sources -->
+                            <template v-if="onlineActive">
+                                <div v-if="onlineLoading" class="text-center py-8 text-slate-400 font-bold">Поиск источников...</div>
+                                <div v-else-if="onlineError" class="text-center py-6 text-red-400 font-bold text-sm">{{ onlineError }}</div>
+                                <template v-else>
+                                    <a v-if="onlinePageUrl" :href="onlinePageUrl" target="_blank" rel="noopener"
+                                        class="flex items-center justify-center py-3 px-4 bg-violet-700 text-white text-sm font-black rounded-xl shadow-md hover:bg-violet-800 transition-colors mb-3">
+                                        ▶ Смотреть онлайн (все плееры)
+                                    </a>
+                                    <p class="text-[10px] text-slate-400 text-center">Откроется страница с доступными плеерами (Alloha, Collaps, Turbo)</p>
+                                </template>
+                            </template>
+                            <!-- Rezka player (original) -->
+                            <template v-if="!onlineActive">
                             <!-- Translator select -->
                             <div v-if="streamInfo?.translators && Object.keys(streamInfo.translators).length > 1">
                                 <label class="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-1 block">Озвучка</label>
@@ -868,6 +894,7 @@
                                     💬 Включите субтитры в плеере (CC) — доступно {{ Object.keys(streamSubtitles).length }} дорожек.
                                 </p>
                             </div>
+                            </template>
                         </template>
                     </div>
                 </div>
@@ -1152,6 +1179,7 @@
                     streamItem: null, streamInfo: null, streamLoading: false, streamError: null,
                     streamTranslator: null, streamSeason: null, streamEpisode: null,
                     streamVideos: null, streamSubtitles: null, streamCurrentUrl: null, streamCurrentQuality: null,
+                    onlineSources: [], onlineSelectedSource: null, onlineLoading: false, onlineError: null, onlineActive: false, onlinePageUrl: null,
                     // 8.12 — embedded HTML5 / hls.js player state.
                     embeddedPlayer: { active: false, directSrc: null, error: null, hls: null },
                     // 8.7 — TMDB trailer state. trailerCandidates is the
@@ -2439,34 +2467,79 @@
                     this.streamTranslator = null;
                     this.streamSeason = null;
                     this.streamEpisode = null;
+                    this.onlineSources = [];
+                    this.onlineSelectedSource = null;
+                    this.onlineLoading = false;
+                    this.onlineError = null;
+                    this.onlineActive = false;
+                    this.embeddedPlayer = { active: false, directSrc: null, error: null, hls: null };
                     this.showStreamModal = true;
+                    if (item.rezka_url) {
+                        try {
+                            const res = await this.apiFetch(`/api/stream_info/${item.id}`);
+                            const data = await res.json();
+                            if (data.error) {
+                                this.streamError = data.error;
+                                if (item.kp_id || item.imdb_id) {
+                                    this.onlineActive = true;
+                                    await this.loadOnlineSources(item);
+                                }
+                            } else {
+                                this.streamInfo = data;
+                                if (data.translators) {
+                                    const keys = Object.keys(data.translators);
+                                    this.streamTranslator = keys[0] || null;
+                                }
+                                if (data.type === 'series' && data.series_info && this.streamTranslator) {
+                                    const si = data.series_info[this.streamTranslator];
+                                    if (si?.seasons) {
+                                        this.streamSeason = Object.keys(si.seasons)[0] || null;
+                                    }
+                                    if (si?.episodes && this.streamSeason) {
+                                        this.streamEpisode = Object.keys(si.episodes[this.streamSeason] || {})[0] || null;
+                                    }
+                                }
+                                await this.loadStreamUrls();
+                            }
+                        } catch (e) {
+                            this.streamError = 'Ошибка загрузки';
+                            if (item.kp_id || item.imdb_id) {
+                                this.onlineActive = true;
+                                await this.loadOnlineSources(item);
+                            }
+                        }
+                    } else if (item.kp_id || item.imdb_id) {
+                        this.onlineActive = true;
+                        await this.loadOnlineSources(item);
+                    } else {
+                        this.streamError = 'Нет источников';
+                    }
+                    this.streamLoading = false;
+                },
+                switchToOnline() {
+                    this.onlineActive = true;
+                    if (this.onlineSources.length === 0 && !this.onlineLoading) {
+                        this.loadOnlineSources(this.streamItem);
+                    }
+                },
+                async loadOnlineSources(item) {
+                    this.onlineLoading = true;
+                    this.onlineError = null;
+                    this.onlineSources = [];
+                    this.onlineSelectedSource = null;
+                    this.onlinePageUrl = null;
                     try {
-                        const res = await this.apiFetch(`/api/stream_info/${item.id}`);
+                        const res = await this.apiFetch(`/api/online_sources/${item.id}`);
                         const data = await res.json();
-                        if (data.error) {
-                            this.streamError = data.error;
-                        } else {
-                            this.streamInfo = data;
-                            if (data.translators) {
-                                const keys = Object.keys(data.translators);
-                                this.streamTranslator = keys[0] || null;
-                            }
-                            if (data.type === 'series' && data.series_info && this.streamTranslator) {
-                                const si = data.series_info[this.streamTranslator];
-                                if (si?.seasons) {
-                                    this.streamSeason = Object.keys(si.seasons)[0] || null;
-                                }
-                                if (si?.episodes && this.streamSeason) {
-                                    this.streamEpisode = Object.keys(si.episodes[this.streamSeason] || {})[0] || null;
-                                }
-                            }
-                            await this.loadStreamUrls();
+                        this.onlineSources = data.sources || [];
+                        this.onlinePageUrl = data.pageUrl || null;
+                        if (!this.onlinePageUrl && this.onlineSources.length === 0) {
+                            this.onlineError = 'Онлайн-источники не найдены';
                         }
                     } catch (e) {
-                        this.streamError = 'Ошибка загрузки';
-                    } finally {
-                        this.streamLoading = false;
+                        this.onlineError = 'Ошибка загрузки источников';
                     }
+                    this.onlineLoading = false;
                 },
                 onStreamTranslatorChange() {
                     this.streamSeason = null;
