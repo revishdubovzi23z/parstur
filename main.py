@@ -2626,6 +2626,33 @@ def get_last_visit():
     return {"last_visit": db.get_last_visit()}
 
 
+@app.post("/api/self_update")
+def self_update():
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["git", "pull"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+        )
+        output = result.stdout.strip()
+        if result.returncode != 0:
+            return {"status": "error", "message": result.stderr.strip()[:500]}
+        if "Already up to date" in output:
+            return {"status": "up_to_date", "message": output}
+        subprocess.Popen(
+            ["systemctl", "restart", "parsclode"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return {"status": "updated", "message": output}
+    except Exception as e:
+        return {"status": "error", "message": str(e)[:500]}
+
+
 if __name__ == "__main__":
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
