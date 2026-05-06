@@ -374,7 +374,6 @@ class Database:
                 "в первую очередь",
                 "Проходняк сериал завершенные",
                 "Топ сериалы с завершённые",
-                "проходняк фильмы",
                 "Топ сериал с продолжением",
                 "Проходняк сериал с продолжением",
                 "тв шоу",
@@ -1440,6 +1439,10 @@ class Database:
     def delete_collection(self, id: int) -> None:
         with self._conn() as c:
             c.execute("DELETE FROM collections WHERE id = ?", (id,))
+
+    def rename_collection(self, id: int, name: str) -> None:
+        with self._conn() as c:
+            c.execute("UPDATE collections SET name = ? WHERE id = ?", (name, id))
 
     def toggle_collection_item(self, collection_id: int, item_id: int) -> str:
         with self._conn() as c:

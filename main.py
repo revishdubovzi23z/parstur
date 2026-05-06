@@ -1404,18 +1404,86 @@ class CollectionCreate(BaseModel):
     name: str
 
 
+def _rezka_folder_action(action: str, params: dict):
+    if not rezka_session:
+        return None
+    try:
+        params["action"] = action
+        resp = _rezka_request(
+            "POST",
+            "https://rezka.ag/ajax/favorites/",
+            data=params,
+            headers={
+                "User-Agent": "Mozilla/5.0",
+                "X-Requested-With": "XMLHttpRequest",
+            },
+            cookies=rezka_session.cookies,
+            timeout=10,
+        )
+        if resp is not None:
+            result = resp.json()
+            _refresh_rezka_folders_cache()
+            return result
+    except Exception as e:
+        print(f"[REZKA FOLDER ACTION ERROR] {e}")
+    return None
+
+
 @app.post("/api/collections")
 def create_collection(data: CollectionCreate):
     try:
         db.create_collection(data.name)
     except Exception:
         return {"status": "error", "message": "Коллекция существует"}
+    if rezka_session:
+        _rezka_folder_action("add_cat", {"name": data.name})
     return {"status": "success"}
 
 
 @app.delete("/api/collections/{id}")
 def delete_collection(id: int):
+    if rezka_session:
+        row = (
+            db.get_connection()
+            .cursor()
+            .execute("SELECT name FROM collections WHERE id = ?", (id,))
+            .fetchone()
+        )
+        if row:
+            from app_core import normalize_title
+
+            coll_norm = normalize_title(row["name"])
+            if rezka_session_folders_cache and coll_norm in rezka_session_folders_cache:
+                _rezka_folder_action(
+                    "remove_cat", {"cat_id": rezka_session_folders_cache[coll_norm]}
+                )
     db.delete_collection(id)
+    return {"status": "success"}
+
+
+class CollectionRename(BaseModel):
+    name: str
+
+
+@app.put("/api/collections/{id}")
+def rename_collection(id: int, data: CollectionRename):
+    cat_id = None
+    if rezka_session:
+        row = (
+            db.get_connection()
+            .cursor()
+            .execute("SELECT name FROM collections WHERE id = ?", (id,))
+            .fetchone()
+        )
+        if row:
+            from app_core import normalize_title
+
+            coll_norm = normalize_title(row["name"])
+            if rezka_session_folders_cache and coll_norm in rezka_session_folders_cache:
+                cat_id = rezka_session_folders_cache[coll_norm]
+    db.rename_collection(id, data.name)
+    if cat_id:
+        _rezka_folder_action("change_cat_name", {"cat_id": cat_id, "name": data.name})
     return {"status": "success"}
 
 
