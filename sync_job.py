@@ -273,12 +273,18 @@ def run_sync(mode="video", manual_min_date=None):
             if not item_id:
                 for _rel in movie_data["releases"]:
                     _existing_item_id = db.get_release_item_id(_rel["rutor_id"], conn=conn)
-                    if _existing_item_id and db.get_item(_existing_item_id, conn=conn):
-                        item_id = _existing_item_id
-                        print(
-                            f"\n  🔗 Найден существующий item {item_id} по релизу {_rel['rutor_id']}"
-                        )
-                        break
+                    if _existing_item_id:
+                        _owner = db.get_item(_existing_item_id, conn=conn)
+                        if _owner:
+                            item_id = _existing_item_id
+                            print(
+                                f"\n  🔗 Найден существующий item {item_id} ({_owner['title']}) по релизу {_rel['rutor_id']}"
+                            )
+                            break
+                        else:
+                            print(
+                                f"  🔗 Релиз {_rel['rutor_id']} осиротевший (item {_existing_item_id} удалён)"
+                            )
 
             if not item_id:
                 is_new_item = True
@@ -505,8 +511,21 @@ def run_sync(mode="video", manual_min_date=None):
             added_any = False
             for rel in movie_data["releases"]:
                 if db.release_exists_by_rutor_id(rel["rutor_id"], conn=conn):
-                    if db.reassign_release_to_item(rel["rutor_id"], item_id, conn=conn):
-                        print(f"    └─ Релиз {rel['rutor_id']} переназначен на item {item_id}")
+                    _owner_id = db.get_release_item_id(rel["rutor_id"], conn=conn)
+                    if _owner_id and _owner_id != item_id:
+                        _owner = db.get_item(_owner_id, conn=conn)
+                        if _owner:
+                            print(
+                                f"    ⚠️ Релиз {rel['rutor_id']} уже у item {_owner_id} ({_owner['title']})"
+                            )
+                        else:
+                            print(
+                                f"    ⚠️ Релиз {rel['rutor_id']} осиротевший (item {_owner_id} удалён)"
+                            )
+                    if db.reassign_release_if_orphan(rel["rutor_id"], item_id, conn=conn):
+                        print(
+                            f"    └─ Осиротевший релиз {rel['rutor_id']} переназначен на item {item_id}"
+                        )
                     continue
                 if not added_any and not is_new_item:
                     print(f"  🔗 Добавлен новый релиз к существующему фильму: {display_title}")
