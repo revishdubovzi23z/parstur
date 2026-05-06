@@ -760,6 +760,9 @@ class Database:
 
     def delete_item(self, item_id: int, conn=None) -> None:
         with self._conn(conn) as c:
+            c.execute("DELETE FROM releases WHERE item_id = ?", (item_id,))
+            c.execute("DELETE FROM collection_items WHERE item_id = ?", (item_id,))
+            c.execute("DELETE FROM item_search_names WHERE item_id = ?", (item_id,))
             c.execute("DELETE FROM items WHERE id = ?", (item_id,))
 
     def mark_checked(self, item_id: int, source: str, conn=None) -> None:
