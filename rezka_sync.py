@@ -82,12 +82,10 @@ def _login_cookies() -> dict:
     try:
         from HdRezkaApi.session import HdRezkaSession  # type: ignore
 
-        session = HdRezkaSession()
+        session = HdRezkaSession(REZKA_ORIGIN)
         session.login(REZKA_EMAIL, REZKA_PASSWORD)
         cookies = dict(REZKA_COOKIES)
-        # requests-style cookiejar to plain dict.
-        for cookie in session.cookies:  # type: ignore[attr-defined]
-            cookies[cookie.name] = cookie.value
+        cookies.update(session.cookies)
         return cookies
     except Exception as e:
         print(
