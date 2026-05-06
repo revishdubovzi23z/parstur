@@ -554,45 +554,56 @@ def search_rezka_for_item(title, year, kp_id=None, imdb_id=None, kp_rating=0, im
     final_res = None
     final_data = {}
 
-    for scored_item in candidates:
-        score = scored_item["score"]
-        exact_name_match = scored_item.get("exact_name_match", False)
+    passes = ["id_match"] if has_ids else []
+    passes.append("fallback")
 
-        if score < min_score and not exact_name_match:
-            continue
+    for current_pass in passes:
+        for scored_item in candidates:
+            score = scored_item["score"]
+            exact_name_match = scored_item.get("exact_name_match", False)
 
-        res = scored_item["res"]
-        print(f"    [?] Проверка: {res['title']} (Score: {score})")
+            if score < min_score and not exact_name_match:
+                continue
 
-        rezka_obj = _sync_load_rezka(res["url"])
-        if not rezka_obj:
-            print("      [!] Ошибка загрузки страницы.")
-            continue
+            res = scored_item["res"]
 
-        is_valid, page_kp_id, page_imdb_id, current_score, reason = _verify_candidate(
-            rezka_obj, scored_item, year, kp_id, imdb_id
-        )
+            rezka_obj = _sync_load_rezka(res["url"])
+            if not rezka_obj:
+                continue
 
-        if is_valid:
-            kp_r, imdb_r, poster, desc = _extract_metadata_from_rezka(
-                rezka_obj, kp_rating, imdb_rating
+            is_valid, page_kp_id, page_imdb_id, current_score, reason = _verify_candidate(
+                rezka_obj, scored_item, year, kp_id, imdb_id
             )
-            latest_season, latest_episode = _extract_series_info(rezka_obj)
-            final_res = res
-            final_data = {
-                "kp_id": page_kp_id or kp_id,
-                "imdb_id": page_imdb_id or imdb_id,
-                "score": current_score,
-                "kp_rating": kp_r,
-                "imdb_rating": imdb_r,
-                "poster_url": poster,
-                "description": desc,
-                "latest_season": latest_season,
-                "latest_episode": latest_episode,
-            }
+
+            if current_pass == "id_match" and reason != "id_match":
+                continue
+            if current_pass == "fallback" and reason == "id_match":
+                continue
+
+            if is_valid:
+                print(f"    [?] {res['title']} (Score: {score}) -> {reason}")
+                kp_r, imdb_r, poster, desc = _extract_metadata_from_rezka(
+                    rezka_obj, kp_rating, imdb_rating
+                )
+                latest_season, latest_episode = _extract_series_info(rezka_obj)
+                final_res = res
+                final_data = {
+                    "kp_id": page_kp_id or kp_id,
+                    "imdb_id": page_imdb_id or imdb_id,
+                    "score": current_score,
+                    "kp_rating": kp_r,
+                    "imdb_rating": imdb_r,
+                    "poster_url": poster,
+                    "description": desc,
+                    "latest_season": latest_season,
+                    "latest_episode": latest_episode,
+                }
+                break
+            elif reason == "conflict":
+                continue
+
+        if final_res:
             break
-        elif reason == "conflict":
-            continue
 
     if not final_res:
         print("    [-] Подходящий результат не найден.")
@@ -853,121 +864,79 @@ async def _search_rezka_batch(items, db, conn):
         # ── PHASE 2: Load pages & verify ──
         page_soup_cache = {}
         item_results = {}
-        item_next_ci = {}
 
-        pending_items = set(item_candidates.keys())
-        for idx in pending_items:
-            item_next_ci[idx] = 0
+        all_candidate_urls = set()
+        for idx, cands in item_candidates.items():
+            for c in cands:
+                all_candidate_urls.add(c["res"]["url"])
 
-        retry_round = 0
-        while pending_items:
-            retry_round += 1
-            phase_label = "Phase 2" if retry_round == 1 else f"Phase 2 (retry {retry_round - 1})"
-
-            urls_needed = {}
-            for idx in list(pending_items):
-                ci = item_next_ci[idx]
-                candidates = item_candidates[idx]
-                if ci >= len(candidates):
-                    pending_items.discard(idx)
-                    continue
-                while ci < len(candidates):
-                    url = candidates[ci]["res"]["url"]
-                    if url not in page_soup_cache:
-                        if url not in urls_needed:
-                            urls_needed[url] = set()
-                        urls_needed[url].add(idx)
-                    ci += 1
-
-            if not urls_needed:
-                break
-
-            print(f"  [{phase_label}] Loading {len(urls_needed)} candidate pages...")
-            coros = [_async_load_page(session, url, semaphore) for url in urls_needed]
-            raw = await asyncio.gather(*coros)
-            for url, soup in raw:
-                page_soup_cache[url] = soup
-            _print_batch_errors(phase_label)
-            _reset_batch_errors()
+        if all_candidate_urls:
+            urls_to_load = [u for u in all_candidate_urls if u not in page_soup_cache]
+            if urls_to_load:
+                print(f"  [Phase 2] Loading {len(urls_to_load)} candidate pages...")
+                sem = asyncio.Semaphore(REZKA_CONCURRENCY)
+                coros = [_async_load_page(session, u, sem) for u in urls_to_load]
+                raw = await asyncio.gather(*coros)
+                for url, soup in raw:
+                    page_soup_cache[url] = soup
+                _print_batch_errors("Phase 2")
+                _reset_batch_errors()
 
             if should_stop(STATUS_KEY):
                 return 0, 0
 
-            for idx in list(pending_items):
-                if idx in item_results:
-                    pending_items.discard(idx)
+        for idx, candidates in item_candidates.items():
+            row = item_infos[idx]["row"]
+            has_ids = bool(row["kp_id"] or row["imdb_id"])
+
+            id_match_result = None
+            fallback_result = None
+
+            for candidate in candidates:
+                url = candidate["res"]["url"]
+                soup = page_soup_cache.get(url)
+                if soup is None:
                     continue
 
-                row = item_infos[idx]["row"]
-                candidates = item_candidates[idx]
-                ci = item_next_ci[idx]
-                resolved = False
-                need_page_load = False
+                is_valid, page_kp_id, page_imdb_id, current_score, reason = _verify_candidate_soup(
+                    soup, candidate, row["year"], row["kp_id"], row["imdb_id"]
+                )
 
-                while ci < len(candidates):
-                    candidate = candidates[ci]
-                    url = candidate["res"]["url"]
+                if not is_valid:
+                    continue
 
-                    if url not in page_soup_cache:
-                        need_page_load = True
-                        break
+                kp_r, imdb_r, poster, desc = _extract_metadata_from_soup(
+                    soup, row["kp_rating"] or 0, row["imdb_rating"] or 0
+                )
+                r_data = {
+                    "found": True,
+                    "rezka_url": url,
+                    "kp_id": page_kp_id or row["kp_id"],
+                    "imdb_id": page_imdb_id or row["imdb_id"],
+                    "kp_rating": kp_r,
+                    "imdb_rating": imdb_r,
+                    "poster_url": poster,
+                    "description": desc,
+                    "score": current_score,
+                    "latest_season": 0,
+                    "latest_episode": 0,
+                }
 
-                    soup = page_soup_cache[url]
-                    if soup is None:
-                        print(f"    [!] {row['title']}: page load failed for {url}")
-                        ci += 1
-                        continue
+                if reason == "id_match":
+                    id_match_result = (candidate, r_data, reason, current_score)
+                    break
+                elif fallback_result is None:
+                    fallback_result = (candidate, r_data, reason, current_score)
 
-                    print(
-                        f"    [?] {row['title']}: checking {candidate['res']['title']} (Score: {candidate['score']})"
-                    )
-
-                    is_valid, page_kp_id, page_imdb_id, current_score, reason = (
-                        _verify_candidate_soup(
-                            soup, candidate, row["year"], row["kp_id"], row["imdb_id"]
-                        )
-                    )
-
-                    if is_valid:
-                        kp_r, imdb_r, poster, desc = _extract_metadata_from_soup(
-                            soup, row["kp_rating"] or 0, row["imdb_rating"] or 0
-                        )
-                        item_results[idx] = {
-                            "found": True,
-                            "rezka_url": url,
-                            "kp_id": page_kp_id or row["kp_id"],
-                            "imdb_id": page_imdb_id or row["imdb_id"],
-                            "kp_rating": kp_r,
-                            "imdb_rating": imdb_r,
-                            "poster_url": poster,
-                            "description": desc,
-                            "score": current_score,
-                            "latest_season": 0,
-                            "latest_episode": 0,
-                        }
-                        resolved = True
-                        print(
-                            f"    [+] {row['title']}: CONFIRMED ({reason}, score: {current_score})"
-                        )
-                        break
-                    elif reason == "conflict":
-                        ci += 1
-                        continue
-                    else:
-                        ci += 1
-                        continue
-
-                if resolved:
-                    pending_items.discard(idx)
-                elif need_page_load:
-                    item_next_ci[idx] = ci
-                else:
-                    pending_items.discard(idx)
-                    print(f"    [-] {row['title']}: no suitable candidate")
-
-            if retry_round > 20:
-                print("  [!] Max retry rounds reached")
-                break
+            chosen = id_match_result or fallback_result
+            if chosen:
+                candidate, r_data, reason, current_score = chosen
+                item_results[idx] = r_data
+                print(f"    [+] {row['title']}: CONFIRMED ({reason}, score: {current_score})")
+                if id_match_result and fallback_result and id_match_result is not fallback_result:
+                    print(f"    ℹ️  ID-match preferred over trust_by_title")
+            else:
+                print(f"    [-] {row['title']}: no suitable candidate")
 
         # ── PHASE 3: Write results ──
         print("\n  [Phase 3] Writing results to database...")
