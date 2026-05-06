@@ -882,6 +882,24 @@ class Database:
             row = c.execute("SELECT 1 FROM releases WHERE rutor_id = ?", (rutor_id,)).fetchone()
             return row is not None
 
+    def reassign_release_if_orphan(self, rutor_id, new_item_id, conn=None) -> bool:
+        with self._conn(conn) as c:
+            row = c.execute(
+                "SELECT item_id FROM releases WHERE rutor_id = ?", (rutor_id,)
+            ).fetchone()
+            if not row:
+                return False
+            old_item_id = row["item_id"]
+            if old_item_id == new_item_id:
+                return False
+            owner = c.execute("SELECT 1 FROM items WHERE id = ?", (old_item_id,)).fetchone()
+            if not owner:
+                c.execute(
+                    "UPDATE releases SET item_id = ? WHERE rutor_id = ?", (new_item_id, rutor_id)
+                )
+                return True
+            return False
+
     def get_last_release_date(self, category_id: int | None = None, conn=None) -> str | None:
         with self._conn(conn) as c:
             if category_id:
