@@ -20,6 +20,7 @@ from fastapi import (
     Request,
     WebSocket,
     WebSocketDisconnect,
+    UploadFile,
 )
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel
@@ -2653,8 +2654,34 @@ def self_update():
         return {"status": "error", "message": str(e)[:500]}
 
 
-@app.post("/api/reset_database")
-def reset_database():
+@app.get("/api/database_export")
+def database_export():
+    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_data.db")
+    if not os.path.exists(db_path):
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return FileResponse(
+        db_path,
+        media_type="application/x-sqlite3",
+        filename="app_data.db",
+    )
+
+
+@app.post("/api/database_import")
+async def database_import(file: UploadFile):
+    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_data.db")
+    content = await file.read()
+    if len(content) < 100:
+        return JSONResponse({"status": "error", "message": "File too small"}, status_code=400)
+    with open(db_path, "wb") as f:
+        f.write(content)
+    import subprocess
+
+    subprocess.Popen(
+        ["systemctl", "restart", "parsclode"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return {"status": "success", "message": "Database imported, server restarting"}
     import subprocess
 
     db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_data.db")

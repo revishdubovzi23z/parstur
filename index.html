@@ -263,11 +263,9 @@
                             <label class="text-[10px] font-bold text-slate-400 uppercase tracking-widest cursor-pointer group-hover:text-slate-600 transition-colors">ЗАКЛАДКИ</label>
                             <div class="flex items-center gap-3">
                                 <button @click.stop="showAddCollection = !showAddCollection" class="text-indigo-600 hover:text-indigo-800 text-[10px] font-black uppercase">Создать</button>
-                                <!-- 8.2 — collections export/import controls -->
-                                <button @click.stop="exportCollections('json')" title="Экспорт коллекций в JSON" class="text-slate-500 hover:text-slate-800 text-[10px] font-black uppercase">JSON</button>
-                                <button @click.stop="exportCollections('csv')" title="Экспорт коллекций в CSV" class="text-slate-500 hover:text-slate-800 text-[10px] font-black uppercase">CSV</button>
-                                <button @click.stop="$refs.collectionsImportFile.click()" title="Импорт коллекций из JSON или CSV" class="text-slate-500 hover:text-slate-800 text-[10px] font-black uppercase">⬆</button>
-                                <input ref="collectionsImportFile" type="file" accept=".json,.csv,application/json,text/csv" class="hidden" @change="onCollectionsImportFile">
+                                <a href="/api/database_export" download title="Экспорт базы данных" class="text-slate-500 hover:text-slate-800 text-[10px] font-black uppercase">⬇ БД</a>
+                                <button @click.stop="$refs.dbImportFile.click()" title="Импорт базы данных" class="text-slate-500 hover:text-slate-800 text-[10px] font-black uppercase">⬆ БД</button>
+                                <input ref="dbImportFile" type="file" accept=".db,application/x-sqlite3" class="hidden" @change="onDbImportFile">
                                 <svg class="w-4 h-4 text-slate-300 transition-transform duration-300" :class="{'rotate-180': !showCollectionsList}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
                             </div>
                         </div>
@@ -523,8 +521,9 @@
                               <button v-if="statuses.rezka_collections === 'running'" @click="stopProcess('rezka_collections')" 
                                       class="absolute right-2 top-2 bg-red-500 hover:bg-red-600 text-white w-8 h-8 rounded-lg flex items-center justify-center text-xs shadow-lg transition-transform hover:scale-110">✕</button>
                           </div>
-                          <a :href="'/api/export?fmt=json&category_id=' + selectedCategory" download class="px-4 py-3 bg-emerald-50 text-emerald-700 rounded-xl font-bold text-xs hover:bg-emerald-100 text-center transition-all">📥 JSON</a>
-                         <a :href="'/api/export?fmt=csv&category_id=' + selectedCategory" download class="px-4 py-3 bg-teal-50 text-teal-700 rounded-xl font-bold text-xs hover:bg-teal-100 text-center transition-all">📥 CSV</a>
+                          <a href="/api/database_export" download class="px-4 py-3 bg-emerald-50 text-emerald-700 rounded-xl font-bold text-xs hover:bg-emerald-100 text-center transition-all">📥 ЭКСПОРТ БД</a>
+                          <button @click="$refs.dbImportFile2.click()" class="px-4 py-3 bg-teal-50 text-teal-700 rounded-xl font-bold text-xs hover:bg-teal-100 text-center transition-all">⬆ ИМПОРТ БД</button>
+                          <input ref="dbImportFile2" type="file" accept=".db,application/x-sqlite3" class="hidden" @change="onDbImportFile">
                      </div>
                 </div>
             </div>
@@ -1722,6 +1721,27 @@
                     } catch (e) {
                         alert('Ошибка: ' + e.message);
                     }
+                },
+                async onDbImportFile(e) {
+                    const file = e.target.files[0];
+                    if (!file) return;
+                    if (!confirm('Импортировать базу данных? Текущие данные будут заменены!')) return;
+                    try {
+                        const formData = new FormData();
+                        formData.append('file', file);
+                        const res = await fetch('/api/database_import', { method: 'POST', body: formData });
+                        const data = await res.json();
+                        if (data.status === 'success') {
+                            alert('База импортирована! Сервер перезапускается...');
+                            await new Promise(r => setTimeout(r, 10000));
+                            location.reload();
+                        } else {
+                            alert('Ошибка: ' + (data.message || 'неизвестно'));
+                        }
+                    } catch (err) {
+                        alert('Ошибка импорта: ' + err.message);
+                    }
+                    e.target.value = '';
                 },
                 // 8.2 — collections export/import.
                 //
