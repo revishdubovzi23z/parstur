@@ -271,6 +271,16 @@ def run_sync(mode="video", manual_min_date=None):
 
             is_new_item = False
             if not item_id:
+                for _rel in movie_data["releases"]:
+                    _existing_item_id = db.get_release_item_id(_rel["rutor_id"], conn=conn)
+                    if _existing_item_id and db.get_item(_existing_item_id, conn=conn):
+                        item_id = _existing_item_id
+                        print(
+                            f"\n  🔗 Найден существующий item {item_id} по релизу {_rel['rutor_id']}"
+                        )
+                        break
+
+            if not item_id:
                 is_new_item = True
                 print(f"\n[НОВЫЙ] 🎬 {display_title} ({year})")
                 rutor_kp_id = None
@@ -495,8 +505,8 @@ def run_sync(mode="video", manual_min_date=None):
             added_any = False
             for rel in movie_data["releases"]:
                 if db.release_exists_by_rutor_id(rel["rutor_id"], conn=conn):
-                    if db.reassign_release_if_orphan(rel["rutor_id"], item_id, conn=conn):
-                        print(f"    └─ Релиз {rel['rutor_id']} переназначен на текущий фильм")
+                    if db.reassign_release_to_item(rel["rutor_id"], item_id, conn=conn):
+                        print(f"    └─ Релиз {rel['rutor_id']} переназначен на item {item_id}")
                     continue
                 if not added_any and not is_new_item:
                     print(f"  🔗 Добавлен новый релиз к существующему фильму: {display_title}")

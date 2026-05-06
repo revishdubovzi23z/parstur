@@ -900,6 +900,26 @@ class Database:
                 return True
             return False
 
+    def reassign_release_to_item(self, rutor_id, new_item_id, conn=None) -> bool:
+        with self._conn(conn) as c:
+            row = c.execute(
+                "SELECT item_id FROM releases WHERE rutor_id = ?", (rutor_id,)
+            ).fetchone()
+            if not row:
+                return False
+            old_item_id = row["item_id"]
+            if old_item_id == new_item_id:
+                return False
+            c.execute("UPDATE releases SET item_id = ? WHERE rutor_id = ?", (new_item_id, rutor_id))
+            return True
+
+    def get_release_item_id(self, rutor_id, conn=None) -> int | None:
+        with self._conn(conn) as c:
+            row = c.execute(
+                "SELECT item_id FROM releases WHERE rutor_id = ?", (rutor_id,)
+            ).fetchone()
+            return row["item_id"] if row else None
+
     def get_last_release_date(self, category_id: int | None = None, conn=None) -> str | None:
         with self._conn(conn) as c:
             if category_id:
