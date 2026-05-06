@@ -520,11 +520,8 @@
                               </button>
                               <button v-if="statuses.rezka_collections === 'running'" @click="stopProcess('rezka_collections')" 
                                       class="absolute right-2 top-2 bg-red-500 hover:bg-red-600 text-white w-8 h-8 rounded-lg flex items-center justify-center text-xs shadow-lg transition-transform hover:scale-110">✕</button>
-                          </div>
-                          <a href="/api/database_export" download class="px-4 py-3 bg-emerald-50 text-emerald-700 rounded-xl font-bold text-xs hover:bg-emerald-100 text-center transition-all">📥 ЭКСПОРТ БД</a>
-                          <button @click="$refs.dbImportFile2.click()" class="px-4 py-3 bg-teal-50 text-teal-700 rounded-xl font-bold text-xs hover:bg-teal-100 text-center transition-all">⬆ ИМПОРТ БД</button>
-                          <input ref="dbImportFile2" type="file" accept=".db,application/x-sqlite3" class="hidden" @change="onDbImportFile">
-                     </div>
+                           </div>
+                      </div>
                 </div>
             </div>
         </transition>
