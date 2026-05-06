@@ -2644,11 +2644,12 @@ def self_update():
             return {"status": "error", "message": result.stderr.strip()[:500]}
         if "Already up to date" in output:
             return {"status": "up_to_date", "message": output}
-        subprocess.Popen(
-            ["systemctl", "restart", "parsclode"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        if sys.platform != "win32":
+            subprocess.Popen(
+                ["systemctl", "restart", "parsclode"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
         return {"status": "updated", "message": output}
     except Exception as e:
         return {"status": "error", "message": str(e)[:500]}
@@ -2676,12 +2677,30 @@ async def database_import(file: UploadFile):
         f.write(content)
     import subprocess
 
-    subprocess.Popen(
-        ["systemctl", "restart", "parsclode"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    return {"status": "success", "message": "Database imported, server restarting"}
+    if sys.platform != "win32":
+        subprocess.Popen(
+            ["systemctl", "restart", "parsclode"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    return {"status": "success", "message": "Database imported, please restart server"}
+
+
+@app.post("/api/reset_database")
+def reset_database():
+    import subprocess
+
+    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_data.db")
+    if not os.path.exists(db_path):
+        return {"status": "error", "message": "Database file not found"}
+    os.remove(db_path)
+    if sys.platform != "win32":
+        subprocess.Popen(
+            ["systemctl", "restart", "parsclode"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    return {"status": "success", "message": "Database deleted, please restart server"}
     import subprocess
 
     db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_data.db")
