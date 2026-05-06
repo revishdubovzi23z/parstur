@@ -2653,6 +2653,22 @@ def self_update():
         return {"status": "error", "message": str(e)[:500]}
 
 
+@app.post("/api/reset_database")
+def reset_database():
+    import subprocess
+
+    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_data.db")
+    if not os.path.exists(db_path):
+        return {"status": "error", "message": "Database file not found"}
+    os.remove(db_path)
+    subprocess.Popen(
+        ["systemctl", "restart", "parsclode"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return {"status": "success", "message": "Database deleted, server restarting"}
+
+
 if __name__ == "__main__":
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
