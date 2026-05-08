@@ -471,6 +471,7 @@ def run_sync(mode="video", manual_min_date=None):
 
                 if existing_id:
                     item_id = existing_id
+                    is_new_item = False
                     db.fill_item_metadata(
                         item_id,
                         conn=conn,
@@ -504,7 +505,8 @@ def run_sync(mode="video", manual_min_date=None):
                     db.insert_search_name(item_id, sn, conn=conn)
 
                 if existing_id:
-                    print(f"  🔗 НАЙДЕН ДУБЛЬ: {display_title} ({year}) -> id={item_id}")
+                    # У же напечатали выше
+                    pass
                 else:
                     print(f"  ➕ ДОБАВЛЕН: {display_title} ({year})")
 
@@ -527,36 +529,37 @@ def run_sync(mode="video", manual_min_date=None):
                             f"    └─ Осиротевший релиз {rel['rutor_id']} переназначен на item {item_id}"
                         )
                     continue
-                if not added_any and not is_new_item:
+
+                # Если мы здесь, значит релиза нет в базе. Добавляем.
+                if not is_new_item and not added_any:
                     print(f"  🔗 Добавлен новый релиз к существующему фильму: {display_title}")
                     added_any = True
-                    rel_date = parse_rutor_date(rel["date_str"])
-                    if rel_date is None:
-                        # Storage requires a non-null date; record it but
-                        # log so a corrupt date string is observable
-                        # rather than silently filed as "now".
-                        from datetime import datetime
 
-                        rel_date = datetime.now().isoformat(sep=" ")
-                        print(
-                            f"    ⚠️  Не удалось разобрать дату '{rel.get('date_str')}', использую текущее время.",
-                            flush=True,
-                        )
-                    db.insert_release(
-                        {
-                            "item_id": item_id,
-                            "rutor_id": rel["rutor_id"],
-                            "torrent_title": rel["full_title"],
-                            "quality": rel["quality"],
-                            "date_added": rel_date,
-                            "magnet": rel["magnet"],
-                            "link": rel["link"],
-                        },
-                        conn=conn,
-                    )
+                rel_date = parse_rutor_date(rel["date_str"])
+                if rel_date is None:
+                    from datetime import datetime
+
+                    rel_date = datetime.now().isoformat(sep=" ")
                     print(
-                        f"    └─ Новая раздача: [{rel['quality']}] {rel['full_title'][:50]}... ({rel_date})"
+                        f"    ⚠️  Не удалось разобрать дату '{rel.get('date_str')}', использую текущее время.",
+                        flush=True,
                     )
+
+                db.insert_release(
+                    {
+                        "item_id": item_id,
+                        "rutor_id": rel["rutor_id"],
+                        "torrent_title": rel["full_title"],
+                        "quality": rel["quality"],
+                        "date_added": rel_date,
+                        "magnet": rel["magnet"],
+                        "link": rel["link"],
+                    },
+                    conn=conn,
+                )
+                print(
+                    f"    └─ Новая раздача: [{rel['quality']}] {rel['full_title'][:50]}... ({rel_date})"
+                )
 
         conn.commit()
         completed_cats.append(cat_id)
