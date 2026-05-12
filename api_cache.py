@@ -4,12 +4,11 @@ from requests_cache import CachedSession
 
 from script_utils import load_config
 
-_config = load_config()
-_cache_cfg = _config.get("cache", {})
+from settings import settings
 
-_expire_hours = _cache_cfg.get("expire_hours", 168)
-_db_path = _cache_cfg.get("db_path", "api_cache.db")
-_cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), _db_path)
+_cache_cfg = settings.cache_cfg
+_expire_hours = settings.cache_expire_hours
+_cache_dir = settings.resolved_api_cache_path
 
 _session = None
 

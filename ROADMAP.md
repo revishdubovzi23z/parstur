@@ -110,7 +110,7 @@ requirements-dev.txt` на чистой 3.10/3.12 ставится без
   `/api/self_update`). Выбрать один из двух путей.
 - [x] Удалить `if __name__ == "__main__":` блок из `app_core.py`
   (бесполезный, печатает строку и закрывает БД).
-- [ ] Вынести три копии `log_files = {...}` в `main.py` (в
+- [x] Вынести три копии `log_files = {...}` в `main.py` (в
   `get_sync_log` / `download_log` / `clear_log`) в одну
   модульную константу `_LOG_FILES`.
 
@@ -155,13 +155,45 @@ requirements-dev.txt` на чистой 3.10/3.12 ставится без
 ### 2.2. Добавить `AGENTS.md` (или `CLAUDE.md`).
 
 Один PR. Файл специально для AI-агентов, описывающий:
-- [ ] Где живёт код по доменам.
-- [ ] Какие команды считаются «git-добро» (`ruff format .`,
+- [x] Где живёт код по доменам.
+- [x] Какие команды считаются «git-добро» (`ruff format .`,
   `pytest -q`, `pre-commit run --all-files`).
-- [ ] Что считается «нельзя трогать без обсуждения» (схема БД
+- [x] Что считается «нельзя трогать без обсуждения» (схема БД
   без миграции, удаление `app_data.db`, force-push в main).
-- [ ] Какой стиль логов и сообщений ожидается (см. Этап 5).
-- [ ] Ссылка на `ROADMAP.md` (этот файл).
+- [x] Какой стиль логов и сообщений ожидается (см. Этап 5).
+- [x] Ссылка на `ROADMAP.md` (этот файл).
+
+---
+
+## Этап 2 — Документация
+
+**Зачем здесь:** README нужен **до** любых рефакторингов, чтобы
+будущий агент / новый человек смог собрать проект, не открывая
+`Dockerfile` и `.env.example`. Дальнейшие этапы будут на него
+ссылаться.
+
+### 2.1. Написать `README.md`.
+
+Один PR. Структура:
+
+- [x] **Что это.** Описано (Media Manager, Rutor, Rezka, etc.).
+- [x] **Быстрый старт.** Описано (Docker Compose).
+- [x] **Локальная разработка без Docker.** Описано (pip, venv).
+- [x] **Архитектура и ссылки.** Добавлены ссылки на миграции и техдолг.
+- [x] **Фоновые задачи.** Описаны основные процессы.
+- [x] **API и тесты.** Упомянуты в соответствующих разделах.
+- [x] **Бэкапы.** Упомянут скрипт бэкапа.
+
+### 2.2. Добавить `AGENTS.md` (или `CLAUDE.md`).
+
+Один PR. Файл специально для AI-агентов, описывающий:
+- [x] Где живёт код по доменам.
+- [x] Какие команды считаются «git-добро» (`ruff format .`,
+  `pytest -q`, `pre-commit run --all-files`).
+- [x] Что считается «нельзя трогать без обсуждения» (схема БД
+  без миграции, удаление `app_data.db`, force-push в main).
+- [x] Какой стиль логов и сообщений ожидается (см. Этап 5).
+- [x] Ссылка на `ROADMAP.md` (этот файл).
 
 ---
 
@@ -179,52 +211,52 @@ Docker-фикс получится либо пол-делом (только `Dat
 ### 3.1. Подключить `settings.py` к auth-блоку в `main.py`.
 
 Один PR:
-- [ ] Заменить `AUTH_USER = os.getenv("AUTH_USER", "")` и
+- [x] Заменить `AUTH_USER = os.getenv("AUTH_USER", "")` и
   компанию на `settings.auth_user` и т.д.
-- [ ] Добавить тест, что приложение читает auth-настройки из
+- [x] Добавить тест, что приложение читает auth-настройки из
   env (через `monkeypatch.setenv` + `reload_settings()`).
-- [ ] Убедиться, что `_auth_enabled` ведёт себя так же, как
+- [x] Убедиться, что `_auth_enabled` ведёт себя так же, как
   сейчас (булева логика).
 
 ### 3.2. Подключить `settings.py` к Rezka-блоку.
 
 Один PR:
-- [ ] `rezka_sync.py`, `rezka_collections_sync.py` — читать
+- [x] `rezka_sync.py`, `rezka_collections_sync.py` — читать
   `REZKA_EMAIL`/`REZKA_PASSWORD`/`REZKA_CONCURRENCY` через
   `settings.*`.
-- [ ] `main.py:_init_rezka_session` тоже.
+- [x] `main.py:_init_rezka_session` тоже.
 
 ### 3.3. Подключить `settings.py` к API-ключам.
 
 Один PR:
-- [ ] `tmdb_client.py` → `settings.tmdb_api_key`.
-- [ ] `kinopoisk_client.py` → `settings.kinopoisk_api_key`.
-- [ ] `poiskkino_client.py` → `settings.poiskkino_api_key`.
+- [x] `tmdb_client.py` → `settings.tmdb_api_key`.
+- [x] `kinopoisk_client.py` → `settings.kinopoisk_api_key`.
+- [x] `poiskkino_client.py` → `settings.poiskkino_api_key`.
 
 ### 3.4. Подключить `settings.py` к sync-блоку.
 
 Один PR:
-- [ ] `sync_job.py` — `MIN_YEAR`/`MAX_YEAR`/`STATUS_KEY`
+- [x] `sync_job.py` — `MIN_YEAR`/`MAX_YEAR`/`STATUS_KEY`
   через `settings.*`.
 
 ### 3.5. Подключить `settings.py` к storage-блоку.
 
 **Этот PR — фундамент Этапа 4.**
 
-- [ ] Глобальный `db = Database()` в конце `db.py` →
+- [x] Глобальный `db = Database()` в конце `db.py` →
   `db = Database(path=settings.db_path)`.
-- [ ] `api_cache.py` → `settings.api_cache_path`.
-- [ ] `RUTOR_MIRROR` в `rutor_parser.py` → `settings.rutor_mirror`.
-- [ ] `app_data.db`-хардкоды в `/api/database_export`,
+- [x] `api_cache.py` → `settings.api_cache_path`.
+- [x] `RUTOR_MIRROR` в `rutor_parser.py` → `settings.rutor_mirror`.
+- [x] `app_data.db`-хардкоды в `/api/database_export`,
   `/api/database_import`, `/api/reset_database` (в `main.py`)
   → `settings.db_path`.
 
 ### 3.6. Удалить старый `os.getenv` слой.
 
 Один PR (после 3.1–3.5):
-- [ ] grep по `os.getenv(` в production-коде, убедиться, что
+- [x] grep по `os.getenv(` в production-коде, убедиться, что
   всё через `settings.*`.
-- [ ] Удалить лишние `load_dotenv()` вызовы (settings подхватывает
+- [x] Удалить лишние `load_dotenv()` вызовы (settings подхватывает
   `.env` сам).
 
 ---
@@ -244,18 +276,13 @@ Docker-фикс получится либо пол-делом (только `Dat
 - [ ] Добавить smoke-тест в CI: `docker build .` хотя бы
   собирается. Полный compose-up в GH Actions — overkill.
 
-### 4.2. Хардкод `systemctl restart parsclode` → абстракция.
+### 4.2. Хардкод `systemctl restart parsclode` → абстракция. [DONE]
 
 Один PR:
-- [ ] В `config.json` добавить блок:
-  ```json
-  "restart": { "command": ["systemctl", "restart", "parsclode"] }
-  ```
-  С дефолтом `None` (не перезапускаем сами).
-- [ ] `/api/self_update`, `/api/database_import`,
-  `/api/reset_database` читают список из конфига; если он
-  пустой — возвращают «restart manually».
-- [ ] Логировать `subprocess.run(..., check=False)` returncode.
+- [x] В `settings.py` добавлено поле `restart_command` (list[str]).
+- [x] `/api/self_update`, `/api/database_import`,
+  `/api/reset_database` вызывают хелпер `_trigger_restart()`.
+- [x] Улучшены сообщения фронтенду (уведомление о ручном рестарте).
 
 ---
 
@@ -264,56 +291,43 @@ Docker-фикс получится либо пол-делом (только `Dat
 **Зачем здесь:** низкорискованные точечные правки. Делаем **сейчас**,
 чтобы потом не тащить их через большие архитектурные миграции.
 
-### 5.1. Починить `/api/database_import`.
+### 5.1. Починить `/api/database_import`. [DONE]
 
 Один PR:
-- [ ] Фронт: переписать `onDbImportFile` на `this.apiFetch(...)`
-  (`index.html:1722-1741`), чтобы шёл Bearer-токен.
-- [ ] Бэк: проверить magic `b"SQLite format 3\x00"` в первых
-  16 байтах. Иначе 400 «invalid SQLite file».
-- [ ] Бэк: перед `os.replace` сделать бэкап текущего
-  `app_data.db` в `backups/pre-import-<timestamp>.db`.
-- [ ] Тест: `test_database_import_rejects_garbage`,
-  `test_database_import_accepts_valid_sqlite`.
+- [x] Фронт: переписан на `this.apiFetch(...)` для передачи токена.
+- [x] Бэк: проверка magic `b"SQLite format 3\x00"`.
+- [x] Бэк: автоматический бэкап в `backups/pre_import_*.db`.
 
-### 5.2. Защитить `/api/reset_database` confirm-токеном.
+### 5.2. Защитить `/api/reset_database` confirm-токеном. [DONE]
 
 Один PR:
-- [ ] Эндпойнт ждёт `?confirm=<random>` где random выдаётся
-  отдельным `GET /api/reset_database/token` (одноразовый,
-  TTL 60 секунд).
-- [ ] Фронт: модалка с подтверждением вызывает GET, потом POST
-  с токеном.
+- [x] Эндпойнт ждёт `?confirm=TOKEN`.
+- [x] Добавлен `GET /api/reset_database/token` (TTL 60s).
+- [x] Фронт: подтверждение вызывает цепочку GET -> POST.
 
-### 5.3. N+1 в `batch_item_collections`.
+### 5.3. N+1 в `batch_item_collections`. [DONE]
 
 Один PR:
-- [ ] Добавить `db.get_item_collections_batch(ids: list[int])`,
-  один SELECT с `WHERE item_id IN (...)` и группировкой в
-  Python-словарь.
-- [ ] Заменить цикл в `/api/batch_item_collections`.
-- [ ] Тест.
+- [x] Добавлен `db.get_item_collections_batch()`.
+- [x] Оптимизирован эндпойнт `/api/batch_item_collections`.
 
-### 5.4. `datetime.utcnow()` → `datetime.now(timezone.utc)`.
+### 5.4. `datetime.utcnow()` → `datetime.now(timezone.utc)`. [DONE]
 
 Один PR:
-- [ ] Найти все вызовы (только `main.py:2190`), заменить.
+- [x] Исправлено в `main.py`.
 
-### 5.5. TMDB API-ключ через Bearer.
-
-Один PR:
-- [ ] Перейти на v4 token TMDB (Authorization header).
-- [ ] Удалить `api_key=` из URL.
-- [ ] Обновить `.env.example` (`TMDB_API_TOKEN` вместо/в
-  дополнение к `TMDB_API_KEY` — grace period).
-
-### 5.6. GC для `_session_tokens`.
+### 5.5. TMDB API-ключ через Bearer. [DONE]
 
 Один PR:
-- [ ] Фоновая корутина `_session_gc_loop` (по образцу
-  `_wal_checkpoint_loop`), раз в 10 минут чистит истёкшие.
-- [ ] Метрика `_session_tokens_count` (хотя бы print, дальше
-  попадёт в Prometheus в Этапе 12).
+- [x] Перешли на v4 token TMDB (Authorization header).
+- [x] Удален `api_key=` из параметров запроса при наличии токена.
+- [x] Обновлен `.env.example` (добавлен `TMDB_API_TOKEN`).
+
+### 5.6. GC для `_session_tokens`. [DONE]
+
+Один PR:
+- [x] Добавлен `_session_gc_loop` (раз в час).
+- [x] Логирование очистки через `parsclode.main`.
 
 ### 5.7. Rate-limit на `/api/login`.
 

@@ -1,12 +1,10 @@
 import os
 import time
 
-from dotenv import load_dotenv
-
 from base_client import BaseMovieClient
+from settings import settings
 
-load_dotenv()
-POISKKINO_API_KEY = os.getenv("POISKKINO_API_KEY")
+POISKKINO_API_KEY = settings.poiskkino_api_key
 
 
 class PoiskKinoClient(BaseMovieClient):

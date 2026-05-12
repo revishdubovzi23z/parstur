@@ -8,11 +8,12 @@ from kinopoisk_client import KinopoiskClient
 from logger import setup_tee_logger
 from poiskkino_client import PoiskKinoClient
 from script_utils import clear_stop_flag, load_config, should_stop
+from settings import settings
 
 _config = load_config()
 FIX_BATCH_SIZE = _config.get("fix_posters", {}).get("batch_size", 300)
 FIX_REQUEST_DELAY = _config.get("fix_posters", {}).get("request_delay", 0.5)
-STATUS_KEY = os.getenv("STATUS_KEY", "fix")
+STATUS_KEY = settings.status_key
 
 
 def fix_metadata(api_type="tech"):

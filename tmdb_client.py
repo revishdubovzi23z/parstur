@@ -1,13 +1,10 @@
-import os
 import re
 import time
 
-from dotenv import load_dotenv
-
 from api_cache import get_cached_session
+from settings import settings
 
-load_dotenv()
-TMDB_API_KEY = os.getenv("TMDB_API_KEY")
+TMDB_API_KEY = settings.tmdb_api_key
 
 
 def _norm(s):
@@ -18,10 +15,13 @@ def _norm(s):
 
 class TMDBClient:
     def __init__(self):
-        self.api_key = TMDB_API_KEY
+        self.api_key = settings.tmdb_api_key
+        self.api_token = settings.tmdb_api_token
         self.base_url = "https://api.themoviedb.org/3"
         self.image_base_url = "https://image.tmdb.org/t/p/w500"
         self.headers = {"accept": "application/json"}
+        if self.api_token:
+            self.headers["Authorization"] = f"Bearer {self.api_token}"
         self.is_limited = False
         self.session = get_cached_session()
 
@@ -29,10 +29,12 @@ class TMDBClient:
         if self.is_limited:
             return None
         url = f"{self.base_url}/{media_type}/{tmdb_id}/external_ids"
-        params = {"api_key": self.api_key}
+        params = {}
+        if not self.api_token:
+            params["api_key"] = self.api_key
         try:
             time.sleep(0.1)
-            resp = self.session.get(url, params=params, timeout=5)
+            resp = self.session.get(url, params=params, headers=self.headers, timeout=5)
             if resp.status_code == 200:
                 return resp.json().get("imdb_id")
             # Surface non-2xx so the operator can tell when TMDB is
@@ -51,18 +53,20 @@ class TMDBClient:
         Returns: list of dicts with at least {key, name, site, type, official}.
         Tries Russian first, falls back to English/none if empty.
         """
-        if not self.api_key or self.is_limited or not tmdb_id:
+        if not (self.api_key or self.api_token) or self.is_limited or not tmdb_id:
             return []
         if media_type not in ("movie", "tv"):
             return []
         url = f"{self.base_url}/{media_type}/{tmdb_id}/videos"
         for lang in ("ru-RU", "en-US", None):
-            params = {"api_key": self.api_key}
+            params = {}
+            if not self.api_token:
+                params["api_key"] = self.api_key
             if lang:
                 params["language"] = lang
             try:
                 time.sleep(0.1)
-                resp = self.session.get(url, params=params, timeout=5)
+                resp = self.session.get(url, params=params, headers=self.headers, timeout=5)
                 if resp.status_code in (401, 403):
                     self.is_limited = True
                     return []
@@ -85,13 +89,14 @@ class TMDBClient:
             return None
         url = f"{self.base_url}/find/{imdb_id}"
         params = {
-            "api_key": self.api_key,
             "external_source": "imdb_id",
             "language": "ru-RU",
         }
+        if not self.api_token:
+            params["api_key"] = self.api_key
         try:
             time.sleep(0.1)
-            response = self.session.get(url, params=params, timeout=10)
+            response = self.session.get(url, params=params, headers=self.headers, timeout=10)
             if response.status_code in [401, 403]:
                 self.is_limited = True
                 return None
@@ -124,7 +129,7 @@ class TMDBClient:
         return None
 
     def search_movie(self, title, year=None, alt_title=None):
-        if not self.api_key or self.api_key == "ТВОЙ_КЛЮЧ_СЮДА" or self.is_limited:
+        if not (self.api_key or self.api_token) or self.is_limited:
             return None
 
         queries = [title]
@@ -142,12 +147,14 @@ class TMDBClient:
                 break
 
             url = f"{self.base_url}/search/multi"
-            params = {"api_key": self.api_key, "query": query, "language": "ru-RU"}
+            params = {"query": query, "language": "ru-RU"}
+            if not self.api_token:
+                params["api_key"] = self.api_key
 
             for attempt in range(3):
                 try:
                     time.sleep(0.3)
-                    response = self.session.get(url, params=params, timeout=10)
+                    response = self.session.get(url, params=params, headers=self.headers, timeout=10)
                     if response.status_code == 429:
                         time.sleep(5)
                         continue

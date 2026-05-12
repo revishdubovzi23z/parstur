@@ -90,6 +90,7 @@ class _ApiKeysSettings(BaseSettings):
 
     kinopoisk_api_key: str | None = Field(default=None)
     tmdb_api_key: str | None = Field(default=None)
+    tmdb_api_token: str | None = Field(default=None)
     poiskkino_api_key: str | None = Field(default=None)
 
 
@@ -118,6 +119,32 @@ class _StorageSettings(BaseSettings):
         default="https://rutor.info",
         description="Rutor mirror URL (with scheme, no trailing slash).",
     )
+    cache_expire_hours: int = Field(
+        default=168,
+        description="Hours to keep items in the API requests cache.",
+    )
+    cache_cfg: dict = Field(
+        default_factory=dict,
+        description="Additional requests-cache configuration.",
+    )
+
+    @property
+    def resolved_db_path(self) -> str:
+        """Absolute path to the DB, prefixed by app_data_dir if relative."""
+        import os
+
+        if os.path.isabs(self.db_path):
+            return self.db_path
+        return os.path.join(self.app_data_dir, self.db_path)
+
+    @property
+    def resolved_api_cache_path(self) -> str:
+        """Absolute path to the API cache, prefixed by app_data_dir if relative."""
+        import os
+
+        if os.path.isabs(self.api_cache_path):
+            return self.api_cache_path
+        return os.path.join(self.app_data_dir, self.api_cache_path)
 
 
 class Settings(
@@ -144,6 +171,14 @@ class Settings(
         description="Enables debug endpoints (e.g. /api/debug/queue).",
     )
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+    log_file_path: str = Field(
+        default="app.log",
+        description="Path to the main application log file.",
+    )
+    restart_command: list[str] | None = Field(
+        default=None,
+        description="Command to run when the server needs to restart (e.g. ['systemctl', 'restart', 'parsclode']).",
+    )
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -15,7 +15,7 @@ from settings import Settings, reload_settings
 
 
 def test_defaults_present() -> None:
-    s = Settings()
+    s = Settings(_env_file=None)
     # Auth defaults to off.
     assert s.auth_user == ""
     assert s.auth_pass == ""

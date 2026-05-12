@@ -1,6 +1,8 @@
 import logging
 import sys
 
+from settings import settings
+
 
 def setup_logger(name: str, log_file: str) -> logging.Logger:
     logger = logging.getLogger(name)
@@ -9,7 +11,14 @@ def setup_logger(name: str, log_file: str) -> logging.Logger:
     handler = logging.FileHandler(log_file, encoding="utf-8")
     handler.setFormatter(logging.Formatter("%(message)s"))
     logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
+
+    level_map = {
+        "DEBUG": logging.DEBUG,
+        "INFO": logging.INFO,
+        "WARNING": logging.WARNING,
+        "ERROR": logging.ERROR,
+    }
+    logger.setLevel(level_map.get(settings.log_level, logging.INFO))
     return logger
 
 

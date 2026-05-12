@@ -11,7 +11,9 @@ from poiskkino_client import PoiskKinoClient
 from rezka_sync import search_rezka_for_item
 from tmdb_client import TMDBClient
 
-RUTOR_MIRROR = os.getenv("RUTOR_MIRROR", "https://rutor.info").rstrip("/")
+from settings import settings
+
+RUTOR_MIRROR = settings.rutor_mirror.rstrip("/")
 
 
 def report_progress(current, total, status_key="single_update"):

@@ -7,6 +7,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from script_utils import load_config
+from settings import settings
 
 _config = load_config()
 RUTOR_MAX_RETRIES = _config.get("rutor", {}).get("max_retries", 3)
@@ -15,7 +16,7 @@ RUTOR_RETRY_DELAY_BASE = _config.get("rutor", {}).get("retry_delay_base", 5)
 # HTTPS by default so credentials, cookies and traffic don't leak in plaintext
 # on the local network. The env var lets a user override the mirror without
 # touching code (e.g. switch to a regional clone if rutor.info is unreachable).
-RUTOR_MIRROR = os.getenv("RUTOR_MIRROR", "https://rutor.info").rstrip("/")
+RUTOR_MIRROR = settings.rutor_mirror.rstrip("/")
 
 
 class RutorParser:

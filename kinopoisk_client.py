@@ -1,12 +1,10 @@
 import os
 import time
 
-from dotenv import load_dotenv
-
 from base_client import BaseMovieClient
+from settings import settings
 
-load_dotenv()
-KINOPOISK_API_KEY = os.getenv("KINOPOISK_API_KEY")
+KINOPOISK_API_KEY = settings.kinopoisk_api_key
 
 
 class KinopoiskClient(BaseMovieClient):

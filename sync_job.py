@@ -20,6 +20,7 @@ from script_utils import (
     save_checkpoint,
     should_stop,
 )
+from settings import settings
 from tmdb_client import TMDBClient
 
 
@@ -31,9 +32,9 @@ def report_progress(current, total, status_key):
         pass
 
 
-MIN_YEAR = int(os.getenv("SYNC_MIN_YEAR", 1900))
-MAX_YEAR = int(os.getenv("SYNC_MAX_YEAR", 2099))
-STATUS_KEY = os.getenv("STATUS_KEY", "sync_video")
+MIN_YEAR = settings.sync_min_year
+MAX_YEAR = settings.sync_max_year
+STATUS_KEY = settings.status_key
 
 _config = load_config()
 SYNC_PAGE_DEPTH = _config.get("sync", {}).get("page_depth", 20)

@@ -1513,6 +1513,20 @@ class Database:
                 ).fetchall()
             ]
 
+    def get_item_collections_batch(self, item_ids: list[int]) -> dict[int, list[int]]:
+        if not item_ids:
+            return {}
+        with self._conn() as c:
+            placeholders = ",".join(["?"] * len(item_ids))
+            rows = c.execute(
+                f"SELECT item_id, collection_id FROM collection_items WHERE item_id IN ({placeholders})",
+                item_ids,
+            ).fetchall()
+            result: dict[int, list[int]] = {i: [] for i in item_ids}
+            for row in rows:
+                result[row["item_id"]].append(row["collection_id"])
+            return result
+
     def save_collections_order(self, order: list[int]) -> None:
         with self._conn() as c:
             for i, col_id in enumerate(order):
@@ -2013,4 +2027,6 @@ class Database:
             return cur.rowcount > 0
 
 
-db = Database()
+from settings import settings
+
+db = Database(path=settings.resolved_db_path)

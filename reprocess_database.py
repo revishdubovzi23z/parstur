@@ -9,11 +9,10 @@ from app_core import VIDEO_CATEGORY_IDS
 from db import Database
 from logger import setup_tee_logger
 from script_utils import clear_stop_flag, load_config, should_stop
+from settings import settings
 from tmdb_client import TMDBClient
 
-# HTTPS by default; the env var matches the one used in rutor_parser.py so
-# both modules read from the same source of truth.
-RUTOR_MIRROR = os.getenv("RUTOR_MIRROR", "https://rutor.info").rstrip("/")
+RUTOR_MIRROR = settings.rutor_mirror.rstrip("/")
 
 GARBAGE_KEYWORDS = [
     "S01",
@@ -41,7 +40,7 @@ GARBAGE_KEYWORDS = [
 _config = load_config()
 REPROCESS_BATCH_SIZE = _config.get("reprocess", {}).get("batch_size", 100)
 REPROCESS_REQUEST_DELAY = _config.get("reprocess", {}).get("request_delay", 0.5)
-STATUS_KEY = os.getenv("STATUS_KEY", "reprocess")
+STATUS_KEY = settings.status_key
 
 
 def has_garbage_title(title):

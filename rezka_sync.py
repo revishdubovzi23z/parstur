@@ -11,6 +11,7 @@ from app_core import clean_title_for_search, normalize_title
 from db import Database
 from logger import setup_tee_logger
 from script_utils import clear_stop_flag, load_config, should_stop
+from settings import settings
 
 _config = load_config()
 
@@ -22,20 +23,14 @@ _config = load_config()
 # triggering the WAF. Operators with a logged-in session can push
 # higher via REZKA_CONCURRENCY env or `--concurrency`.
 def _initial_concurrency() -> int:
-    env = os.getenv("REZKA_CONCURRENCY")
+    env = settings.rezka_concurrency
     if env:
-        try:
-            return max(1, int(env))
-        except ValueError:
-            print(
-                f"[rezka] ignoring non-integer REZKA_CONCURRENCY={env!r}",
-                flush=True,
-            )
+        return env
     return int(_config.get("rezka", {}).get("concurrency", 6))
 
 
 REZKA_CONCURRENCY = _initial_concurrency()
-STATUS_KEY = os.getenv("STATUS_KEY", "rezka")
+STATUS_KEY = settings.status_key
 REZKA_ORIGIN = "https://rezka.ag"
 REZKA_SEARCH_URL = f"{REZKA_ORIGIN}/engine/ajax/search.php"
 REZKA_HEADERS = {
@@ -47,8 +42,8 @@ REZKA_HEADERS = {
 # are configured — without that, each request fights the captcha and
 # the search endpoint regularly returns empty results.
 REZKA_COOKIES = {"hdmbbs": "1"}
-REZKA_EMAIL = os.getenv("REZKA_EMAIL", "")
-REZKA_PASSWORD = os.getenv("REZKA_PASSWORD", "")
+REZKA_EMAIL = settings.rezka_email
+REZKA_PASSWORD = settings.rezka_password
 
 # 5.11 — score thresholds (previously hard-coded -150 / 70 / -50).
 # Operators occasionally need to retune these when rezka changes how

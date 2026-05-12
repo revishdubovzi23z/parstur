@@ -1706,7 +1706,10 @@
                     if (!confirm('ВНИМАНИЕ! Все данные будут удалены без возможности восстановления. Продолжить?')) return;
                     if (!confirm('Точно уверены? Это необратимо!')) return;
                     try {
-                        const res = await this.apiFetch('/api/reset_database', { method: 'POST' });
+                        const tokenRes = await this.apiFetch('/api/reset_database/token');
+                        const { token } = await tokenRes.json();
+                        
+                        const res = await this.apiFetch(`/api/reset_database?confirm=${token}`, { method: 'POST' });
                         const data = await res.json();
                         if (data.status === 'success') {
                             alert('База удалена. Сервер перезапускается с пустой базой...');
@@ -1726,7 +1729,7 @@
                     try {
                         const formData = new FormData();
                         formData.append('file', file);
-                        const res = await fetch('/api/database_import', { method: 'POST', body: formData });
+                        const res = await this.apiFetch('/api/database_import', { method: 'POST', body: formData });
                         const data = await res.json();
                         if (data.status === 'success') {
                             alert('База импортирована! Сервер перезапускается...');

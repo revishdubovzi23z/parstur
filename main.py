@@ -27,8 +27,13 @@ from pydantic import BaseModel
 
 from db import db
 from script_utils import clear_checkpoint, clear_stop_flag, load_config
+from settings import settings
+import logging
+from logger import setup_logger
 
-load_dotenv()
+logger = setup_logger("parsclode.main", settings.log_file_path)
+
+# load_dotenv() - redundant, settings.py handles this
 
 # Принудительно устанавливаем ProactorEventLoop для Windows,
 # так как только он поддерживает запуск подпроцессов в asyncio.
@@ -76,8 +81,8 @@ class TaskQueue:
 
 task_queue = TaskQueue()
 
-AUTH_USER = os.getenv("AUTH_USER", "")
-AUTH_PASS = os.getenv("AUTH_PASS", "")
+AUTH_USER = settings.auth_user
+AUTH_PASS = settings.auth_pass
 # Preferred way to configure the password: a pbkdf2_sha256-encoded hash. When
 # AUTH_PASS_HASH is set we ignore AUTH_PASS for verification (but still allow
 # AUTH_PASS as a one-off fallback when the hash isn't provided so existing
@@ -88,7 +93,7 @@ AUTH_PASS = os.getenv("AUTH_PASS", "")
 #       h=hashlib.pbkdf2_hmac('sha256', pw.encode(), salt, 600_000); \
 #       print('pbkdf2_sha256$600000$'+base64.b64encode(salt).decode()+'$' \
 #             +base64.b64encode(h).decode())" 'your-password'
-AUTH_PASS_HASH = os.getenv("AUTH_PASS_HASH", "")
+AUTH_PASS_HASH = settings.auth_pass_hash
 _auth_enabled = bool(AUTH_USER) and bool(AUTH_PASS or AUTH_PASS_HASH)
 
 # Map token -> Unix-epoch expiry timestamp. We use a sliding 7-day TTL so a
@@ -96,6 +101,7 @@ _auth_enabled = bool(AUTH_USER) and bool(AUTH_PASS or AUTH_PASS_HASH)
 # was issued and never used past 7 days becomes invalid.
 SESSION_TTL_SECONDS = 7 * 24 * 60 * 60
 _session_tokens: dict[str, float] = {}
+_reset_tokens = {}  # {token: expiry_timestamp}
 
 
 def _verify_password(plaintext: str) -> bool:
@@ -216,8 +222,9 @@ async def lifespan(_app):
         await asyncio.to_thread(db.wal_checkpoint, "TRUNCATE")
     except Exception as e:
         print(f"[WAL] startup checkpoint skipped: {type(e).__name__}: {e}")
-    global _wal_checkpoint_task
+    global _wal_checkpoint_task, _session_gc_task
     _wal_checkpoint_task = asyncio.create_task(_wal_checkpoint_loop())
+    _session_gc_task = asyncio.create_task(_session_gc_loop())
     # 6.2 — get_running_loop() is the modern, non-deprecated way; it
     # raises if called outside an async context (good — we are inside
     # one here) instead of get_event_loop()'s creates-a-loop fallback.
@@ -234,6 +241,14 @@ async def lifespan(_app):
         except (asyncio.CancelledError, Exception):
             pass
         _wal_checkpoint_task = None
+
+    if _session_gc_task is not None:
+        _session_gc_task.cancel()
+        try:
+            await _session_gc_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        _session_gc_task = None
     config = load_config()
     graceful_timeout = config.get("shutdown", {}).get("graceful_timeout", 5)
     for key, proc in running_processes.items():
@@ -298,8 +313,8 @@ rezka_session_folders_cache = None
 
 def _init_rezka_session():
     global rezka_session, rezka_session_folders_cache
-    rezka_email = os.getenv("REZKA_EMAIL", "")
-    rezka_password = os.getenv("REZKA_PASSWORD", "")
+    rezka_email = settings.rezka_email
+    rezka_password = settings.rezka_password
     if not rezka_email or not rezka_password:
         print("[REZKA] No credentials, session skipped", flush=True)
         return
@@ -649,6 +664,10 @@ async def auth_middleware(request: Request, call_next):
 WAL_CHECKPOINT_INTERVAL_SECONDS = 30 * 60  # 30 minutes
 _wal_checkpoint_task: asyncio.Task | None = None
 
+# 5.6 — background session GC.
+SESSION_GC_INTERVAL_SECONDS = 60 * 60  # 1 hour
+_session_gc_task: asyncio.Task | None = None
+
 
 async def _wal_checkpoint_loop() -> None:
     while True:
@@ -664,6 +683,23 @@ async def _wal_checkpoint_loop() -> None:
             raise
         except Exception as e:
             print(f"[WAL] checkpoint error: {type(e).__name__}: {e}")
+
+
+async def _session_gc_loop() -> None:
+    """Periodically removes expired tokens from the in-memory session store."""
+    while True:
+        await asyncio.sleep(SESSION_GC_INTERVAL_SECONDS)
+        try:
+            now = time.time()
+            expired = [t for t, exp in _session_tokens.items() if now > exp]
+            if expired:
+                for t in expired:
+                    _session_tokens.pop(t, None)
+                logger.info(f"[AUTH] GC reaped {len(expired)} expired sessions")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"[AUTH] GC error: {e}")
 
 
 @app.get("/api/debug/queue")
@@ -1726,10 +1762,9 @@ class BatchCollectionsRequest(BaseModel):
 
 @app.post("/api/batch_item_collections")
 def batch_item_collections(data: BatchCollectionsRequest):
-    result = {}
-    for item_id in data.ids:
-        result[str(item_id)] = db.get_item_collections(item_id)
-    return result
+    batch_result = db.get_item_collections_batch(data.ids)
+    # Convert keys to strings for JSON consistency with previous implementation.
+    return {str(k): v for k, v in batch_result.items()}
 
 
 def _recover_rezka_url(item_id: int, old_url: str) -> str | None:
@@ -2153,7 +2188,8 @@ async def sync_user_data():
 async def backup_download():
     out_dir = "backups"
     os.makedirs(out_dir, exist_ok=True)
-    stamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    from datetime import timezone
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     dest = os.path.join(out_dir, f"app_data-{stamp}.db")
     try:
         # SQLite backup is blocking I/O; push it off the loop.
@@ -2594,6 +2630,27 @@ def get_last_visit():
     return {"last_visit": db.get_last_visit()}
 
 
+def _trigger_restart():
+    """Triggers a server restart using the command defined in settings.
+    Returns True if a command was started, False otherwise.
+    """
+    import subprocess
+
+    if settings.restart_command:
+        try:
+            subprocess.Popen(
+                settings.restart_command,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Failed to trigger restart: {e}")
+            return False
+    return False
+
+
 @app.post("/api/self_update")
 def self_update():
     import subprocess
@@ -2611,63 +2668,110 @@ def self_update():
             return {"status": "error", "message": result.stderr.strip()[:500]}
         if "Already up to date" in output:
             return {"status": "up_to_date", "message": output}
-        if sys.platform != "win32":
-            subprocess.Popen(
-                ["systemctl", "restart", "parsclode"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        return {"status": "updated", "message": output}
+
+        restarted = _trigger_restart()
+        msg = output
+        if restarted:
+            msg += "\n\nServer is restarting..."
+        else:
+            msg += "\n\nUpdate complete. Please restart the server manually."
+
+        return {"status": "updated", "message": msg}
     except Exception as e:
         return {"status": "error", "message": str(e)[:500]}
 
 
 @app.get("/api/database_export")
 def database_export():
-    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_data.db")
+    db_path = settings.resolved_db_path
     if not os.path.exists(db_path):
         return JSONResponse({"error": "not found"}, status_code=404)
     return FileResponse(
         db_path,
         media_type="application/x-sqlite3",
-        filename="app_data.db",
+        filename=os.path.basename(db_path),
     )
 
 
 @app.post("/api/database_import")
 async def database_import(file: UploadFile):
-    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_data.db")
+    db_path = settings.resolved_db_path
     content = await file.read()
+
+    # 5.1: Security/Integrity check
+    # SQLite file must start with specific magic bytes.
+    if not content.startswith(b"SQLite format 3\x00"):
+        return JSONResponse(
+            {"status": "error", "message": "Invalid SQLite file (header mismatch)"},
+            status_code=400,
+        )
+
     if len(content) < 100:
         return JSONResponse({"status": "error", "message": "File too small"}, status_code=400)
+
+    # 5.1: Create backup before overwrite
+    if os.path.exists(db_path):
+        import shutil
+        from datetime import datetime
+
+        backup_dir = os.path.join(settings.app_data_dir, "backups")
+        os.makedirs(backup_dir, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = os.path.join(backup_dir, f"pre_import_{timestamp}.db")
+        try:
+            shutil.copy2(db_path, backup_path)
+            logger.info(f"Backup created: {backup_path}")
+        except Exception as e:
+            logger.error(f"Failed to create backup: {e}")
+            # We continue anyway, as the user requested an import.
+
     with open(db_path, "wb") as f:
         f.write(content)
-    import subprocess
 
-    if sys.platform != "win32":
-        subprocess.Popen(
-            ["systemctl", "restart", "parsclode"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    return {"status": "success", "message": "Database imported, please restart server"}
+    restarted = _trigger_restart()
+    if restarted:
+        return {"status": "success", "message": "Database imported, server is restarting..."}
+    return {"status": "success", "message": "Database imported, please restart server manually"}
+
+
+@app.get("/api/reset_database/token")
+def get_reset_token():
+    import secrets
+    from datetime import datetime, timedelta
+
+    token = secrets.token_urlsafe(16)
+    expiry = datetime.now() + timedelta(seconds=60)
+    _reset_tokens[token] = expiry
+    return {"token": token}
 
 
 @app.post("/api/reset_database")
-def reset_database():
+def reset_database(confirm: str | None = None):
+    from datetime import datetime
+
+    if not confirm or confirm not in _reset_tokens:
+        return JSONResponse(
+            {"status": "error", "message": "Confirmation token missing or invalid"},
+            status_code=403,
+        )
+
+    expiry = _reset_tokens.pop(confirm)
+    if datetime.now() > expiry:
+        return JSONResponse(
+            {"status": "error", "message": "Confirmation token expired"}, status_code=403
+        )
+
     import subprocess
 
-    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_data.db")
+    db_path = settings.resolved_db_path
     if not os.path.exists(db_path):
         return {"status": "error", "message": "Database file not found"}
     os.remove(db_path)
-    if sys.platform != "win32":
-        subprocess.Popen(
-            ["systemctl", "restart", "parsclode"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    return {"status": "success", "message": "Database deleted, please restart server"}
+
+    restarted = _trigger_restart()
+    if restarted:
+        return {"status": "success", "message": "Database deleted, server is restarting..."}
+    return {"status": "success", "message": "Database deleted, please restart server manually"}
 
 
 if __name__ == "__main__":

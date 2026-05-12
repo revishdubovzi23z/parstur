@@ -1,15 +1,13 @@
 import os
 import re
 
-from dotenv import load_dotenv
-
 from app_core import normalize_title
 from db import Database
 from logger import setup_tee_logger
+from settings import settings
 
-load_dotenv()
-REZKA_EMAIL = os.getenv("REZKA_EMAIL", "")
-REZKA_PASSWORD = os.getenv("REZKA_PASSWORD", "")
+REZKA_EMAIL = settings.rezka_email
+REZKA_PASSWORD = settings.rezka_password
 REZKA_ORIGIN = "https://rezka.ag"
 REZKA_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.138 Safari/537.36",
