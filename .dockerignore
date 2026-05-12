@@ -46,13 +46,10 @@ temp_csv_head.txt
 IMDBOCENKI.csv
 kinopoiskocenki.csv
 
-# Docs / dev-only bits
+# Docs / dev-only bits. `*.md` catches REVIEW.md, ROADMAP.md,
+# par2_progress.md, etc. README.md will be added in ROADMAP Stage 2;
+# at that point we'll add `!README.md` so it ships inside the image.
 *.md
-!README.md
-TODO.md
-TOP_OPTIMIZATIONS.md
-SECURITY.md
-par2_progress.md
 
 # Tests don't run inside the production image
 tests/

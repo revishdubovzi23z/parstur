@@ -934,7 +934,7 @@ async def _search_rezka_batch(items, db, conn):
                 item_results[idx] = r_data
                 print(f"    [+] {row['title']}: CONFIRMED ({reason}, score: {current_score})")
                 if id_match_result and fallback_result and id_match_result is not fallback_result:
-                    print(f"    ℹ️  ID-match preferred over trust_by_title")
+                    print("    ℹ️  ID-match preferred over trust_by_title")
             else:
                 print(f"    [-] {row['title']}: no suitable candidate")
 

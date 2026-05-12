@@ -1,5 +1,4 @@
 import asyncio
-# Force update commit
 import base64
 import csv
 import hashlib
@@ -19,9 +18,9 @@ from fastapi import (
     FastAPI,
     HTTPException,
     Request,
+    UploadFile,
     WebSocket,
     WebSocketDisconnect,
-    UploadFile,
 )
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel
@@ -150,16 +149,6 @@ def _check_auth(request: Request) -> bool:
     if auth.startswith("Bearer "):
         return _check_token(auth[7:])
     return False
-
-
-async def require_auth(request: Request):
-    if not _auth_enabled:
-        return
-    if _check_auth(request):
-        return
-    raise HTTPException(
-        status_code=401, detail="Unauthorized", headers={"WWW-Authenticate": "Basic"}
-    )
 
 
 # 6.3 — captured during the lifespan startup hook so worker threads
@@ -1891,7 +1880,6 @@ def get_online_sources(item_id: int):
 
 @app.get("/api/stream_info/{item_id}")
 def get_stream_info(item_id: int):
-    from HdRezkaApi import HdRezkaApi
     from HdRezkaApi.types import TVSeries
 
     row = (
@@ -2090,21 +2078,23 @@ def get_index():
         return f.read()
 
 
+_LOG_FILES = {
+    "video": "sync_video_log.txt",
+    "other": "sync_other_log.txt",
+    "fix": "fix_tech_log.txt",
+    "fix_poiskkino": "fix_poiskkino_log.txt",
+    "user": "user_sync_log.txt",
+    "reprocess": "reprocess_log.txt",
+    "cleanup": "cleanup_log.txt",
+    "rezka": "sync_rezka_log.txt",
+    "rezka_collections": "rezka_collections_log.txt",
+    "single_update": "single_update_log.txt",
+}
+
+
 @app.get("/api/sync_log")
 def get_sync_log(log_type: str = "video"):
-    log_files = {
-        "video": "sync_video_log.txt",
-        "other": "sync_other_log.txt",
-        "fix": "fix_tech_log.txt",
-        "fix_poiskkino": "fix_poiskkino_log.txt",
-        "user": "user_sync_log.txt",
-        "reprocess": "reprocess_log.txt",
-        "cleanup": "cleanup_log.txt",
-        "rezka": "sync_rezka_log.txt",
-        "rezka_collections": "rezka_collections_log.txt",
-        "single_update": "single_update_log.txt",
-    }
-    filename = log_files.get(log_type)
+    filename = _LOG_FILES.get(log_type)
     if not filename:
         return JSONResponse(
             content={"log": "Неизвестный тип лога", "filename": ""}, status_code=400
@@ -2123,19 +2113,7 @@ def get_sync_log(log_type: str = "video"):
 
 @app.get("/api/download_log")
 def download_log(log_type: str = "video"):
-    log_files = {
-        "video": "sync_video_log.txt",
-        "other": "sync_other_log.txt",
-        "fix": "fix_tech_log.txt",
-        "fix_poiskkino": "fix_poiskkino_log.txt",
-        "user": "user_sync_log.txt",
-        "reprocess": "reprocess_log.txt",
-        "cleanup": "cleanup_log.txt",
-        "rezka": "sync_rezka_log.txt",
-        "rezka_collections": "rezka_collections_log.txt",
-        "single_update": "single_update_log.txt",
-    }
-    filename = log_files.get(log_type)
+    filename = _LOG_FILES.get(log_type)
     if filename and os.path.exists(filename):
         return FileResponse(path=filename, filename=filename, media_type="text/plain")
     return {"error": "Файл не найден"}
@@ -2143,19 +2121,7 @@ def download_log(log_type: str = "video"):
 
 @app.post("/api/clear_log")
 def clear_log(log_type: str = "video"):
-    log_files = {
-        "video": "sync_video_log.txt",
-        "other": "sync_other_log.txt",
-        "fix": "fix_tech_log.txt",
-        "fix_poiskkino": "fix_poiskkino_log.txt",
-        "user": "user_sync_log.txt",
-        "reprocess": "reprocess_log.txt",
-        "cleanup": "cleanup_log.txt",
-        "rezka": "sync_rezka_log.txt",
-        "rezka_collections": "rezka_collections_log.txt",
-        "single_update": "single_update_log.txt",
-    }
-    filename = log_files.get(log_type)
+    filename = _LOG_FILES.get(log_type)
     if not filename:
         return {"status": "error", "message": "Unknown log type"}
     with open(filename, "w", encoding="utf-8") as f:
@@ -2702,18 +2668,6 @@ def reset_database():
             stderr=subprocess.DEVNULL,
         )
     return {"status": "success", "message": "Database deleted, please restart server"}
-    import subprocess
-
-    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_data.db")
-    if not os.path.exists(db_path):
-        return {"status": "error", "message": "Database file not found"}
-    os.remove(db_path)
-    subprocess.Popen(
-        ["systemctl", "restart", "parsclode"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    return {"status": "success", "message": "Database deleted, server restarting"}
 
 
 if __name__ == "__main__":

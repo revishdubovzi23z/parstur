@@ -56,8 +56,3 @@ class TrackerAppCore:
     def ignore_item(self, item_id: int):
         self.db.toggle_ignore(item_id)
         print(f"Сущность {item_id} добавлена в игнор-лист.")
-
-
-if __name__ == "__main__":
-    app = TrackerAppCore()
-    print("Ядро приложения инициализировано. База данных создана.")
