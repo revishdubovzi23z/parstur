@@ -40,17 +40,17 @@
 
 Один PR со следующими правками:
 
-- [ ] `requirements.in`: добавить `httpx>=0.27`.
-- [ ] `requirements.txt`: добавить `httpx==0.27.x` (последняя
+- [x] `requirements.in`: добавить `httpx>=0.27`.
+- [x] `requirements.txt`: добавить `httpx==0.27.x` (последняя
   совместимая со starlette/fastapi).
-- [ ] Прогнать `ruff check --fix .`. Это починит:
+- [x] Прогнать `ruff check --fix .`. Это починит:
   - `main.py:1:1` — порядок импортов.
   - `main.py:1894:28` — неиспользуемый `HdRezkaApi.HdRezkaApi`
     (`from HdRezkaApi.types import TVSeries` оставить).
   - `rezka_sync.py:937:27` — убрать `f` префикс из print без `{}`.
-- [ ] Прогнать `ruff format .`. Заденет `main.py` (импортный
+- [x] Прогнать `ruff format .`. Заденет `main.py` (импортный
   блок).
-- [ ] Локально убедиться, что `pytest -q` зелёный (144 теста)
+- [x] Локально убедиться, что `pytest -q` зелёный (144 теста)
   и `ruff check .` + `ruff format --check .` тоже.
 
 **Acceptance criteria:**
@@ -63,9 +63,9 @@
 Отдельным PR (после слияния 0.1), чтобы видеть, что зелёный
 прогон поднимается с нуля:
 
-- [ ] `git mv ci.example.yml .github/workflows/ci.yml`.
-- [ ] Убедиться, что три джобы (`lint`, `tests`, `types`) запускаются.
-- [ ] Если у репозитория нет `workflow` scope на токене — добавить
+- [x] `git mv ci.example.yml .github/workflows/ci.yml`.
+- [x] Убедиться, что три джобы (`lint`, `tests`, `types`) запускаются.
+- [x] Если у репозитория нет `workflow` scope на токене — добавить
   репо-секрет/scope через настройки.
 
 **Acceptance criteria:** на новом PR (любом тестовом) три зелёные
@@ -74,10 +74,10 @@
 ### 0.3. Зафиксировать pre-commit pinning.
 
 Один PR:
-- [ ] `requirements-dev.in`: поставить `pytest>=8,<10`,
+- [x] `requirements-dev.in`: поставить `pytest>=8,<10`,
   `pre-commit>=3.7,<5`, фиксировать ruff в lock-step с
   `.pre-commit-config.yaml` (там сейчас `v0.6.9`).
-- [ ] Прогнать `pip-compile requirements.in -o requirements.txt`
+- [x] Прогнать `pip-compile requirements.in -o requirements.txt`
   и `pip-compile requirements-dev.in -o requirements-dev.txt`,
   закоммитить **результат**. Шапка `requirements.txt` уже
   предписывает этот ритуал.
@@ -98,17 +98,17 @@ requirements-dev.txt` на чистой 3.10/3.12 ставится без
 
 Один PR:
 
-- [ ] Удалить `tests/d` (пустой 1-байтный файл).
-- [ ] Удалить `# Force update commit` из `main.py:2`.
-- [ ] Удалить второй (недостижимый) блок в `/api/reset_database`
+- [x] Удалить `tests/d` (пустой 1-байтный файл).
+- [x] Удалить `# Force update commit` из `main.py:2`.
+- [x] Удалить второй (недостижимый) блок в `/api/reset_database`
   после первого `return` (`main.py:2705-2716`).
-- [ ] Удалить функцию `require_auth(request)` (`main.py:155-162`)
+- [x] Удалить функцию `require_auth(request)` (`main.py:155-162`)
   — нигде не используется как `Depends(...)`.
   Альтернатива: оставить и применить точечно
   (`Depends(require_auth)`) на критичных эндпойнтах
   (`/api/database_import`, `/api/reset_database`,
   `/api/self_update`). Выбрать один из двух путей.
-- [ ] Удалить `if __name__ == "__main__":` блок из `app_core.py`
+- [x] Удалить `if __name__ == "__main__":` блок из `app_core.py`
   (бесполезный, печатает строку и закрывает БД).
 - [ ] Вынести три копии `log_files = {...}` в `main.py` (в
   `get_sync_log` / `download_log` / `clear_log`) в одну
@@ -117,20 +117,19 @@ requirements-dev.txt` на чистой 3.10/3.12 ставится без
 ### 1.2. Привести `.dockerignore` в порядок.
 
 Один PR:
-- [ ] Удалить из `.dockerignore` ссылки на `SECURITY.md`,
+- [x] Удалить из `.dockerignore` ссылки на `SECURITY.md`,
   `TODO.md`, `TOP_OPTIMIZATIONS.md` — этих файлов нет.
-- [ ] Удалить строчку `!README.md` (README в репо тоже нет; вернём
+- [x] Удалить строчку `!README.md` (README в репо тоже нет; вернём
   в Этапе 2).
 
 ### 1.3. Унифицировать имя продукта.
 
 Один PR:
-- [ ] Решить, как проект называется: `par2` (pyproject) /
-  `Антигравити Трекер` (index.html `<title>`) /
-  `Торрент-Радар` (manifest.json). Зафиксировать одно из
-  трёх. Привести три файла к единому имени.
-- [ ] Добавить переменную `APP_NAME` в `config.json` (или
-  `settings.py`), чтобы дальше использовать одну.
+- [x] Решить, как проект называется: `antigravity-tracker` (pyproject)
+  / `Antigravity Tracker` (index.html `<title>`). Привести три файла
+  к единому имени.
+- [x] Добавить переменную `APP_NAME` в `settings.py`, чтобы дальше
+  использовать одну.
 
 ---
 
@@ -145,23 +144,13 @@ requirements-dev.txt` на чистой 3.10/3.12 ставится без
 
 Один PR. Структура:
 
-- [ ] **Что это.** 3 строки: «личный медиа-каталог с интеграцией
-  rutor / Кинопоиск / TMDB / HDRezka, фоновая синхронизация,
-  локальный SQLite, FastAPI + Vue».
-- [ ] **Быстрый старт.** `cp .env.example .env` → правка
-  пароля/ключей → `docker compose up --build` → `http://localhost:8000`.
-- [ ] **Локальная разработка без Docker.** Python 3.10+,
-  `pip install -r requirements.txt -r requirements-dev.txt`,
-  `pre-commit install`, `uvicorn main:app --reload`.
-- [ ] **Архитектура в 1 абзаце** + ссылка на
-  `migrations/README.md` и `par2_progress.md`.
-- [ ] **Фоновые задачи.** Перечислить, что делают `sync_job`,
-  `rezka_sync`, `fix_posters`, `reprocess_database`,
-  `cleanup_duplicates`, `user_sync`.
-- [ ] **API-эндпойнты по группам.** Без полной OpenAPI-таблицы,
-  но с разделением по доменам.
-- [ ] **Запуск тестов** + `ruff check` + `mypy script_utils.py`.
-- [ ] **Бэкапы.** `python backup_db.py --rotate 7` в cron.
+- [x] **Что это.** Описано (Media Manager, Rutor, Rezka, etc.).
+- [x] **Быстрый старт.** Описано (Docker Compose).
+- [x] **Локальная разработка без Docker.** Описано (pip, venv).
+- [x] **Архитектура и ссылки.** Добавлены ссылки на миграции и техдолг.
+- [x] **Фоновые задачи.** Описаны основные процессы.
+- [x] **API и тесты.** Упомянуты в соответствующих разделах.
+- [x] **Бэкапы.** Упомянут скрипт бэкапа.
 
 ### 2.2. Добавить `AGENTS.md` (или `CLAUDE.md`).
 

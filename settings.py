@@ -135,6 +135,10 @@ class Settings(
     """
 
     # FastAPI-side runtime knobs.
+    app_name: str = Field(
+        default="Antigravity Tracker",
+        description="The display name of the application.",
+    )
     debug: bool = Field(
         default=False,
         description="Enables debug endpoints (e.g. /api/debug/queue).",

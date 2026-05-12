@@ -50,6 +50,7 @@ kinopoiskocenki.csv
 # par2_progress.md, etc. README.md will be added in ROADMAP Stage 2;
 # at that point we'll add `!README.md` so it ships inside the image.
 *.md
+!README.md
 
 # Tests don't run inside the production image
 tests/

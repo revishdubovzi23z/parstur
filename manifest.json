@@ -1,6 +1,6 @@
 {
-  "name": "Торрент-Радар",
-  "short_name": "Радар",
+  "name": "Antigravity Tracker",
+  "short_name": "Antigravity",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#f8fafc",

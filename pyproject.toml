@@ -4,7 +4,7 @@
 # editor integrations pick up consistent rules.
 
 [project]
-name = "par2"
+name = "antigravity-tracker"
 version = "0.1.0"
 description = "Personal media catalog & sync (rutor / hdrezka / kinopoisk / TMDB)."
 requires-python = ">=3.10"
