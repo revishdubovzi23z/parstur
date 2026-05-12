@@ -505,7 +505,7 @@ Docker-фикс получится либо пол-делом (только `Dat
 ### 7.8. WebSocket и оставшееся.
 
 Один PR (mv):
-- [ ] `/ws`, `/health`, `/sw.js`, `/`, `/manifest.json`,
+- [x] `/ws`, `/health`, `/sw.js`, `/`, `/manifest.json`,
   `/icon.png` остаются в `main.py` (это инфраструктура, а не
   бизнес-логика).
 

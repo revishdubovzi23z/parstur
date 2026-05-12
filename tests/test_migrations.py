@@ -73,7 +73,7 @@ def test_runner_ignores_non_numeric_filenames(tmp_db_no_init, tmp_path) -> None:
     # Spot-check: the README.md in migrations/ doesn't get treated
     # as a migration. (No `[DB] applied migration README.md` log.)
     migrations_dir = os.path.join(
-        os.path.dirname(os.path.abspath(__import__("db").__file__)), "migrations"
+        os.path.dirname(os.path.dirname(os.path.abspath(__import__("db").__file__))), "migrations"
     )
     assert "README.md" in os.listdir(migrations_dir)
     # If the runner had tried to executescript() the README, the

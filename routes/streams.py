@@ -105,6 +105,7 @@ def get_stream_info(item_id: int):
     if not row or not row["rezka_url"]:
         return {"error": "no rezka_url"}
 
+    import main
     rezka, _ = main._get_rezka_obj(item_id, row["rezka_url"])
     if not rezka:
         return {"error": "failed to load page"}
