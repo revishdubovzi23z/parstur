@@ -329,39 +329,38 @@ Docker-фикс получится либо пол-делом (только `Dat
 - [x] Добавлен `_session_gc_loop` (раз в час).
 - [x] Логирование очистки через `parsclode.main`.
 
-### 5.7. Rate-limit на `/api/login`.
+### 5.7. Rate-limit на `/api/login`. [DONE]
 
 Один PR:
-- [ ] Добавить `slowapi` в `requirements.in`/.txt.
-- [ ] `@limiter.limit("5/minute")` на login по IP.
-- [ ] Тест с моком `Request.client.host`.
+- [x] Добавить `slowapi` в `requirements.in`/.txt.
+- [x] `@limiter.limit("5/minute")` на login по IP.
+- [x] Тест с моком `Request.client.host`.
 
-### 5.8. Retry для `_init_rezka_session`.
+### 5.8. Retry для `_init_rezka_session`. [DONE]
 
 Один PR:
-- [ ] Если первый старт не получился — фоновая задача пытается
+- [x] Если первый старт не получился — фоновая задача пытается
   раз в 5 минут (с экспоненциальным backoff до 1 часа).
-- [ ] WS-broadcast события `rezka_session_state`
+- [x] WS-broadcast события `rezka_session_state`
   (`connecting`/`up`/`down`).
-- [ ] Фронт показывает плашку «Rezka недоступна».
+- [x] Фронт показывает плашку «Rezka недоступна».
 
-### 5.9. `subtitle_proxy` allow-list.
+### 5.9. `subtitle_proxy` allow-list. [DONE]
 
 Один PR:
-- [ ] Заменить `endswith / in` на explicit-suffix-list
+- [x] Заменить `endswith / in` на explicit-suffix-list
   (`.rezka.ag`, `.voidboost.net`, `.videocdn.tv`,
   `hdrezka.app`, `rezka.cdnstream.tv`).
-- [ ] Тест на `voidboost.evil.example.com` → 403.
+- [x] Тест на `voidboost.evil.example.com` → 403.
 
-### 5.10. WebSocket-токен в query: prod-инструкции.
+### 5.10. WebSocket-токен в query: билетная схема. [DONE]
 
 Один PR:
-- [ ] Добавить в `README.md` секцию «За HTTPS-прокси —
+- [x] Добавить в `README.md` секцию «За HTTPS-прокси —
   отключить логирование `?token=` в nginx/Caddy».
-- [ ] Альтернатива: пересмотреть схему (сначала `POST /ws/ticket`
-  с Bearer → одноразовый ticket → `?ticket=...`). Tickets
-  TTL 30 секунд, одноразовые. Отдельный PR, **не блокирует**
-  остальное.
+- [x] Реализована схема: `POST /api/ws/ticket`
+  с Bearer → одноразовый ticket → `?ticket=...`. Tickets
+  TTL 30 секунд, одноразовые.
 
 ---
 

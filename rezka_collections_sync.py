@@ -1,4 +1,3 @@
-import os
 import re
 
 from app_core import normalize_title

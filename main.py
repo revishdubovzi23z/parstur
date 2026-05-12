@@ -13,7 +13,6 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 
 import uvicorn
-from dotenv import load_dotenv
 from fastapi import (
     FastAPI,
     HTTPException,
@@ -24,12 +23,14 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from db import db
+from logger import setup_logger
 from script_utils import clear_checkpoint, clear_stop_flag, load_config
 from settings import settings
-import logging
-from logger import setup_logger
 
 logger = setup_logger("parsclode.main", settings.log_file_path)
 
@@ -102,6 +103,7 @@ _auth_enabled = bool(AUTH_USER) and bool(AUTH_PASS or AUTH_PASS_HASH)
 SESSION_TTL_SECONDS = 7 * 24 * 60 * 60
 _session_tokens: dict[str, float] = {}
 _reset_tokens = {}  # {token: expiry_timestamp}
+_ws_tickets: dict[str, float] = {}  # {ticket: expiry_timestamp}
 
 
 def _verify_password(plaintext: str) -> bool:
@@ -222,13 +224,10 @@ async def lifespan(_app):
         await asyncio.to_thread(db.wal_checkpoint, "TRUNCATE")
     except Exception as e:
         print(f"[WAL] startup checkpoint skipped: {type(e).__name__}: {e}")
-    global _wal_checkpoint_task, _session_gc_task
+    global _wal_checkpoint_task, _session_gc_task, _rezka_retry_task
     _wal_checkpoint_task = asyncio.create_task(_wal_checkpoint_loop())
     _session_gc_task = asyncio.create_task(_session_gc_loop())
-    # 6.2 — get_running_loop() is the modern, non-deprecated way; it
-    # raises if called outside an async context (good — we are inside
-    # one here) instead of get_event_loop()'s creates-a-loop fallback.
-    await asyncio.get_running_loop().run_in_executor(None, _init_rezka_session)
+    _rezka_retry_task = asyncio.create_task(_rezka_session_retry_loop())
 
     yield
 
@@ -249,6 +248,14 @@ async def lifespan(_app):
         except (asyncio.CancelledError, Exception):
             pass
         _session_gc_task = None
+
+    if _rezka_retry_task is not None:
+        _rezka_retry_task.cancel()
+        try:
+            await _rezka_retry_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        _rezka_retry_task = None
     config = load_config()
     graceful_timeout = config.get("shutdown", {}).get("graceful_timeout", 5)
     for key, proc in running_processes.items():
@@ -269,7 +276,10 @@ async def lifespan(_app):
     task_queue.stop()
 
 
+limiter = Limiter(key_func=get_remote_address)
 app = FastAPI(title="Tracker Filter", lifespan=lifespan)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
 class ConnectionManager:
@@ -310,28 +320,37 @@ ws_manager = ConnectionManager()
 
 rezka_session = None
 rezka_session_folders_cache = None
+rezka_session_state = "down"  # down, connecting, up
 
 
-def _init_rezka_session():
-    global rezka_session, rezka_session_folders_cache
+def _init_rezka_session() -> bool:
+    global rezka_session, rezka_session_folders_cache, rezka_session_state
     rezka_email = settings.rezka_email
     rezka_password = settings.rezka_password
     if not rezka_email or not rezka_password:
-        print("[REZKA] No credentials, session skipped", flush=True)
-        return
+        logger.info("[REZKA] No credentials, session skipped")
+        rezka_session_state = "down"
+        return False
+
+    rezka_session_state = "connecting"
+    _broadcast_threadsafe({"type": "rezka_session", "state": "connecting"})
+
     try:
         from HdRezkaApi import HdRezkaSession as _Session
 
         rezka_session = _Session("https://rezka.ag/")
         rezka_session.login(rezka_email, rezka_password)
         _refresh_rezka_folders_cache()
-        print(
-            f"[REZKA] Session initialized, cookies: {list(rezka_session.cookies.keys())}",
-            flush=True,
-        )
+        logger.info(f"[REZKA] Session initialized, cookies: {list(rezka_session.cookies.keys())}")
+        rezka_session_state = "up"
+        _broadcast_threadsafe({"type": "rezka_session", "state": "up"})
+        return True
     except Exception as e:
-        print(f"[REZKA] Session init failed: {e}", flush=True)
+        logger.error(f"[REZKA] Session init failed: {e}")
         rezka_session = None
+        rezka_session_state = "down"
+        _broadcast_threadsafe({"type": "rezka_session", "state": "down"})
+        return False
 
 
 # 6.7 — re-login detection.
@@ -461,11 +480,22 @@ def _refresh_rezka_folders_cache():
 
 
 @app.websocket("/ws")
-async def websocket_endpoint(ws: WebSocket, token: str | None = None):
+async def websocket_endpoint(ws: WebSocket, token: str | None = None, ticket: str | None = None):
     # WebSocket upgrades bypass HTTP middleware, so we must enforce auth here
-    # ourselves when it is enabled. Token is passed as a query parameter
-    # because browsers do not allow setting custom headers on WebSocket open.
-    if _auth_enabled and (not token or not _check_token(token)):
+    # ourselves when it is enabled.
+    # 5.10: Support both ?token=... (legacy) and ?ticket=... (preferred)
+    # Tickets are one-time use and short-lived.
+    is_authed = False
+    if not _auth_enabled or (token and _check_token(token)):
+        is_authed = True
+    elif ticket:
+        now = time.time()
+        expiry = _ws_tickets.get(ticket)
+        if expiry and now <= expiry:
+            is_authed = True
+            _ws_tickets.pop(ticket, None)  # One-time use
+
+    if not is_authed:
         # 4401 is an application-defined close code in the 4000-4999 range
         # reserved for app use; we use it to mean "unauthenticated".
         await ws.close(code=4401)
@@ -476,7 +506,12 @@ async def websocket_endpoint(ws: WebSocket, token: str | None = None):
         for key in process_status.keys():
             progress[key] = _read_progress(key)
         await ws.send_json(
-            {"type": "status", "statuses": dict(process_status), "progress": progress}
+            {
+                "type": "status",
+                "statuses": dict(process_status),
+                "progress": progress,
+                "rezka_session": rezka_session_state,
+            }
         )
         while True:
             await ws.receive_text()
@@ -500,6 +535,7 @@ def _read_progress(key):
 
 
 @app.post("/api/login")
+@limiter.limit("5/minute")
 async def login(request: Request):
     if not _auth_enabled:
         return {"token": "none", "auth_enabled": False}
@@ -533,6 +569,18 @@ async def logout(request: Request):
 @app.get("/api/auth_status")
 async def auth_status():
     return {"auth_enabled": _auth_enabled}
+
+
+@app.post("/api/ws/ticket")
+async def get_ws_ticket(request: Request):
+    """Generate a one-time short-lived ticket for WebSocket authentication.
+
+    Used to avoid passing the long-lived session token in a query parameter
+    which might be logged by reverse proxies.
+    """
+    ticket = secrets.token_hex(16)
+    _ws_tickets[ticket] = time.time() + 30  # 30 seconds TTL
+    return {"ticket": ticket}
 
 
 # 6.5 — liveness + readiness probe.
@@ -669,6 +717,33 @@ _wal_checkpoint_task: asyncio.Task | None = None
 SESSION_GC_INTERVAL_SECONDS = 60 * 60  # 1 hour
 _session_gc_task: asyncio.Task | None = None
 
+# 5.8 — Rezka retry loop
+_rezka_retry_task: asyncio.Task | None = None
+
+
+async def _rezka_session_retry_loop():
+    """Background loop that retries rezka session initialization if it fails."""
+    # First attempt
+    success = await asyncio.to_thread(_init_rezka_session)
+    if success:
+        return
+
+    wait = 300  # 5 minutes
+    while True:
+        try:
+            await asyncio.sleep(wait)
+            success = await asyncio.to_thread(_init_rezka_session)
+            if success:
+                logger.info("[REZKA] Session recovery successful")
+                break
+            # Exponential backoff up to 1 hour
+            wait = min(wait * 2, 3600)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"[REZKA] Retry loop error: {e}")
+            await asyncio.sleep(60)
+
 
 async def _wal_checkpoint_loop() -> None:
     while True:
@@ -697,6 +772,13 @@ async def _session_gc_loop() -> None:
                 for t in expired:
                     _session_tokens.pop(t, None)
                 logger.info(f"[AUTH] GC reaped {len(expired)} expired sessions")
+
+            now = time.time()
+            expired_tickets = [t for t, exp in _ws_tickets.items() if now > exp]
+            if expired_tickets:
+                for t in expired_tickets:
+                    _ws_tickets.pop(t, None)
+                logger.info(f"[AUTH] GC reaped {len(expired_tickets)} expired WS tickets")
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -2190,6 +2272,7 @@ async def backup_download():
     out_dir = "backups"
     os.makedirs(out_dir, exist_ok=True)
     from datetime import timezone
+
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     dest = os.path.join(out_dir, f"app_data-{stamp}.db")
     try:
@@ -2506,11 +2589,11 @@ def get_stream_url(
 # permissive CORS so HTML5 captions render. Only forwards http(s)
 # URLs whose host belongs to a small allow-list (rezka mirrors).
 _SUBTITLE_HOST_ALLOWLIST = (
-    "rezka.ag",
-    "hdrezka",
-    "rezka.cdnstream",
-    "voidboost",
-    "videocdn",
+    ".rezka.ag",
+    ".voidboost.net",
+    ".videocdn.tv",
+    "hdrezka.app",
+    ".rezka.cdnstream.tv",
 )
 
 
@@ -2523,7 +2606,7 @@ def subtitle_proxy(url: str):
     if not url or not url.startswith(("http://", "https://")):
         return JSONResponse({"error": "invalid url"}, status_code=400)
     host = (urlparse(url).hostname or "").lower()
-    if not any(host.endswith(h) or h in host for h in _SUBTITLE_HOST_ALLOWLIST):
+    if not any(host == h.lstrip(".") or host.endswith(h) for h in _SUBTITLE_HOST_ALLOWLIST):
         return JSONResponse({"error": f"host {host} not allowed"}, status_code=403)
     try:
         # Subtitle files live on CDNs (no auth required) — use a plain
@@ -2762,7 +2845,6 @@ def reset_database(confirm: str | None = None):
             {"status": "error", "message": "Confirmation token expired"}, status_code=403
         )
 
-    import subprocess
 
     db_path = settings.resolved_db_path
     if not os.path.exists(db_path):

@@ -26,4 +26,4 @@ This document provides essential context for AI coding assistants working on thi
 4. **Configuration**: Use `settings.py` for all environment-based configuration. Avoid direct `os.getenv` calls in new code.
 
 ## Current Roadmap
-Refer to [ROADMAP.md](ROADMAP.md) for the active development stage and priorities. We are currently finishing Stage 2 and moving into Stage 3 (Settings Migration).
+Refer to [ROADMAP.md](ROADMAP.md) for the active development stage and priorities. We have completed Stage 5 (Small bug-fixes and security-pass) and are moving into Stage 6 (Logs Migration).

@@ -1,8 +1,5 @@
-import os
 
 from requests_cache import CachedSession
-
-from script_utils import load_config
 
 from settings import settings
 

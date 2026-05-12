@@ -1,4 +1,3 @@
-import os
 import time
 
 from base_client import BaseMovieClient

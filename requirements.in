@@ -25,6 +25,7 @@ uvicorn==0.46.0
 pydantic==2.13.3
 pydantic-settings>=2.4
 websockets>=12.0
+slowapi>=0.1.9
 # httpx is pulled in by fastapi.testclient (used in tests/test_health.py,
 # tests/test_api_collections_io.py, tests/test_rebind_audit.py). Without
 # it pytest fails at collection time with RuntimeError from

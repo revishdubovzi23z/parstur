@@ -154,7 +154,9 @@ class TMDBClient:
             for attempt in range(3):
                 try:
                     time.sleep(0.3)
-                    response = self.session.get(url, params=params, headers=self.headers, timeout=10)
+                    response = self.session.get(
+                        url, params=params, headers=self.headers, timeout=10
+                    )
                     if response.status_code == 429:
                         time.sleep(5)
                         continue

@@ -9,9 +9,8 @@ from db import Database
 from logger import setup_tee_logger
 from poiskkino_client import PoiskKinoClient
 from rezka_sync import search_rezka_for_item
-from tmdb_client import TMDBClient
-
 from settings import settings
+from tmdb_client import TMDBClient
 
 RUTOR_MIRROR = settings.rutor_mirror.rstrip("/")
 

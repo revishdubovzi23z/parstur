@@ -1366,16 +1366,30 @@
                 if (this._youTubeListener) window.removeEventListener('message', this._youTubeListener);
             },
             methods: {
-                connectWebSocket() {
+                async connectWebSocket() {
                     if (this.ws && this.ws.readyState <= 1) return;
                     // If the server requires auth but we don't have a token yet,
                     // skip connecting — doLogin() will call us again after login.
                     if (this.authEnabled && !this.authToken) return;
+
+                    let qs = '';
+                    if (this.authEnabled) {
+                        try {
+                            const res = await this.apiFetch('/api/ws/ticket', { method: 'POST' });
+                            if (res.ok) {
+                                const { ticket } = await res.json();
+                                qs = `?ticket=${encodeURIComponent(ticket)}`;
+                            } else {
+                                // Fallback to token for backward compatibility
+                                qs = `?token=${encodeURIComponent(this.authToken)}`;
+                            }
+                        } catch (e) {
+                            qs = `?token=${encodeURIComponent(this.authToken)}`;
+                        }
+                    }
+
                     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-                    const tokenQs = this.authToken
-                        ? `?token=${encodeURIComponent(this.authToken)}`
-                        : '';
-                    this.ws = new WebSocket(`${proto}//${location.host}/ws${tokenQs}`);
+                    this.ws = new WebSocket(`${proto}//${location.host}/ws${qs}`);
                     this.ws.onopen = () => {
                         this.wsConnected = true;
                         this.connectionError = false;
