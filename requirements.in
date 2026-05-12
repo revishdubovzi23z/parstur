@@ -25,6 +25,18 @@ uvicorn==0.46.0
 pydantic==2.13.3
 pydantic-settings>=2.4
 websockets>=12.0
+# httpx is pulled in by fastapi.testclient (used in tests/test_health.py,
+# tests/test_api_collections_io.py, tests/test_rebind_audit.py). Without
+# it pytest fails at collection time with RuntimeError from
+# starlette.testclient. Pinned >=0.27 because starlette 0.41+ uses the
+# new client API; <1.0 to avoid a future breaking-major-bump.
+httpx>=0.27,<1.0
+# python-multipart is required at runtime by FastAPI's UploadFile (used
+# in /api/database_import). Was missing from this manifest historically
+# (it lived only in the hand-curated requirements.txt); the first
+# pip-compile run dropped it, breaking startup. Pinned explicitly so
+# the resolver always keeps it.
+python-multipart>=0.0.6
 
 # --- Configuration ---------------------------------------------------------
 python-dotenv==1.2.2
