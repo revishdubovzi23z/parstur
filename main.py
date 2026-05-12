@@ -1,14 +1,11 @@
 import asyncio
-import base64
-import csv
 import hashlib
-import io
 import json
 import os
 import re
-import secrets
 import sys
 import time
+import traceback
 from contextlib import asynccontextmanager
 from datetime import datetime
 
@@ -17,7 +14,6 @@ from fastapi import (
     FastAPI,
     HTTPException,
     Request,
-    UploadFile,
     WebSocket,
     WebSocketDisconnect,
 )
@@ -29,6 +25,7 @@ from slowapi.util import get_remote_address
 
 from db import db
 from logging_config import setup_logging
+from routes import admin, auth, collections, feed, items, process, streams
 from script_utils import clear_checkpoint, clear_stop_flag, load_config
 from settings import settings
 
@@ -79,82 +76,13 @@ class TaskQueue:
 
 task_queue = TaskQueue()
 
-AUTH_USER = settings.auth_user
-AUTH_PASS = settings.auth_pass
-# Preferred way to configure the password: a pbkdf2_sha256-encoded hash. When
-# AUTH_PASS_HASH is set we ignore AUTH_PASS for verification (but still allow
-# AUTH_PASS as a one-off fallback when the hash isn't provided so existing
-# deployments don't break). Generate a hash with:
-#
-#     python -c "import hashlib,base64,secrets,sys; pw=sys.argv[1]; \
-#       salt=secrets.token_bytes(16); \
-#       h=hashlib.pbkdf2_hmac('sha256', pw.encode(), salt, 600_000); \
-#       print('pbkdf2_sha256$600000$'+base64.b64encode(salt).decode()+'$' \
-#             +base64.b64encode(h).decode())" 'your-password'
-AUTH_PASS_HASH = settings.auth_pass_hash
-_auth_enabled = bool(AUTH_USER) and bool(AUTH_PASS or AUTH_PASS_HASH)
-
-# Map token -> Unix-epoch expiry timestamp. We use a sliding 7-day TTL so a
-# user who keeps using the app stays logged in indefinitely, but a token that
-# was issued and never used past 7 days becomes invalid.
-SESSION_TTL_SECONDS = 7 * 24 * 60 * 60
-_session_tokens: dict[str, float] = {}
-_reset_tokens = {}  # {token: expiry_timestamp}
-_ws_tickets: dict[str, float] = {}  # {ticket: expiry_timestamp}
-
-
-def _verify_password(plaintext: str) -> bool:
-    """Return True if plaintext matches the configured password.
-
-    Verification is constant-time. AUTH_PASS_HASH (pbkdf2_sha256) takes
-    precedence; AUTH_PASS plaintext is used as a fallback for backward
-    compatibility.
-    """
-    if AUTH_PASS_HASH:
-        try:
-            algo, iter_str, salt_b64, hash_b64 = AUTH_PASS_HASH.split("$", 3)
-        except ValueError:
-            return False
-        if algo != "pbkdf2_sha256":
-            return False
-        try:
-            iterations = int(iter_str)
-        except ValueError:
-            return False
-        try:
-            salt = base64.b64decode(salt_b64)
-            expected = base64.b64decode(hash_b64)
-        except Exception:
-            return False
-        actual = hashlib.pbkdf2_hmac("sha256", plaintext.encode("utf-8"), salt, iterations)
-        return secrets.compare_digest(actual, expected)
-    if AUTH_PASS:
-        return secrets.compare_digest(plaintext.encode("utf-8"), AUTH_PASS.encode("utf-8"))
-    return False
-
-
-def _check_token(token: str) -> bool:
-    """Return True if token is known and not expired; refresh sliding TTL."""
-    expiry = _session_tokens.get(token)
-    if expiry is None:
-        return False
-    now = time.time()
-    if now > expiry:
-        _session_tokens.pop(token, None)
-        return False
-    # Sliding refresh — every successful check pushes the expiry forward.
-    _session_tokens[token] = now + SESSION_TTL_SECONDS
-    return True
-
-
-def _check_auth(request: Request) -> bool:
-    if not _auth_enabled:
-        return True
-    auth = request.headers.get("Authorization", "")
-    if auth.startswith("Bearer "):
-        return _check_token(auth[7:])
-    return False
-
+from routes.auth import (
+    _auth_enabled,
+    _check_auth,
+    _check_token,
+    _session_tokens,
+    _ws_tickets,
+)
 
 # 6.3 — captured during the lifespan startup hook so worker threads
 # (run_in_executor callbacks) can schedule coroutines back onto the
@@ -277,6 +205,14 @@ limiter = Limiter(key_func=get_remote_address)
 app = FastAPI(title="Tracker Filter", lifespan=lifespan)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+app.include_router(auth.router)
+app.include_router(feed.router)
+app.include_router(collections.router)
+app.include_router(process.router)
+app.include_router(streams.router)
+app.include_router(admin.router)
+app.include_router(items.router)
 
 
 class ConnectionManager:
@@ -531,55 +467,6 @@ def _read_progress(key):
     return {"current": 0, "total": 0}
 
 
-@app.post("/api/login")
-@limiter.limit("5/minute")
-async def login(request: Request):
-    if not _auth_enabled:
-        return {"token": "none", "auth_enabled": False}
-    body = await request.json()
-    user = body.get("username", "") or ""
-    password = body.get("password", "") or ""
-    # Constant-time on both username and password to avoid leaking whether
-    # the username is correct via timing.
-    user_ok = secrets.compare_digest(user.encode("utf-8"), AUTH_USER.encode("utf-8"))
-    pass_ok = _verify_password(password)
-    if user_ok and pass_ok:
-        token = secrets.token_hex(32)
-        _session_tokens[token] = time.time() + SESSION_TTL_SECONDS
-        return {"token": token, "auth_enabled": True}
-    raise HTTPException(status_code=401, detail="Invalid credentials")
-
-
-@app.post("/api/logout")
-async def logout(request: Request):
-    """Invalidate the bearer token from the request, if any.
-
-    Always returns 200 — even if the token was unknown, expired or missing —
-    so callers can use this as a fire-and-forget on the way out.
-    """
-    auth = request.headers.get("Authorization", "")
-    if auth.startswith("Bearer "):
-        _session_tokens.pop(auth[7:], None)
-    return {"ok": True}
-
-
-@app.get("/api/auth_status")
-async def auth_status():
-    return {"auth_enabled": _auth_enabled}
-
-
-@app.post("/api/ws/ticket")
-async def get_ws_ticket(request: Request):
-    """Generate a one-time short-lived ticket for WebSocket authentication.
-
-    Used to avoid passing the long-lived session token in a query parameter
-    which might be logged by reverse proxies.
-    """
-    ticket = secrets.token_hex(16)
-    _ws_tickets[ticket] = time.time() + 30  # 30 seconds TTL
-    return {"ticket": ticket}
-
-
 # 6.5 — liveness + readiness probe.
 #
 # Designed for Docker HEALTHCHECK, k8s probes, and uptime monitors.
@@ -751,7 +638,9 @@ async def _wal_checkpoint_loop() -> None:
                 # A long-running reader/writer held the WAL; not fatal,
                 # the next tick will retry. Worth logging once so the
                 # operator knows why the sidecar didn't shrink.
-                logger.warning(f"[WAL] checkpoint busy (log_pages={log_pages}, checkpointed={ckpt_pages})")
+                logger.warning(
+                    f"[WAL] checkpoint busy (log_pages={log_pages}, checkpointed={ckpt_pages})"
+                )
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -988,7 +877,9 @@ async def run_pipeline_task():
 
             # Если шаг был остановлен или упал с ошибкой - прерываем цепочку
             if process_status[key] in ["stopped", "error"]:
-                logger.warning(f"Шаг {key} завершился со статусом {process_status[key]}. Прерываю цикл.")
+                logger.warning(
+                    f"Шаг {key} завершился со статусом {process_status[key]}. Прерываю цикл."
+                )
                 break
 
         if pipeline_stop_requested:
@@ -1003,63 +894,10 @@ async def run_pipeline_task():
         pipeline_stop_requested = False
 
 
-@app.post("/api/start_full_pipeline")
-async def start_full_pipeline():
-    check_any_running()
-    await task_queue.add_task(run_pipeline_task, "full_pipeline")
-    return {"status": "started"}
 
 
-@app.post("/api/start_sync_video")
-async def start_sync_video(
-    min_year: int = None,
-    max_year: int = None,
-    min_date: str = None,
-):
-    check_any_running()
-
-    log_file = "sync_video_log.txt"
-    with open(log_file, "w", encoding="utf-8") as f:
-        f.write(f"=== Запуск парсинга ВИДЕО ({datetime.now().strftime('%H:%M:%S')}) ===\n")
-        if min_date:
-            f.write(f"Ручная дата начала: {min_date}\n")
-        if min_year:
-            f.write(f"Фильтр года: от {min_year}\n")
-        if max_year:
-            f.write(f"Фильтр года: до {max_year}\n")
-
-    args = ["video", str(min_year or 0), str(max_year or 0)]
-    if min_date:
-        args.append(min_date)
-
-    await task_queue.add_task(
-        run_script_with_args, "sync_video", "sync_job.py", args, "sync_video", log_file
-    )
-    return {"status": "started"}
 
 
-@app.post("/api/start_sync_other")
-async def start_sync_other(
-    min_year: int = None,
-    max_year: int = None,
-    min_date: str = None,
-):
-    check_any_running()
-
-    log_file = "sync_other_log.txt"
-    with open(log_file, "w", encoding="utf-8") as f:
-        f.write(f"=== Запуск парсинга ИГР и СОФТА ({datetime.now().strftime('%H:%M:%S')}) ===\n")
-        if min_date:
-            f.write(f"Ручная дата начала: {min_date}\n")
-
-    args = ["other", str(min_year or 0), str(max_year or 0)]
-    if min_date:
-        args.append(min_date)
-
-    await task_queue.add_task(
-        run_script_with_args, "sync_other", "sync_job.py", args, "sync_other", log_file
-    )
-    return {"status": "started"}
 
 
 async def run_script_with_args(
@@ -1233,604 +1071,20 @@ async def run_script_with_args(
             logger.error(f"Ошибка записи истории: {e}", exc_info=True)
 
 
-@app.post("/api/start_sync_rezka")
-async def start_sync_rezka():
-    check_any_running()
 
-    log_file = "sync_rezka_log.txt"
-    with open(log_file, "w", encoding="utf-8") as f:
-        f.write(f"=== Запуск синхронизации REZKA ({datetime.now().strftime('%H:%M:%S')}) ===\n")
 
-    await task_queue.add_task(run_script_with_args, "rezka", "rezka_sync.py", [], "rezka", log_file)
-    return {"status": "started"}
 
 
-@app.post("/api/start_cleanup")
-async def start_cleanup():
-    # cleanup_duplicates rewrites items/releases/collection_items and may
-    # delete rows; it must never run alongside another job (e.g. sync_job
-    # or reprocess_database) that mutates the same tables.
-    check_any_running()
-    log_file = "cleanup_log.txt"
-    with open(log_file, "w", encoding="utf-8") as f:
-        f.write("=== Запуск очистки дубликатов ===\n")
-    await task_queue.add_task(
-        run_script_with_args,
-        "cleanup",
-        "cleanup_duplicates.py",
-        [],
-        "cleanup",
-        log_file,
-    )
-    return {"status": "started"}
 
 
-@app.post("/api/start_rezka_collections")
-async def start_rezka_collections():
-    # check_any_running() raises HTTPException itself when something is busy
-    # and returns None otherwise; calling it as a boolean was misleading
-    # (the if branch only ever fired through the raised exception inside
-    # check_any_running, never via the truthiness check). Call it directly.
-    check_any_running()
-    log_file = "rezka_collections_log.txt"
-    with open(log_file, "w", encoding="utf-8") as f:
-        f.write("=== Синхронизация коллекций Rezka ===\n")
-    await task_queue.add_task(
-        run_script_with_args,
-        "rezka_collections",
-        "rezka_collections_sync.py",
-        [],
-        "rezka_collections",
-        log_file,
-    )
-    return {"status": "started"}
 
 
-@app.post("/api/stop/{key}")
-async def stop_process(key: str):
-    global pipeline_stop_requested
 
-    if not _is_valid_status_key(key):
-        raise HTTPException(status_code=400, detail="Unknown process key")
 
-    config = load_config()
-    graceful_timeout = config.get("shutdown", {}).get("graceful_timeout", 5)
 
-    if key == "full_pipeline":
-        pipeline_stop_requested = True
-        active_key = running_processes.get("active_pipeline_key")
-        if active_key and _is_valid_status_key(active_key):
-            with open(f"stop_{active_key}.flag", "w") as f:
-                f.write("stop")
-        proc = running_processes.get("active_pipeline_proc")
-        if proc and proc.returncode is None:
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=graceful_timeout)
-            except asyncio.TimeoutError:
-                proc.terminate()
-        process_status["full_pipeline"] = "stopped"
-        return {"status": "stopped"}
 
-    proc = running_processes.get(key)
-    if proc and proc.returncode is None:
-        with open(f"stop_{key}.flag", "w") as f:
-            f.write("stop")
-        try:
-            await asyncio.wait_for(proc.wait(), timeout=graceful_timeout)
-        except asyncio.TimeoutError:
-            proc.terminate()
-        process_status[key] = "stopped"
-        return {"status": "stopped"}
-    return {"status": "not_running"}
 
 
-@app.post("/api/start_fix")
-async def start_fix():
-    check_any_running()
-
-    log_file = "fix_tech_log.txt"
-    with open(log_file, "w", encoding="utf-8") as f:
-        f.write(f"=== Поиск (Legacy API) {datetime.now().strftime('%H:%M:%S')} ===\n")
-    await task_queue.add_task(
-        run_script_with_args,
-        "fix",
-        "fix_posters.py",
-        ["tech", log_file],
-        "fix",
-        log_file,
-    )
-    return {"status": "started"}
-
-
-@app.post("/api/start_fix_poisk")
-async def start_fix_poisk():
-    check_any_running()
-
-    log_file = "fix_poiskkino_log.txt"
-    with open(log_file, "w", encoding="utf-8") as f:
-        f.write(f"=== Поиск (PoiskKino API) {datetime.now().strftime('%H:%M:%S')} ===\n")
-    await task_queue.add_task(
-        run_script_with_args,
-        "poiskkino",
-        "fix_posters.py",
-        ["poiskkino", log_file],
-        "poiskkino",
-        log_file,
-    )
-    return {"status": "started"}
-
-
-@app.post("/api/start_reprocess")
-async def start_reprocess(force: bool = False):
-    check_any_running()
-
-    log_file = "reprocess_log.txt"
-    with open(log_file, "w", encoding="utf-8") as f:
-        f.write(f"=== Полное обновление базы {datetime.now().strftime('%H:%M:%S')} ===\n")
-
-    args = []
-    if force:
-        args.append("--force")
-
-    await task_queue.add_task(
-        run_script_with_args,
-        "reprocess",
-        "reprocess_database.py",
-        args,
-        "reprocess",
-        log_file,
-    )
-    return {"status": "started"}
-
-
-@app.post("/api/update_item/{item_id}")
-async def update_item(item_id: int):
-    # Этот процесс можно запускать параллельно, так как он трогает только одну запись
-    # Но для безопасности логов лучше тоже через run_script_with_args
-    log_file = "single_update_log.txt"
-    with open(log_file, "w", encoding="utf-8") as f:
-        f.write(f"=== Обновление карточки ID {item_id} ===\n")
-
-    await task_queue.add_task(
-        run_script_with_args,
-        "single_update",
-        "single_item_update.py",
-        [str(item_id)],
-        "single_update",
-        log_file,
-    )
-    return {"status": "started"}
-
-
-@app.get("/api/process_status")
-def get_process_status():
-    """Возвращает статусы и прогресс всех процессов."""
-    progress = {}
-    for key in process_status.keys():
-        p_file = f"progress_{key}.json"
-        if os.path.exists(p_file):
-            try:
-                with open(p_file) as f:
-                    progress[key] = json.load(f)
-            except Exception:
-                progress[key] = {"current": 0, "total": 0}
-        else:
-            progress[key] = {"current": 0, "total": 0}
-
-    return {"statuses": process_status, "progress": progress}
-
-
-@app.get("/api/feed")
-def get_feed(
-    category_id: int = -1,
-    collection_id: int = None,
-    search: str = None,
-    min_kp: float = 0.0,
-    max_kp: float = 10.0,
-    min_imdb: float = 0.0,
-    max_imdb: float = 10.0,
-    min_year: int = None,
-    max_year: int = None,
-    min_date: str = None,
-    max_date: str = None,
-    hide_ignored: bool = True,
-    hide_rated: bool = False,
-    hide_collected: bool = False,
-    page: int = 1,
-    limit: int = None,
-):
-    if limit is None:
-        limit = load_config().get("feed", {}).get("default_limit", 20)
-    return db.get_feed(
-        category_id=category_id,
-        collection_id=collection_id,
-        search=search,
-        min_kp=min_kp,
-        max_kp=max_kp,
-        min_imdb=min_imdb,
-        max_imdb=max_imdb,
-        min_year=min_year,
-        max_year=max_year,
-        min_date=min_date,
-        max_date=max_date,
-        hide_ignored=hide_ignored,
-        hide_rated=hide_rated,
-        hide_collected=hide_collected,
-        page=page,
-        limit=limit,
-    )
-
-
-@app.post("/api/ignore/{item_id}")
-def ignore_item(item_id: int):
-    new_state = db.toggle_ignore(item_id)
-    if new_state < 0:
-        return {"status": "error"}
-    return {"status": "success"}
-
-
-class ResetFieldsRequest(BaseModel):
-    fields: list[str]
-
-
-@app.post("/api/reset_item/{item_id}")
-def reset_item(item_id: int, data: ResetFieldsRequest):
-    db.reset_item(item_id, data.fields)
-    return {"status": "success"}
-
-
-@app.get("/api/categories")
-def get_categories(hide_rated: bool = False, hide_collected: bool = False):
-    return db.get_categories_with_counts(hide_rated, hide_collected)
-
-
-@app.get("/api/stats")
-def get_stats():
-    return db.get_stats()
-
-
-@app.get("/api/job_history")
-def get_job_history(limit: int = 20):
-    return db.get_job_history(limit)
-
-
-@app.get("/api/collections")
-def get_collections():
-    return db.get_collections()
-
-
-class CollectionCreate(BaseModel):
-    name: str
-
-
-def _rezka_folder_action(action: str, params: dict):
-    if not rezka_session:
-        return None
-    try:
-        params["action"] = action
-        resp = _rezka_request(
-            "POST",
-            "https://rezka.ag/ajax/favorites/",
-            data=params,
-            headers={
-                "User-Agent": "Mozilla/5.0",
-                "X-Requested-With": "XMLHttpRequest",
-            },
-            cookies=rezka_session.cookies,
-            timeout=10,
-        )
-        if resp is not None:
-            return resp.json()
-    except Exception as e:
-        logger.error(f"[REZKA FOLDER ACTION ERROR] {e}", exc_info=True)
-    return None
-
-
-@app.post("/api/collections")
-def create_collection(data: CollectionCreate):
-    try:
-        db.create_collection(data.name)
-    except Exception:
-        return {"status": "error", "message": "Коллекция существует"}
-    if rezka_session:
-        _rezka_folder_action("add_cat", {"name": data.name})
-    return {"status": "success"}
-
-
-@app.delete("/api/collections/{id}")
-def delete_collection(id: int):
-    if rezka_session:
-        row = (
-            db.get_connection()
-            .cursor()
-            .execute("SELECT name FROM collections WHERE id = ?", (id,))
-            .fetchone()
-        )
-        if row:
-            from app_core import normalize_title
-
-            coll_norm = normalize_title(row["name"])
-            if rezka_session_folders_cache and coll_norm in rezka_session_folders_cache:
-                _rezka_folder_action(
-                    "remove_cat", {"cat_id": rezka_session_folders_cache[coll_norm]}
-                )
-    db.delete_collection(id)
-    return {"status": "success"}
-
-
-class CollectionRename(BaseModel):
-    name: str
-
-
-@app.put("/api/collections/{id}")
-def rename_collection(id: int, data: CollectionRename):
-    cat_id = None
-    if rezka_session:
-        row = (
-            db.get_connection()
-            .cursor()
-            .execute("SELECT name FROM collections WHERE id = ?", (id,))
-            .fetchone()
-        )
-        if row:
-            from app_core import normalize_title
-
-            coll_norm = normalize_title(row["name"])
-            if rezka_session_folders_cache and coll_norm in rezka_session_folders_cache:
-                cat_id = rezka_session_folders_cache[coll_norm]
-    db.rename_collection(id, data.name)
-    if cat_id:
-        _rezka_folder_action("change_cat_name", {"cat_id": cat_id, "name": data.name})
-    return {"status": "success"}
-
-
-# 8.2 — collections export/import.
-#
-# Two formats:
-#   * JSON (default) — full structure, preserves added_at, sort_order
-#     and all item identifiers. Round-trips losslessly.
-#   * CSV — flat (collection_name, kp_id, imdb_id, rezka_url, title,
-#     original_title, year, added_at, sort_order). Easier to edit by
-#     hand or pipe through a spreadsheet; still re-importable.
-#
-# Items are referenced by external identity (kp_id / imdb_id /
-# rezka_url / title+year), NOT by autoincrement id, so an export
-# from one par2 DB can be merged into another instance whose ids
-# differ. See `Database.export_collections` / `import_collections`.
-@app.get("/api/collections/export")
-def collections_export(fmt: str = "json"):
-    payload = db.export_collections()
-    if fmt == "csv":
-        out = io.StringIO()
-        writer = csv.writer(out)
-        writer.writerow(
-            [
-                "collection_name",
-                "sort_order",
-                "kp_id",
-                "imdb_id",
-                "rezka_url",
-                "title",
-                "original_title",
-                "year",
-                "added_at",
-            ]
-        )
-        for col in payload:
-            name = col["name"]
-            sort_order = col.get("sort_order") or 0
-            items = col.get("items") or []
-            if not items:
-                # 8.2 — also emit a row for an empty collection so
-                # round-trip preserves the collection itself.
-                writer.writerow([name, sort_order, "", "", "", "", "", "", ""])
-                continue
-            for it in items:
-                writer.writerow(
-                    [
-                        name,
-                        sort_order,
-                        it.get("kp_id") or "",
-                        it.get("imdb_id") or "",
-                        it.get("rezka_url") or "",
-                        it.get("title") or "",
-                        it.get("original_title") or "",
-                        it.get("year") or "",
-                        it.get("added_at") or "",
-                    ]
-                )
-        from fastapi.responses import Response as _Resp
-
-        return _Resp(
-            content=out.getvalue(),
-            media_type="text/csv",
-            headers={"Content-Disposition": "attachment; filename=collections.csv"},
-        )
-    return JSONResponse(
-        {"version": 1, "collections": payload},
-        headers={"Content-Disposition": "attachment; filename=collections.json"},
-    )
-
-
-class CollectionsImport(BaseModel):
-    # Accept the export shape directly. Either pass {collections: [...]}
-    # (the same envelope the /export endpoint emits) or a raw list.
-    # `replace` controls whether existing membership is wiped or merged.
-    collections: list[dict]
-    replace: bool = False
-
-
-@app.post("/api/collections/import")
-def collections_import(data: CollectionsImport):
-    return db.import_collections(data.collections, replace=data.replace)
-
-
-# 8.2 — CSV import is a separate endpoint so the JSON one stays
-# strictly typed via pydantic. CSV is parsed on the server (so the
-# UI can just upload the raw file) and translated to the same
-# `import_collections` call.
-@app.post("/api/collections/import_csv")
-async def collections_import_csv(request: Request, replace: bool = False):
-    body = await request.body()
-    try:
-        text = body.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        text = body.decode("latin-1")
-    reader = csv.DictReader(io.StringIO(text))
-    grouped: dict[str, dict] = {}
-    for row in reader:
-        name = (row.get("collection_name") or "").strip()
-        if not name:
-            continue
-        sort_order_raw = (row.get("sort_order") or "").strip()
-        try:
-            sort_order = int(sort_order_raw) if sort_order_raw else 0
-        except ValueError:
-            sort_order = 0
-        coll = grouped.setdefault(name, {"name": name, "sort_order": sort_order, "items": []})
-        # An empty marker row (no identifiers, no title) just creates
-        # the collection — skip the item part of the row.
-        has_any_ref = any(
-            (row.get(k) or "").strip() for k in ("kp_id", "imdb_id", "rezka_url", "title")
-        )
-        if not has_any_ref:
-            continue
-        year_raw = (row.get("year") or "").strip()
-        try:
-            year = int(year_raw) if year_raw else None
-        except ValueError:
-            year = None
-        coll["items"].append(
-            {
-                "kp_id": (row.get("kp_id") or "").strip() or None,
-                "imdb_id": (row.get("imdb_id") or "").strip() or None,
-                "rezka_url": (row.get("rezka_url") or "").strip() or None,
-                "title": (row.get("title") or "").strip() or None,
-                "original_title": (row.get("original_title") or "").strip() or None,
-                "year": year,
-                "added_at": (row.get("added_at") or "").strip() or None,
-            }
-        )
-    return db.import_collections(list(grouped.values()), replace=replace)
-
-
-class CollectionItemRequest(BaseModel):
-    item_id: int
-
-
-def _sync_rezka_folder(action, collection_id, item_id):
-    try:
-        from app_core import normalize_title
-
-        if not rezka_session:
-            return
-
-        _c = db.get_connection().cursor()
-        _c.execute("SELECT name FROM collections WHERE id = ?", (collection_id,))
-        _coll = _c.fetchone()
-        if not _coll:
-            return
-
-        _c.execute("SELECT rezka_url FROM items WHERE id = ?", (item_id,))
-        _item = _c.fetchone()
-        if not _item or not _item["rezka_url"]:
-            return
-
-        import re as _re
-
-        rezka_url = _item["rezka_url"]
-        _m = _re.search(
-            r"/(?:films|series|cartoons|animation|show|telecasts)/[^/]+/(\d+)-",
-            rezka_url,
-        )
-        if not _m:
-            return
-        post_id = _m.group(1)
-
-        coll_norm = normalize_title(_coll["name"])
-        cat_id = None
-        if rezka_session_folders_cache and coll_norm in rezka_session_folders_cache:
-            cat_id = rezka_session_folders_cache[coll_norm]
-        else:
-            _refresh_rezka_folders_cache()
-            if rezka_session_folders_cache and coll_norm in rezka_session_folders_cache:
-                cat_id = rezka_session_folders_cache[coll_norm]
-
-        if not cat_id:
-            return
-
-        data = {"post_id": post_id, "cat_id": cat_id, "action": "add_post"}
-        if action == "removed":
-            data["del"] = "1"
-
-        # 6.7 — POST through the helper so a stale cookie triggers
-        # a single re-login + retry instead of silently dropping
-        # the favorite.
-        _rezka_request(
-            "POST",
-            "https://rezka.ag/ajax/favorites/",
-            data=data,
-            headers={
-                "User-Agent": "Mozilla/5.0",
-                "X-Requested-With": "XMLHttpRequest",
-            },
-            cookies=rezka_session.cookies,
-            timeout=10,
-        )
-        _refresh_rezka_folders_cache()
-    except Exception as e:
-        logger.error(f"[REZKA SYNC ERROR] {e}", exc_info=True)
-
-
-def _sync_rezka_folder_wrapper(action, collection_id, item_id):
-    try:
-        _sync_rezka_folder(action, collection_id, item_id)
-    except Exception as e:
-        # 6.3 — this runs in a worker thread (run_in_executor), so
-        # we cannot call `asyncio.get_event_loop().create_task(...)`
-        # from here — that would (a) try to attach to a per-thread
-        # loop that doesn't exist, and (b) even if it did, it
-        # wouldn't be the FastAPI main loop where ws_manager lives.
-        # `_broadcast_threadsafe` does a thread-safe submit onto
-        # `_main_loop` captured during lifespan startup.
-        _broadcast_threadsafe(
-            {
-                "type": "rezka_sync_error",
-                "message": f"Ошибка синхронизации с Rezka: {e}",
-                "item_id": item_id,
-                "collection_id": collection_id,
-                "action": action,
-            }
-        )
-
-
-@app.post("/api/collections/{collection_id}/toggle")
-async def toggle_collection_item(collection_id: int, data: CollectionItemRequest):
-    action = db.toggle_collection_item(collection_id, data.item_id)
-
-    if action in ("added", "removed") and rezka_session:
-        # 6.2 — get_running_loop() inside an async endpoint is the
-        # modern, non-deprecated API.
-        loop = asyncio.get_running_loop()
-        loop.run_in_executor(None, _sync_rezka_folder_wrapper, action, collection_id, data.item_id)
-
-    return {"status": "success", "action": action}
-
-
-@app.get("/api/item_collections/{item_id}")
-def get_item_collections(item_id: int):
-    return db.get_item_collections(item_id)
-
-
-class BatchCollectionsRequest(BaseModel):
-    ids: list[int]
-
-
-@app.post("/api/batch_item_collections")
-def batch_item_collections(data: BatchCollectionsRequest):
-    batch_result = db.get_item_collections_batch(data.ids)
-    # Convert keys to strings for JSON consistency with previous implementation.
-    return {str(k): v for k, v in batch_result.items()}
 
 
 def _recover_rezka_url(item_id: int, old_url: str) -> str | None:
@@ -1895,282 +1149,14 @@ def _get_rezka_obj(item_id: int, rezka_url: str):
     return None, rezka_url
 
 
-@app.get("/api/online_sources/{item_id}")
-def get_online_sources(item_id: int):
-    row = (
-        db.get_connection()
-        .cursor()
-        .execute("SELECT kp_id, imdb_id, title FROM items WHERE id = ?", (item_id,))
-        .fetchone()
-    )
-    if not row:
-        return JSONResponse({"error": "not found"}, status_code=404)
-
-    kp_id = row["kp_id"]
-    imdb_id = row["imdb_id"]
-    if not kp_id and not imdb_id:
-        return {"sources": []}
-
-    page_url = f"https://fbdomen.cfd/film/{kp_id}/" if kp_id else ""
-
-    all_players = {}
-
-    def _merge_players(data):
-        if not isinstance(data, dict):
-            return
-        for p in data.get("data", []):
-            if not p.get("iframeUrl") or not p.get("type"):
-                continue
-            key = p["type"].lower()
-            if key not in all_players:
-                all_players[key] = {
-                    "type": p["type"],
-                    "iframeUrl": p["iframeUrl"],
-                    "translations": p.get("translations") or [],
-                }
-
-    def _fetch_kinobox_api(params):
-        try:
-            from curl_cffi import requests as _cf
-
-            r = _cf.get(
-                "https://api.kinobox.tv/api/players",
-                params=params,
-                impersonate="chrome",
-                timeout=10,
-            )
-            if r.status_code == 200:
-                _merge_players(r.json())
-                return True
-        except Exception:
-            pass
-        return False
-
-    def _fetch_fbphdplay(params):
-        try:
-            import requests as _req
-
-            r = _req.get(
-                "https://fbphdplay.top/api/players",
-                params=params,
-                headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
-                timeout=10,
-            )
-            if r.status_code == 200:
-                _merge_players(r.json())
-        except Exception:
-            pass
-
-    params_kp = {"kinopoisk": kp_id} if kp_id else {}
-    params_imdb = {"imdb": imdb_id} if imdb_id else {}
-
-    if kp_id:
-        _fetch_kinobox_api(params_kp)
-        _fetch_fbphdplay(params_kp)
-
-    if imdb_id and not all_players:
-        _fetch_kinobox_api(params_imdb)
-        _fetch_fbphdplay(params_imdb)
-
-    if not all_players and imdb_id:
-        _fetch_fbphdplay({**params_kp, **params_imdb})
-
-    sources = list(all_players.values())
-    return {"sources": sources, "pageUrl": page_url}
 
 
-@app.get("/api/stream_info/{item_id}")
-def get_stream_info(item_id: int):
-    from HdRezkaApi.types import TVSeries
-
-    row = (
-        db.get_connection()
-        .cursor()
-        .execute("SELECT rezka_url FROM items WHERE id = ?", (item_id,))
-        .fetchone()
-    )
-    if not row or not row["rezka_url"]:
-        return {"error": "no rezka_url"}
-
-    rezka, _ = _get_rezka_obj(item_id, row["rezka_url"])
-    if not rezka:
-        return {"error": "failed to load page"}
-
-    try:
-        is_series = rezka.type == TVSeries
-        result = {
-            "type": "series" if is_series else "movie",
-            "name": rezka.name,
-            "translators": rezka.translators,
-        }
-
-        if is_series:
-            series_data = {}
-            for tid, info in rezka.seriesInfo.items():
-                series_data[str(tid)] = {
-                    "name": info.get("translator_name", ""),
-                    "premium": info.get("premium", False),
-                    "seasons": {str(k): v for k, v in info.get("seasons", {}).items()},
-                    "episodes": {
-                        str(s): {str(e): name for e, name in eps.items()}
-                        for s, eps in info.get("episodes", {}).items()
-                    },
-                }
-            result["series_info"] = series_data
-
-        return result
-    except Exception as e:
-        return {"error": str(e)}
 
 
-@app.get("/api/stream/{item_id}")
-def get_stream(
-    item_id: int,
-    season: str | None = None,
-    episode: str | None = None,
-    translator: str | None = None,
-):
-    row = (
-        db.get_connection()
-        .cursor()
-        .execute("SELECT rezka_url FROM items WHERE id = ?", (item_id,))
-        .fetchone()
-    )
-    if not row or not row["rezka_url"]:
-        return {"error": "no rezka_url"}
-
-    rezka, _ = _get_rezka_obj(item_id, row["rezka_url"])
-    if not rezka:
-        return {"error": "failed to load page"}
-
-    try:
-        kwargs = {}
-        if translator:
-            kwargs["translation"] = translator
-
-        if season and episode:
-            stream = rezka.getStream(season, episode, **kwargs)
-        else:
-            stream = rezka.getStream(**kwargs)
-
-        videos = {}
-        for quality, urls in stream.videos.items():
-            videos[quality] = urls[0] if urls else None
-
-        subtitles = {}
-        if stream.subtitles and stream.subtitles.subtitles:
-            for lang, info in stream.subtitles.subtitles.items():
-                subtitles[lang] = {
-                    "title": info.get("title", lang),
-                    "link": info.get("link", ""),
-                }
-
-        return {
-            "videos": videos,
-            "subtitles": subtitles,
-            "translator_id": stream.translator_id,
-        }
-    except Exception as e:
-        return {"error": str(e)}
 
 
-@app.get("/api/stream_m3u/{item_id}")
-def get_stream_m3u(
-    item_id: int,
-    season: str | None = None,
-    episode: str | None = None,
-    translator: str | None = None,
-    quality: str | None = None,
-):
-    from fastapi.responses import Response as R
-
-    row = (
-        db.get_connection()
-        .cursor()
-        .execute("SELECT rezka_url, title FROM items WHERE id = ?", (item_id,))
-        .fetchone()
-    )
-    if not row or not row["rezka_url"]:
-        return R(content="error: no rezka_url", media_type="text/plain", status_code=404)
-
-    rezka, _ = _get_rezka_obj(item_id, row["rezka_url"])
-    if not rezka:
-        return R(
-            content="error: failed to load page",
-            media_type="text/plain",
-            status_code=500,
-        )
-
-    try:
-        kwargs = {}
-        if translator:
-            kwargs["translation"] = translator
-
-        if season and episode:
-            stream = rezka.getStream(season, episode, **kwargs)
-        else:
-            stream = rezka.getStream(**kwargs)
-
-        if not quality or quality not in stream.videos:
-            quality = max(
-                stream.videos.keys(),
-                key=lambda q: {
-                    "4K": 7,
-                    "2K": 6,
-                    "1080p Ultra": 5,
-                    "1080p": 4,
-                    "720p": 3,
-                    "480p": 2,
-                    "360p": 1,
-                }.get(q, 0),
-            )
-
-        url = stream.videos[quality][0] if stream.videos[quality] else None
-        if not url:
-            return R(content="error: no stream url", media_type="text/plain", status_code=500)
-
-        title = row["title"]
-        if season and episode:
-            title += f" - S{season}E{episode}"
-
-        safe_title = re.sub(r'[<>:"/\\|?*]', "", title).encode("ascii", "replace").decode("ascii")
-        m3u = f"#EXTM3U\n#EXTINF:-1,{title}\n{url}\n"
-        return R(
-            content=m3u.encode("utf-8"),
-            media_type="audio/mpegurl; charset=utf-8",
-            headers={"Content-Disposition": f'attachment; filename="{safe_title}.m3u"'},
-        )
-    except Exception as e:
-        return R(content=f"error: {e}", media_type="text/plain", status_code=500)
 
 
-@app.post("/api/mark_season_seen/{item_id}")
-def mark_season_seen(item_id: int):
-    row = (
-        db.get_connection()
-        .cursor()
-        .execute("SELECT latest_season, latest_episode FROM items WHERE id = ?", (item_id,))
-        .fetchone()
-    )
-    if not row:
-        return {"error": "not found"}
-    key = f"rezka_seen_{item_id}"
-    value = f"s{row['latest_season']}e{row['latest_episode']}"
-    conn = db.get_connection()
-    conn.execute("INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)", (key, value))
-    conn.commit()
-    conn.close()
-    return {"status": "success"}
-
-
-class SaveOrderRequest(BaseModel):
-    order: list[int]
-
-
-@app.post("/api/collections/save_order")
-def save_collections_order(data: SaveOrderRequest):
-    db.save_collections_order(data.order)
-    return {"status": "success"}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -2193,49 +1179,12 @@ _LOG_FILES = {
 }
 
 
-@app.get("/api/sync_log")
-def get_sync_log(log_type: str = "video"):
-    filename = _LOG_FILES.get(log_type)
-    if not filename:
-        return JSONResponse(
-            content={"log": "Неизвестный тип лога", "filename": ""}, status_code=400
-        )
-
-    log_content = "Пусто"
-    if os.path.exists(filename):
-        with open(filename, encoding="utf-8", errors="replace") as f:
-            log_content = "".join(f.readlines()[-100:])
-
-    return JSONResponse(
-        content={"log": log_content, "filename": filename},
-        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
-    )
 
 
-@app.get("/api/download_log")
-def download_log(log_type: str = "video"):
-    filename = _LOG_FILES.get(log_type)
-    if filename and os.path.exists(filename):
-        return FileResponse(path=filename, filename=filename, media_type="text/plain")
-    return {"error": "Файл не найден"}
 
 
-@app.post("/api/clear_log")
-def clear_log(log_type: str = "video"):
-    filename = _LOG_FILES.get(log_type)
-    if not filename:
-        return {"status": "error", "message": "Unknown log type"}
-    with open(filename, "w", encoding="utf-8") as f:
-        f.write("=== Очищено ===\n")
-    return {"status": "success"}
 
 
-@app.post("/api/sync_user")
-async def sync_user_data():
-    with open("user_sync_log.txt", "w", encoding="utf-8") as f:
-        f.write("=== Старт ===\n")
-    await task_queue.add_task(run_script, "user", "user_sync.py", "user")
-    return {"status": "started"}
 
 
 # 6.6 — on-demand DB backup download.
@@ -2250,122 +1199,11 @@ async def sync_user_data():
 # `app_data-<UTC-timestamp>.db`; the same file is served back. The
 # caller can also drive periodic snapshots from cron via
 # `python backup_db.py --rotate N`.
-@app.get("/api/backup/download")
-async def backup_download():
-    out_dir = "backups"
-    os.makedirs(out_dir, exist_ok=True)
-    from datetime import timezone
-
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    dest = os.path.join(out_dir, f"app_data-{stamp}.db")
-    try:
-        # SQLite backup is blocking I/O; push it off the loop.
-        size = await asyncio.to_thread(db.backup_to, dest)
-    except Exception as e:
-        return JSONResponse(
-            {"error": f"{type(e).__name__}: {e}"},
-            status_code=500,
-        )
-    logger.info(f"[BACKUP] wrote {dest} ({size} bytes)")
-    return FileResponse(
-        dest,
-        media_type="application/octet-stream",
-        filename=os.path.basename(dest),
-    )
 
 
-@app.get("/api/export")
-def export_data(fmt: str = "json", category_id: int = -1):
-    items = db.export_items(category_id)
-
-    if fmt == "csv":
-        output = io.StringIO()
-        if items:
-            writer = csv.DictWriter(output, fieldnames=items[0].keys())
-            writer.writeheader()
-            writer.writerows(items)
-        from fastapi.responses import Response as _Response
-
-        return _Response(
-            content=output.getvalue(),
-            media_type="text/csv",
-            headers={"Content-Disposition": "attachment; filename=export.csv"},
-        )
-
-    return JSONResponse(
-        content=items,
-        headers={"Content-Disposition": "attachment; filename=export.json"},
-    )
-
-
-class SetIdsRequest(BaseModel):
-    kp_id: str | None = None
-    imdb_id: str | None = None
-
-
-@app.post("/api/set_ids/{item_id}")
-def set_ids(item_id: int, data: SetIdsRequest):
-    db.set_ids(item_id, kp_id=data.kp_id, imdb_id=data.imdb_id)
-    return {"status": "success"}
 
 
 # 8.17 — manual rebind of KP/IMDb/Rezka identifiers from the card UI.
-# Captures the prior values into audit_log so 8.18 / undo can restore them.
-class RebindRequest(BaseModel):
-    kp_id: str | None = None
-    imdb_id: str | None = None
-    rezka_url: str | None = None
-
-
-@app.post("/api/rebind/{item_id}")
-def rebind_item(item_id: int, data: RebindRequest):
-    import json as _json
-
-    with db._conn() as c:
-        row = c.execute(
-            "SELECT kp_id, imdb_id, rezka_url FROM items WHERE id = ?",
-            (item_id,),
-        ).fetchone()
-        if row is None:
-            return JSONResponse({"error": "item not found"}, status_code=404)
-        before = {
-            "kp_id": row["kp_id"],
-            "imdb_id": row["imdb_id"],
-            "rezka_url": row["rezka_url"],
-        }
-
-    after = {**before}
-    sets: list[str] = []
-    params: list = []
-    if data.kp_id is not None:
-        after["kp_id"] = data.kp_id.strip() or None
-        sets.append("kp_id = ?")
-        params.append(after["kp_id"])
-        sets.extend(["checked_poiskkino = 0", "checked_tech = 0", "checked_rezka = 0"])
-    if data.imdb_id is not None:
-        after["imdb_id"] = data.imdb_id.strip() or None
-        sets.append("imdb_id = ?")
-        params.append(after["imdb_id"])
-        sets.append("checked_rezka = 0")
-    if data.rezka_url is not None:
-        after["rezka_url"] = data.rezka_url.strip() or None
-        sets.append("rezka_url = ?")
-        params.append(after["rezka_url"])
-    if not sets:
-        return {"status": "noop"}
-    sets.extend(["is_metadata_fixed = 0", "is_reprocessed = 0"])
-    params.append(item_id)
-    with db._conn() as c:
-        c.execute(f"UPDATE items SET {', '.join(sets)} WHERE id = ?", params)
-
-    db.append_audit(
-        action="rebind",
-        item_id=item_id,
-        field="kp_id,imdb_id,rezka_url",
-        old_value=_json.dumps(before, ensure_ascii=False),
-        new_value=_json.dumps(after, ensure_ascii=False),
-    )
-    return {"status": "success", "before": before, "after": after}
 
 
 # 8.5 — filter rules CRUD endpoints.
@@ -2433,137 +1271,11 @@ def filter_rules_delete(rule_id: int):
 
 # 8.7 — TMDB trailers. Returns the highest-confidence YouTube key
 # for the requested item, picking an official trailer when available.
-@app.get("/api/trailer/{item_id}")
-def get_trailer(item_id: int):
-    from tmdb_client import TMDBClient
-
-    with db._conn() as c:
-        row = c.execute(
-            "SELECT id, imdb_id, tmdb_id, title, original_title, year FROM items WHERE id = ?",
-            (item_id,),
-        ).fetchone()
-        if not row:
-            return JSONResponse({"error": "item not found"}, status_code=404)
-
-    client = TMDBClient()
-    if not client.api_key:
-        return JSONResponse({"error": "TMDB_API_KEY not configured"}, status_code=503)
-
-    tmdb_id = row["tmdb_id"]
-    media_type = "movie"
-    if not tmdb_id and row["imdb_id"]:
-        meta = client.find_by_imdb_id(row["imdb_id"], return_meta=True)
-        if meta and meta.get("tmdb_id"):
-            tmdb_id = str(meta["tmdb_id"])
-            media_type = meta.get("media_type") or "movie"
-            with db._conn() as c:
-                c.execute(
-                    "UPDATE items SET tmdb_id = ? WHERE id = ?",
-                    (tmdb_id, item_id),
-                )
-    if not tmdb_id:
-        return JSONResponse(
-            {"error": "no TMDB id for this item; set imdb_id first"},
-            status_code=404,
-        )
-
-    videos = client.get_videos(media_type, tmdb_id) or []
-
-    # Prefer YouTube + Trailer + Official.
-    def _score(v: dict) -> int:
-        s = 0
-        if (v.get("site") or "").lower() == "youtube":
-            s += 100
-        if (v.get("type") or "").lower() == "trailer":
-            s += 50
-        if v.get("official"):
-            s += 25
-        return s
-
-    videos.sort(key=_score, reverse=True)
-    # Return up to 5 YouTube candidates so the frontend can fall back
-    # to the next one if a video has embedding disabled (YouTube error
-    # 101 / 150 / 153). TMDB doesn't expose an embed-allowed flag, so
-    # serial fallback is the only reliable workaround.
-    youtube_candidates = [
-        {
-            "youtube_key": v["key"],
-            "name": v.get("name") or "",
-            "type": v.get("type") or "",
-            "official": bool(v.get("official")),
-        }
-        for v in videos
-        if (v.get("site") or "").lower() == "youtube" and v.get("key")
-    ][:5]
-    if not youtube_candidates:
-        return JSONResponse({"error": "no trailer available"}, status_code=404)
-    primary = youtube_candidates[0]
-    return {
-        # Backwards-compatible flat fields (first / best candidate).
-        "youtube_key": primary["youtube_key"],
-        "name": primary["name"],
-        "type": primary["type"],
-        "official": primary["official"],
-        # New: ranked list for client-side embed fallback.
-        "candidates": youtube_candidates,
-        "tmdb_id": tmdb_id,
-        "media_type": media_type,
-    }
 
 
 # 8.12 — same lookup as /api/stream_m3u but returns the resolved
 # direct URL as JSON so the frontend can render an embedded player
 # (HTML5 <video> / hls.js) instead of triggering an m3u download.
-@app.get("/api/stream_url/{item_id}")
-def get_stream_url(
-    item_id: int,
-    season: str | None = None,
-    episode: str | None = None,
-    translator: str | None = None,
-    quality: str | None = None,
-):
-    with db._conn() as c:
-        row = c.execute("SELECT rezka_url, title FROM items WHERE id = ?", (item_id,)).fetchone()
-    if not row or not row["rezka_url"]:
-        return JSONResponse({"error": "no rezka_url"}, status_code=404)
-
-    rezka, _ = _get_rezka_obj(item_id, row["rezka_url"])
-    if not rezka:
-        return JSONResponse({"error": "failed to load page"}, status_code=502)
-    try:
-        kwargs: dict = {}
-        if translator:
-            kwargs["translation"] = translator
-        if season and episode:
-            stream = rezka.getStream(season, episode, **kwargs)
-        else:
-            stream = rezka.getStream(**kwargs)
-
-        if not quality or quality not in stream.videos:
-            quality = max(
-                stream.videos.keys(),
-                key=lambda q: {
-                    "4K": 7,
-                    "2K": 6,
-                    "1080p Ultra": 5,
-                    "1080p": 4,
-                    "720p": 3,
-                    "480p": 2,
-                    "360p": 1,
-                }.get(q, 0),
-            )
-        url = stream.videos[quality][0] if stream.videos[quality] else None
-        if not url:
-            return JSONResponse({"error": "no stream url"}, status_code=502)
-        is_hls = ".m3u8" in url.lower()
-        return {
-            "url": url,
-            "quality": quality,
-            "title": row["title"],
-            "is_hls": is_hls,
-        }
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=502)
 
 
 # 8.12 — subtitle CORS proxy. Rezka serves VTT/SRT files without
@@ -2580,66 +1292,6 @@ _SUBTITLE_HOST_ALLOWLIST = (
 )
 
 
-@app.get("/api/subtitle_proxy")
-def subtitle_proxy(url: str):
-    from urllib.parse import urlparse
-
-    from fastapi.responses import Response
-
-    if not url or not url.startswith(("http://", "https://")):
-        return JSONResponse({"error": "invalid url"}, status_code=400)
-    host = (urlparse(url).hostname or "").lower()
-    if not any(host == h.lstrip(".") or host.endswith(h) for h in _SUBTITLE_HOST_ALLOWLIST):
-        return JSONResponse({"error": f"host {host} not allowed"}, status_code=403)
-    try:
-        # Subtitle files live on CDNs (no auth required) — use a plain
-        # requests.get rather than `_rezka_request`, which would no-op
-        # when the user hasn't configured Rezka credentials.
-        import requests as _req
-
-        resp = _req.get(url, timeout=10)
-        if resp.status_code != 200:
-            return JSONResponse(
-                {"error": f"upstream HTTP {resp.status_code}"},
-                status_code=502,
-            )
-        # Pick a Content-Type that the browser will accept for <track>.
-        ct = resp.headers.get("Content-Type") or ""
-        if "vtt" in ct.lower() or url.lower().endswith(".vtt"):
-            ct = "text/vtt; charset=utf-8"
-        else:
-            # Most rezka subtitles are SRT — convert lazily so the
-            # browser <track> element accepts them as captions.
-            ct = "text/plain; charset=utf-8"
-        body = resp.content
-        # If the file is SRT (common on rezka), do a quick conversion
-        # to WebVTT — browsers only render captions in VTT format.
-        if b"WEBVTT" not in body[:64] and (url.lower().endswith(".srt") or b"-->" in body[:512]):
-            try:
-                txt = body.decode("utf-8-sig", errors="replace")
-                txt = txt.replace("\r\n", "\n")
-                # SRT timestamps use comma; VTT uses dot.
-                import re as _re
-
-                txt = _re.sub(
-                    r"(\d{2}:\d{2}:\d{2}),(\d{3})",
-                    r"\1.\2",
-                    txt,
-                )
-                body = ("WEBVTT\n\n" + txt).encode("utf-8")
-                ct = "text/vtt; charset=utf-8"
-            except Exception:
-                pass
-        return Response(
-            content=body,
-            media_type=ct,
-            headers={
-                "Access-Control-Allow-Origin": "*",
-                "Cache-Control": "public, max-age=3600",
-            },
-        )
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=502)
 
 
 # 8.18 — audit log endpoints + undo.
@@ -2718,126 +1370,17 @@ def _trigger_restart():
     return False
 
 
-@app.post("/api/self_update")
-def self_update():
-    import subprocess
-
-    try:
-        result = subprocess.run(
-            ["git", "pull"],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            cwd=os.path.dirname(os.path.abspath(__file__)),
-        )
-        output = result.stdout.strip()
-        if result.returncode != 0:
-            return {"status": "error", "message": result.stderr.strip()[:500]}
-        if "Already up to date" in output:
-            return {"status": "up_to_date", "message": output}
-
-        restarted = _trigger_restart()
-        msg = output
-        if restarted:
-            msg += "\n\nServer is restarting..."
-        else:
-            msg += "\n\nUpdate complete. Please restart the server manually."
-
-        return {"status": "updated", "message": msg}
-    except Exception as e:
-        return {"status": "error", "message": str(e)[:500]}
 
 
-@app.get("/api/database_export")
-def database_export():
-    db_path = settings.resolved_db_path
-    if not os.path.exists(db_path):
-        return JSONResponse({"error": "not found"}, status_code=404)
-    return FileResponse(
-        db_path,
-        media_type="application/x-sqlite3",
-        filename=os.path.basename(db_path),
-    )
 
 
-@app.post("/api/database_import")
-async def database_import(file: UploadFile):
-    db_path = settings.resolved_db_path
-    content = await file.read()
-
-    # 5.1: Security/Integrity check
-    # SQLite file must start with specific magic bytes.
-    if not content.startswith(b"SQLite format 3\x00"):
-        return JSONResponse(
-            {"status": "error", "message": "Invalid SQLite file (header mismatch)"},
-            status_code=400,
-        )
-
-    if len(content) < 100:
-        return JSONResponse({"status": "error", "message": "File too small"}, status_code=400)
-
-    # 5.1: Create backup before overwrite
-    if os.path.exists(db_path):
-        import shutil
-        from datetime import datetime
-
-        backup_dir = os.path.join(settings.app_data_dir, "backups")
-        os.makedirs(backup_dir, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_path = os.path.join(backup_dir, f"pre_import_{timestamp}.db")
-        try:
-            shutil.copy2(db_path, backup_path)
-            logger.info(f"Backup created: {backup_path}")
-        except Exception as e:
-            logger.error(f"Failed to create backup: {e}")
-            # We continue anyway, as the user requested an import.
-
-    with open(db_path, "wb") as f:
-        f.write(content)
-
-    restarted = _trigger_restart()
-    if restarted:
-        return {"status": "success", "message": "Database imported, server is restarting..."}
-    return {"status": "success", "message": "Database imported, please restart server manually"}
 
 
-@app.get("/api/reset_database/token")
-def get_reset_token():
-    import secrets
-    from datetime import datetime, timedelta
-
-    token = secrets.token_urlsafe(16)
-    expiry = datetime.now() + timedelta(seconds=60)
-    _reset_tokens[token] = expiry
-    return {"token": token}
+_reset_tokens: dict = {}
 
 
-@app.post("/api/reset_database")
-def reset_database(confirm: str | None = None):
-    from datetime import datetime
-
-    if not confirm or confirm not in _reset_tokens:
-        return JSONResponse(
-            {"status": "error", "message": "Confirmation token missing or invalid"},
-            status_code=403,
-        )
-
-    expiry = _reset_tokens.pop(confirm)
-    if datetime.now() > expiry:
-        return JSONResponse(
-            {"status": "error", "message": "Confirmation token expired"}, status_code=403
-        )
 
 
-    db_path = settings.resolved_db_path
-    if not os.path.exists(db_path):
-        return {"status": "error", "message": "Database file not found"}
-    os.remove(db_path)
-
-    restarted = _trigger_restart()
-    if restarted:
-        return {"status": "success", "message": "Database deleted, server is restarting..."}
-    return {"status": "success", "message": "Database deleted, please restart server manually"}
 
 
 if __name__ == "__main__":

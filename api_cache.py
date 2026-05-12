@@ -1,4 +1,3 @@
-
 from requests_cache import CachedSession
 
 from settings import settings

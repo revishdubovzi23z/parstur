@@ -1,6 +1,6 @@
+import logging
 import re
 import time
-import logging
 
 logger = logging.getLogger("parsclode.client.tmdb")
 
@@ -42,7 +42,10 @@ class TMDBClient:
                 return resp.json().get("imdb_id")
             logger.warning(f"TMDB external_ids({media_type}, {tmdb_id}) -> HTTP {resp.status_code}")
         except Exception as e:
-            logger.error(f"TMDB external_ids({media_type}, {tmdb_id}) failed: {type(e).__name__}: {e}", exc_info=True)
+            logger.error(
+                f"TMDB external_ids({media_type}, {tmdb_id}) failed: {type(e).__name__}: {e}",
+                exc_info=True,
+            )
         return None
 
     def get_videos(self, media_type, tmdb_id):
@@ -74,7 +77,10 @@ class TMDBClient:
                     if results:
                         return results
             except Exception as e:
-                logger.error(f"TMDB get_videos({media_type},{tmdb_id},{lang}): {type(e).__name__}: {e}", exc_info=True)
+                logger.error(
+                    f"TMDB get_videos({media_type},{tmdb_id},{lang}): {type(e).__name__}: {e}",
+                    exc_info=True,
+                )
         return []
 
     def find_by_imdb_id(self, imdb_id, return_meta=False):
@@ -252,6 +258,7 @@ class TMDBClient:
 
 if __name__ == "__main__":
     from logging_config import setup_logging
+
     setup_logging("tmdb_test")
     client = TMDBClient()
     result = client.search_movie("The Bride!", 2026, alt_title="Невеста!")

@@ -1,6 +1,6 @@
+import logging
 import re
 import unicodedata
-import logging
 
 logger = logging.getLogger("parsclode.core")
 

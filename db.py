@@ -1,9 +1,9 @@
+import logging
 import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
 from functools import lru_cache
-import logging
 
 logger = logging.getLogger("parsclode.db")
 

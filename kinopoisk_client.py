@@ -77,6 +77,7 @@ class KinopoiskClient(BaseMovieClient):
 
 if __name__ == "__main__":
     from logging_config import setup_logging
+
     setup_logging("kinopoisk_test")
     client = KinopoiskClient()
     res = client.search_movie("Матрица", 1999)

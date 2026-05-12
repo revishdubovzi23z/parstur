@@ -452,53 +452,53 @@ Docker-фикс получится либо пол-делом (только `Dat
 ### 7.1. Подготовить `routes/` каркас.
 
 Один PR:
-- [ ] Создать `routes/__init__.py`.
-- [ ] Вынести объявление `app = FastAPI(...)` в `main.py`
+- [x] Создать `routes/__init__.py`.
+- [x] Вынести объявление `app = FastAPI(...)` в `main.py`
   (оставить).
-- [ ] Создать пустые `routes/auth.py`, `routes/feed.py`,
+- [x] Создать пустые `routes/auth.py`, `routes/feed.py`,
   `routes/collections.py`, `routes/process.py`,
   `routes/streams.py`, `routes/admin.py`, `routes/items.py`
   — каждый со своим `APIRouter`.
-- [ ] В `main.py` сделать `app.include_router(...)` для каждого.
+- [x] В `main.py` сделать `app.include_router(...)` для каждого.
 
 ### 7.2. Перенести auth-эндпойнты.
 
 Один PR (только mv):
-- [ ] `/api/login`, `/api/logout`, `/api/auth_status`,
+- [x] `/api/login`, `/api/logout`, `/api/auth_status`,
   `/api/check_auth` → `routes/auth.py`.
-- [ ] Auth-middleware остаётся в `main.py` (он на app-уровне).
+- [x] Auth-middleware остаётся в `main.py` (он на app-уровне).
 
 ### 7.3. Перенести feed/items.
 
 Один PR (mv):
-- [ ] `/api/feed`, `/api/categories`, `/api/item/*`,
+- [x] `/api/feed`, `/api/categories`, `/api/item/*`,
   `/api/items/*`, `/api/stats` → `routes/feed.py` +
   `routes/items.py`.
 
 ### 7.4. Перенести collections.
 
 Один PR (mv):
-- [ ] `/api/collections/*`, `/api/collection_items/*`,
+- [x] `/api/collections/*`, `/api/collection_items/*`,
   `/api/batch_item_collections`, `/api/item_collections/*`
   → `routes/collections.py`.
 
 ### 7.5. Перенести process-control.
 
 Один PR (mv):
-- [ ] `/api/start_*`, `/api/stop_*`, `/api/process_status`,
+- [x] `/api/start_*`, `/api/stop_*`, `/api/process_status`,
   `/api/progress/*`, `/api/sync_log`, `/api/download_log`,
   `/api/clear_log` → `routes/process.py`.
 
 ### 7.6. Перенести streams/subtitles.
 
 Один PR (mv):
-- [ ] `/api/stream_info`, `/api/online_sources`,
+- [x] `/api/stream_info`, `/api/online_sources`,
   `/api/subtitle_proxy`, `/api/trailer` → `routes/streams.py`.
 
 ### 7.7. Перенести admin (database_*, reset, self_update).
 
 Один PR (mv):
-- [ ] `/api/database_export`, `/api/database_import`,
+- [x] `/api/database_export`, `/api/database_import`,
   `/api/reset_database`, `/api/self_update`,
   `/api/log_level` (если уже есть из 6.10) → `routes/admin.py`.
 

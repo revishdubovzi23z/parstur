@@ -23,7 +23,11 @@ def client(monkeypatch, tmp_path) -> TestClient:
     from db import Database
 
     test_db_path = tmp_path / "test.db"
-    main.db = Database(str(test_db_path))
+    import db as db_module; main.db = Database(str(test_db_path))
+    from routes import collections, feed, items
+    items.db = collections.db = feed.db = main.db
+    from routes import items
+    items.db = main.db
     main.db.init_schema()
 
     with main.db._conn() as c:

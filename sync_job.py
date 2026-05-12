@@ -534,7 +534,9 @@ def run_sync(mode="video", manual_min_date=None):
                     continue
 
                 if not is_new_item and not added_any:
-                    logger.info(f"  🔗 Добавлен новый релиз к существующему фильму: {display_title}")
+                    logger.info(
+                        f"  🔗 Добавлен новый релиз к существующему фильму: {display_title}"
+                    )
                     added_any = True
 
                 rel_date = parse_rutor_date(rel["date_str"])
@@ -580,7 +582,8 @@ def run_sync(mode="video", manual_min_date=None):
 
 if __name__ == "__main__":
     from logging_config import setup_logging
-    logger = setup_logging('parsclode.sync')
+
+    logger = setup_logging("parsclode.sync")
     mode = sys.argv[1] if len(sys.argv) > 1 else "video"
     manual_min_date = None
 

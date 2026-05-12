@@ -84,6 +84,7 @@ class PoiskKinoClient(BaseMovieClient):
 
 if __name__ == "__main__":
     from logging_config import setup_logging
+
     setup_logging("poiskkino_test")
     client = PoiskKinoClient()
     res = client.search_movie("Матрица", 1999)

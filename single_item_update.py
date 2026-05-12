@@ -150,5 +150,6 @@ if __name__ == "__main__":
         update_single_item(int(sys.argv[1]))
     else:
         from logging_config import setup_logging
-        logger = setup_logging('parsclode.single_update')
+
+        logger = setup_logging("parsclode.single_update")
         logger.info("Usage: python single_item_update.py <item_id>")

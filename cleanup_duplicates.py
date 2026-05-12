@@ -4,7 +4,6 @@ from difflib import SequenceMatcher
 from db import Database
 from logging_config import setup_logging
 from script_utils import load_config
-from settings import settings
 
 logger = setup_logging("parsclode.cleanup", "cleanup_log.txt")
 
@@ -214,7 +213,9 @@ def merge_duplicates():
             )
             continue
         if len(active_items) >= NAME_GROUP_WARN:
-            logger.info(f"[CLEANUP] large name group {key!r}: size={len(active_items)} (proceeding)")
+            logger.info(
+                f"[CLEANUP] large name group {key!r}: size={len(active_items)} (proceeding)"
+            )
 
         active_items.sort(key=get_item_score, reverse=True)
 

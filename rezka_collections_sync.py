@@ -4,7 +4,6 @@ from app_core import normalize_title
 from db import Database
 from logging_config import setup_logging
 from settings import settings
-import logging
 
 logger = setup_logging("parsclode.rezka_collections", settings.log_file_path)
 

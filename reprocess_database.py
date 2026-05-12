@@ -190,9 +190,7 @@ def reprocess_all(force_all=False, specific_id=None):
                     try:
                         time.sleep(0.3)
                         MIRROR = RUTOR_MIRROR
-                        logger.info(
-                            f"  🔍 Рутор (1.1): {MIRROR}/torrent/{rel_rutor_id}"
-                        )
+                        logger.info(f"  🔍 Рутор (1.1): {MIRROR}/torrent/{rel_rutor_id}")
                         resp = requests.get(f"{MIRROR}/torrent/{rel_rutor_id}", timeout=20)
                         if resp.status_code == 200:
                             if not kp_id:
@@ -302,9 +300,7 @@ def reprocess_all(force_all=False, specific_id=None):
                 conn.commit()
                 total_updated += 1
             except Exception:
-                logger.info(
-                    f"  🔗 Обнаружен дубликат для '{final_title}'. Сливаю карточки..."
-                )
+                logger.info(f"  🔗 Обнаружен дубликат для '{final_title}'. Сливаю карточки...")
                 existing_id = db.find_duplicate_item_id(
                     final_title, year, row["category_id"], item_id, conn=conn
                 )

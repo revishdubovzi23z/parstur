@@ -725,7 +725,9 @@ async def _search_rezka_batch(items, db, conn):
             for s_title in info["search_queries"]:
                 with_year_queries.add(f"{s_title} {year}")
 
-        logger.info(f"  [Phase 1a] {len(with_year_queries)} unique 'with year' queries for {total} items")
+        logger.info(
+            f"  [Phase 1a] {len(with_year_queries)} unique 'with year' queries for {total} items"
+        )
         coros = [_async_search(session, q, semaphore) for q in with_year_queries]
         raw = await asyncio.gather(*coros)
         with_year_results = {}
