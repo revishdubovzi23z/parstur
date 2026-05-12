@@ -522,39 +522,39 @@ Docker-фикс получится либо пол-делом (только `Dat
 ### 8.1. Подготовить `db/` каркас.
 
 Один PR:
-- [ ] Переименовать `db.py` → `db/__init__.py`. Внутри —
+- [x] Переименовать `db.py` → `db/__init__.py`. Внутри —
   только `class Database` core (init, `_conn`,
   `get_connection`, миграции).
-- [ ] Глобальный `db = Database()` (плюс `settings.db_path`
+- [x] Глобальный `db = Database()` (плюс `settings.db_path`
   из этапа 3.5).
 
 ### 8.2. Вынести items / feed / search.
 
 Один PR (mv):
-- [ ] `db/items.py`: `get_item`, `get_items`, `get_items_count`,
+- [x] `db/items.py`: `get_item`, `get_items`, `get_items_count`,
   `find_existing_item`, `add_item`, `update_item_field`, etc.
-- [ ] `db/feed.py`: `get_feed`, `get_categories_with_counts`,
+- [x] `db/feed.py`: `get_feed`, `get_categories_with_counts`,
   `get_stats`, FTS-логика.
 
 ### 8.3. Вынести collections.
 
 Один PR (mv):
-- [ ] `db/collections.py`: `get_collections`,
+- [x] `db/collections.py`: `get_collections`,
   `add_collection`, `toggle_collection_item`,
   `delete_collection`, etc.
 
 ### 8.4. Вынести audit / filter_rules / user_ratings / releases.
 
 Один PR (mv):
-- [ ] `db/audit.py`, `db/filter_rules.py`, `db/ratings.py`,
+- [x] `db/audit.py`, `db/filter_rules.py`, `db/ratings.py`,
   `db/releases.py`.
 
 ### 8.5. Вынести миграции и backup.
 
 Один PR (mv):
-- [ ] `db/migrations.py`: `_apply_migrations`,
+- [x] `db/migrations.py`: `_apply_migrations`,
   `check_and_migrate_schema`.
-- [ ] `db/backup.py`: `backup_to`, `wal_checkpoint`.
+- [x] `db/backup.py`: `backup_to`, `wal_checkpoint`.
 
 ---
 
