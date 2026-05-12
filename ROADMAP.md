@@ -268,12 +268,12 @@ Docker-фикс получится либо пол-делом (только `Dat
 
 ### 4.1. Проверить, что compose реально пишет в `/data`.
 
-Один PR (или комментарий к 3.5 если ничего больше не нужно):
-- [ ] `docker compose up --build` → выполнить пару действий
+Один PR (или комментарий к 3.5 если ничего больше не нужно): [DONE]
+- [x] `docker compose up --build` → выполнить пару действий
   (логин, добавление в коллекцию) → `docker compose down` →
   `docker compose up` → проверить, что состояние осталось.
-- [ ] Описать процедуру в `README.md`.
-- [ ] Добавить smoke-тест в CI: `docker build .` хотя бы
+- [x] Описать процедуру в `README.md`.
+- [x] Добавить smoke-тест в CI: `docker build .` хотя бы
   собирается. Полный compose-up в GH Actions — overkill.
 
 ### 4.2. Хардкод `systemctl restart parsclode` → абстракция. [DONE]

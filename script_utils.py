@@ -5,6 +5,19 @@ import os
 import tempfile
 from typing import Any
 
+# 4.1: Path resolution for Docker persistence.
+# In a containerized environment, persistent files (checkpoints, flags)
+# must reside in /data. We use APP_DATA_DIR from env to locate them.
+# We don't import settings.py here to avoid circular dependencies
+# (settings.py imports script_utils).
+_APP_DATA_DIR = os.getenv("APP_DATA_DIR", ".")
+
+
+def _get_data_path(filename: str) -> str:
+    """Join filename with the configured APP_DATA_DIR."""
+    return os.path.join(_APP_DATA_DIR, filename)
+
+
 _config: dict[str, Any] | None = None
 
 
@@ -22,7 +35,7 @@ def load_config() -> dict[str, Any]:
 
 
 def should_stop(status_key: str) -> bool:
-    return os.path.exists(f"stop_{status_key}.flag")
+    return os.path.exists(_get_data_path(f"stop_{status_key}.flag"))
 
 
 def save_checkpoint(status_key: str, data: Any) -> None:
@@ -36,7 +49,7 @@ def save_checkpoint(status_key: str, data: Any) -> None:
     restartable. Use a temp file in the same directory and os.replace
     so the swap is atomic on every supported platform.
     """
-    target = f"checkpoint_{status_key}.json"
+    target = _get_data_path(f"checkpoint_{status_key}.json")
     target_dir = os.path.dirname(os.path.abspath(target)) or "."
     fd, tmp_path = tempfile.mkstemp(
         prefix=f".checkpoint_{status_key}.", suffix=".tmp", dir=target_dir
@@ -57,7 +70,7 @@ def save_checkpoint(status_key: str, data: Any) -> None:
 
 
 def load_checkpoint(status_key: str) -> Any | None:
-    path = f"checkpoint_{status_key}.json"
+    path = _get_data_path(f"checkpoint_{status_key}.json")
     if os.path.exists(path):
         try:
             with open(path, encoding="utf-8") as f:
@@ -68,7 +81,7 @@ def load_checkpoint(status_key: str) -> Any | None:
 
 
 def clear_checkpoint(status_key: str) -> None:
-    path = f"checkpoint_{status_key}.json"
+    path = _get_data_path(f"checkpoint_{status_key}.json")
     if os.path.exists(path):
         try:
             os.remove(path)
@@ -77,7 +90,7 @@ def clear_checkpoint(status_key: str) -> None:
 
 
 def clear_stop_flag(status_key: str) -> None:
-    path = f"stop_{status_key}.flag"
+    path = _get_data_path(f"stop_{status_key}.flag")
     if os.path.exists(path):
         try:
             os.remove(path)

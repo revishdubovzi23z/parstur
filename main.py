@@ -256,7 +256,8 @@ async def lifespan(_app):
             continue
         if proc and proc.returncode is None:
             print(f"[SHUTDOWN] Writing stop flag for: {key}")
-            with open(f"stop_{key}.flag", "w") as f:
+            flag_path = os.path.join(settings.app_data_dir, f"stop_{key}.flag")
+            with open(flag_path, "w") as f:
                 f.write("stop")
     await asyncio.sleep(min(graceful_timeout, 2))
     for key, proc in running_processes.items():
@@ -488,7 +489,7 @@ async def websocket_endpoint(ws: WebSocket, token: str | None = None):
 def _read_progress(key):
     if not _is_valid_status_key(key):
         return {"current": 0, "total": 0}
-    p_file = f"progress_{key}.json"
+    p_file = os.path.join(settings.app_data_dir, f"progress_{key}.json")
     if os.path.exists(p_file):
         try:
             with open(p_file) as f:

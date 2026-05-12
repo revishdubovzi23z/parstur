@@ -18,7 +18,8 @@ RUTOR_MIRROR = settings.rutor_mirror.rstrip("/")
 
 def report_progress(current, total, status_key="single_update"):
     try:
-        with open(f"progress_{status_key}.json", "w") as f:
+        p_file = os.path.join(settings.app_data_dir, f"progress_{status_key}.json")
+        with open(p_file, "w") as f:
             json.dump({"current": current, "total": total}, f)
     except Exception:
         pass
