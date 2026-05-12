@@ -1,5 +1,5 @@
 import time
-
+import logging
 import requests
 
 from api_cache import get_cached_session
@@ -14,6 +14,7 @@ class BaseMovieClient:
     request_delay: float = 0.3
 
     def __init__(self):
+        self.logger = logging.getLogger(f"parsclode.client.{self.__class__.__name__.lower()}")
         self.session = get_cached_session()
         # network_error: True when the upstream is *temporarily* down
         # (5xx, timeout, connection reset). Callers gate checked_* DB
@@ -40,11 +41,11 @@ class BaseMovieClient:
 
     def _handle_rate_limit(self, response):
         if response.status_code in self.payment_limit_codes:
-            print(f"{self.__class__.__name__}: Лимит запросов исчерпан ({response.status_code}).")
+            self.logger.error(f"Лимит запросов исчерпан ({response.status_code}).")
             self.is_limited = True
             return True
         if response.status_code in self.rate_limit_codes:
-            print(f"{self.__class__.__name__}: Слишком много запросов. Ждем 5 секунд...")
+            self.logger.warning(f"Слишком много запросов. Ждем 5 секунд...")
             time.sleep(5)
             return True
         return False
@@ -61,8 +62,8 @@ class BaseMovieClient:
         except (requests.Timeout, requests.ConnectionError) as e:
             # Treat transport-level failures as transient. Callers
             # check self.network_error before flipping checked_* = 1.
-            print(
-                f"{self.__class__.__name__}: transient network error "
+            self.logger.error(
+                f"transient network error "
                 f"({type(e).__name__}); will retry next run"
             )
             self.network_error = True
@@ -87,8 +88,8 @@ class BaseMovieClient:
             self.not_found = True
             return None
         if 500 <= response.status_code < 600:
-            print(
-                f"{self.__class__.__name__}: upstream {response.status_code}; treating as transient"
+            self.logger.warning(
+                f"upstream {response.status_code}; treating as transient"
             )
             self.network_error = True
             return None

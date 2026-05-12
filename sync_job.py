@@ -10,7 +10,7 @@ import requests
 from app_core import RUTOR_CATEGORIES, VIDEO_CATEGORY_IDS, normalize_title
 from db import Database
 from kinopoisk_client import KinopoiskClient
-from logger import setup_tee_logger
+from logging_config import setup_logging
 from rutor_parser import RutorParser
 from script_utils import (
     clear_checkpoint,
@@ -22,6 +22,8 @@ from script_utils import (
 )
 from settings import settings
 from tmdb_client import TMDBClient
+
+logger = setup_logging("parsclode.sync", settings.log_file_path)
 
 
 def report_progress(current, total, status_key):
@@ -134,7 +136,7 @@ def deduplicate_releases(raw_list):
 
 
 def run_sync(mode="video", manual_min_date=None):
-    setup_tee_logger("sync", "sync_log.txt")
+    logger = setup_logging("parsclode.sync", "sync_log.txt")
     db = Database()
     parser = RutorParser()
     tmdb = TMDBClient()
@@ -147,7 +149,7 @@ def run_sync(mode="video", manual_min_date=None):
     resume_page = checkpoint.get("current_page", 0) if checkpoint else None
 
     if checkpoint:
-        print(
+        logger.info(
             f"[RESUME] Found checkpoint: completed cats {completed_cats}, resume at cat {resume_cat_id} page {resume_page}"
         )
 
@@ -155,10 +157,10 @@ def run_sync(mode="video", manual_min_date=None):
 
     if manual_min_date:
         target_date = manual_min_date
-        print(f"=== ЗАПУСК ПАРСИНГА (Режим: {mode}, РУЧНАЯ ДАТА: {target_date}) ===")
+        logger.info(f"=== ЗАПУСК ПАРСИНГА (Режим: {mode}, РУЧНАЯ ДАТА: {target_date}) ===")
     else:
         target_date = db.get_last_release_date()
-        print(f"=== ЗАПУСК ПАРСИНГА (Режим: {mode}, Цель: {target_date}) ===")
+        logger.info(f"=== ЗАПУСК ПАРСИНГА (Режим: {mode}, Цель: {target_date}) ===")
 
     conn = db.get_connection()
     cursor = conn.cursor()
@@ -174,13 +176,13 @@ def run_sync(mode="video", manual_min_date=None):
             continue
 
         if cat_id in completed_cats:
-            print(f"\n--- Категория: {cat_name} (ПРОПУСК: уже обработана) ---")
+            logger.info(f"\n--- Категория: {cat_name} (ПРОПУСК: уже обработана) ---")
             continue
 
         current_target = (
             manual_min_date if manual_min_date else db.get_last_release_date(category_id=cat_id)
         )
-        print(f"\n--- Категория: {cat_name} (Ищем новее {current_target}) ---")
+        logger.info(f"\n--- Категория: {cat_name} (Ищем новее {current_target}) ---")
 
         page_start = resume_page if cat_id == resume_cat_id else 0
 
@@ -196,7 +198,7 @@ def run_sync(mode="video", manual_min_date=None):
                         "current_page": page,
                     },
                 )
-                print("[STOP] Graceful shutdown. Checkpoint saved.")
+                logger.info("[STOP] Graceful shutdown. Checkpoint saved.")
                 conn.close()
                 return
 
@@ -220,7 +222,7 @@ def run_sync(mode="video", manual_min_date=None):
                 new_ones.append(r)
 
             all_raw_releases.extend(new_ones)
-            print(f"  Стр {page}: новых (с учетом фильтров) {len(new_ones)}")
+            logger.info(f"  Стр {page}: новых (с учетом фильтров) {len(new_ones)}")
             # Stop only after two consecutive pages produced zero new
             # releases. The old heuristic (len(new_ones) < len(raw) -
             # SYNC_STOP_THRESHOLD) broke whenever a page had exactly
@@ -251,7 +253,7 @@ def run_sync(mode="video", manual_min_date=None):
                         "current_page": page_start + SYNC_PAGE_DEPTH,
                     },
                 )
-                print("[STOP] Graceful shutdown during item processing. Checkpoint saved.")
+                logger.info("[STOP] Graceful shutdown during item processing. Checkpoint saved.")
                 conn.close()
                 return
 
@@ -279,18 +281,18 @@ def run_sync(mode="video", manual_min_date=None):
                         _owner = db.get_item(_existing_item_id, conn=conn)
                         if _owner:
                             item_id = _existing_item_id
-                            print(
+                            logger.info(
                                 f"\n  🔗 Найден существующий item {item_id} ({_owner['title']}) по релизу {_rel['rutor_id']}"
                             )
                             break
                         else:
-                            print(
+                            logger.info(
                                 f"  🔗 Релиз {_rel['rutor_id']} осиротевший (item {_existing_item_id} удалён)"
                             )
 
             if not item_id:
                 is_new_item = True
-                print(f"\n[НОВЫЙ] 🎬 {display_title} ({year})")
+                logger.info(f"\n[НОВЫЙ] 🎬 {display_title} ({year})")
                 rutor_kp_id = None
                 rutor_imdb_id = None
 
@@ -300,7 +302,7 @@ def run_sync(mode="video", manual_min_date=None):
                             break
                         try:
                             rel_url = f"{parser.mirror}/torrent/{rel['rutor_id']}"
-                            print(f"  🔍 Рутор (1.1): {rel_url}")
+                            logger.info(f"  🔍 Рутор (1.1): {rel_url}")
                             resp = requests.get(rel_url, timeout=20)
                             if resp.status_code == 200:
                                 from bs4 import BeautifulSoup
@@ -311,7 +313,7 @@ def run_sync(mode="video", manual_min_date=None):
                                     full_h1_title = h1.text.strip()
                                     if "Раздача не существует" not in full_h1_title:
                                         display_title = parser.clean_display_title(full_h1_title)
-                                        print(f"    ✨ Название уточнено: {display_title}")
+                                        logger.info(f"    ✨ Название уточнено: {display_title}")
 
                                 if not rutor_kp_id:
                                     kp_match = re.search(
@@ -324,15 +326,15 @@ def run_sync(mode="video", manual_min_date=None):
                                         )
                                     if kp_match:
                                         rutor_kp_id = kp_match.group(1)
-                                        print(f"    ✅ Нашел KP ID: {rutor_kp_id}")
+                                        logger.info(f"    ✅ Нашел KP ID: {rutor_kp_id}")
 
                                 if not rutor_imdb_id:
                                     imdb_match = re.search(r"imdb\.com/title/(tt\d+)", resp.text)
                                     if imdb_match:
                                         rutor_imdb_id = imdb_match.group(1)
-                                        print(f"    ✅ Нашел IMDb ID: {rutor_imdb_id}")
+                                        logger.info(f"    ✅ Нашел IMDb ID: {rutor_imdb_id}")
                         except Exception as e:
-                            print(f"    ⚠️ Ошибка парсинга страницы: {e}")
+                            logger.warning(f"    ⚠️ Ошибка парсинга страницы: {e}")
 
                         if len(movie_data["releases"]) > 1:
                             time.sleep(0.4)
@@ -343,7 +345,7 @@ def run_sync(mode="video", manual_min_date=None):
                             search_term = re.sub(r"\(.*?\)", "", search_term)
                             search_term = re.sub(r"\[.*?\]", "", search_term).strip()
 
-                            print(f"  🔍 Рутор (1.2 Глубокий поиск): {search_term}")
+                            logger.info(f"  🔍 Рутор (1.2 Глубокий поиск): {search_term}")
                             search_results = parser.search_releases(search_term)
                             matches = [
                                 res
@@ -352,7 +354,7 @@ def run_sync(mode="video", manual_min_date=None):
                             ]
 
                             if matches:
-                                print(f"    🔎 Найдено в архиве: {len(matches)}. Проверяю...")
+                                logger.info(f"    🔎 Найдено в архиве: {len(matches)}. Проверяю...")
                                 for m_idx, m in enumerate(matches[:3]):
                                     if rutor_kp_id and rutor_imdb_id:
                                         break
@@ -371,7 +373,7 @@ def run_sync(mode="video", manual_min_date=None):
                                                 m_kp = re.search(r"film/(\d+)", resp.text)
                                             if m_kp:
                                                 rutor_kp_id = m_kp.group(1)
-                                                print(
+                                                logger.info(
                                                     f"      ✅ Нашел KP ID в архиве: {rutor_kp_id}"
                                                 )
                                         if not rutor_imdb_id:
@@ -380,13 +382,13 @@ def run_sync(mode="video", manual_min_date=None):
                                             )
                                             if m_imdb:
                                                 rutor_imdb_id = m_imdb.group(1)
-                                                print(
+                                                logger.info(
                                                     f"      ✅ Нашел IMDb ID в архиве: {rutor_imdb_id}"
                                                 )
                             else:
-                                print("    ⚠️ В архиве Рутора совпадений не найдено.")
+                                logger.info("    ⚠️ В архиве Рутора совпадений не найдено.")
                         except Exception as e:
-                            print(f"    ⚠️ Ошибка глубокого поиска: {e}")
+                            logger.warning(f"    ⚠️ Ошибка глубокого поиска: {e}")
 
                 poster = ""
                 desc = ""
@@ -396,12 +398,12 @@ def run_sync(mode="video", manual_min_date=None):
 
                 if use_tmdb:
                     if tmdb.is_limited:
-                        print("  ⚠️ Лимит TMDB исчерпан, пропускаю обогащение.")
+                        logger.warning("  ⚠️ Лимит TMDB исчерпан, пропускаю обогащение.")
                         tmdb_data = None
                     else:
                         tmdb_data = None
                         if imdb_id:
-                            print(f"  🔍 TMDB (2.1 по ID): {imdb_id}")
+                            logger.info(f"  🔍 TMDB (2.1 по ID): {imdb_id}")
                             tmdb_data = tmdb.find_by_imdb_id(imdb_id)
                         if not tmdb_data:
                             t_parts = display_title.split(" / ")
@@ -415,7 +417,7 @@ def run_sync(mode="video", manual_min_date=None):
                                 ).strip()
                             search_primary = en_part or ru_part
                             search_alt = ru_part if en_part else None
-                            print(
+                            logger.info(
                                 f"  🔍 TMDB (2.2 поиск): {search_primary}"
                                 + (f" / alt:{search_alt}" if search_alt else "")
                                 + f" ({year})"
@@ -437,11 +439,11 @@ def run_sync(mode="video", manual_min_date=None):
                                     clean_display_title += f" ({year})"
                             if not imdb_id:
                                 imdb_id = tmdb_data.get("imdb_id", "")
-                            print(
+                            logger.info(
                                 f"    🎯 TMDB: данные получены (Постер: {'✅' if poster else '❌'})"
                             )
                         else:
-                            print("    ⚠️ TMDB: ничего не найдено.")
+                            logger.info("    ⚠️ TMDB: ничего не найдено.")
 
                 title_norm = ""
                 search_names = []
@@ -484,7 +486,7 @@ def run_sync(mode="video", manual_min_date=None):
                         imdb_rating=imdb_rating,
                         title=title_norm if title_norm else None,
                     )
-                    print(f"  🔗 НАЙДЕН ДУБЛЬ: {display_title} ({year}) -> id={item_id}")
+                    logger.info(f"  🔗 НАЙДЕН ДУБЛЬ: {display_title} ({year}) -> id={item_id}")
                 else:
                     item_id = db.insert_item(
                         {
@@ -507,10 +509,9 @@ def run_sync(mode="video", manual_min_date=None):
                     db.insert_search_name(item_id, sn, conn=conn)
 
                 if existing_id:
-                    # У же напечатали выше
                     pass
                 else:
-                    print(f"  ➕ ДОБАВЛЕН: {display_title} ({year})")
+                    logger.info(f"  ➕ ДОБАВЛЕН: {display_title} ({year})")
 
             added_any = False
             for rel in movie_data["releases"]:
@@ -519,22 +520,21 @@ def run_sync(mode="video", manual_min_date=None):
                     if _owner_id and _owner_id != item_id:
                         _owner = db.get_item(_owner_id, conn=conn)
                         if _owner:
-                            print(
+                            logger.info(
                                 f"    ⚠️ Релиз {rel['rutor_id']} уже у item {_owner_id} ({_owner['title']})"
                             )
                         else:
-                            print(
+                            logger.info(
                                 f"    ⚠️ Релиз {rel['rutor_id']} осиротевший (item {_owner_id} удалён)"
                             )
                     if db.reassign_release_if_orphan(rel["rutor_id"], item_id, conn=conn):
-                        print(
+                        logger.info(
                             f"    └─ Осиротевший релиз {rel['rutor_id']} переназначен на item {item_id}"
                         )
                     continue
 
-                # Если мы здесь, значит релиза нет в базе. Добавляем.
                 if not is_new_item and not added_any:
-                    print(f"  🔗 Добавлен новый релиз к существующему фильму: {display_title}")
+                    logger.info(f"  🔗 Добавлен новый релиз к существующему фильму: {display_title}")
                     added_any = True
 
                 rel_date = parse_rutor_date(rel["date_str"])
@@ -542,9 +542,8 @@ def run_sync(mode="video", manual_min_date=None):
                     from datetime import datetime
 
                     rel_date = datetime.now().isoformat(sep=" ")
-                    print(
-                        f"    ⚠️  Не удалось разобрать дату '{rel.get('date_str')}', использую текущее время.",
-                        flush=True,
+                    logger.warning(
+                        f"    ⚠️  Не удалось разобрать дату '{rel.get('date_str')}', использую текущее время."
                     )
 
                 db.insert_release(
@@ -559,7 +558,7 @@ def run_sync(mode="video", manual_min_date=None):
                     },
                     conn=conn,
                 )
-                print(
+                logger.info(
                     f"    └─ Новая раздача: [{rel['quality']}] {rel['full_title'][:50]}... ({rel_date})"
                 )
 
@@ -576,10 +575,12 @@ def run_sync(mode="video", manual_min_date=None):
 
     conn.close()
     clear_checkpoint(status_key)
-    print("\n=== Готово! ===")
+    logger.info("\n=== Готово! ===")
 
 
 if __name__ == "__main__":
+    from logging_config import setup_logging
+    logger = setup_logging('parsclode.sync')
     mode = sys.argv[1] if len(sys.argv) > 1 else "video"
     manual_min_date = None
 
@@ -590,7 +591,7 @@ if __name__ == "__main__":
                 manual_min_date = val
             else:
                 MIN_YEAR = int(val)
-                print(f"Переопределен MIN_YEAR: {MIN_YEAR}")
+                logger.info(f"Переопределен MIN_YEAR: {MIN_YEAR}")
         except Exception:
             pass
     if len(sys.argv) > 3:
@@ -600,14 +601,12 @@ if __name__ == "__main__":
                 manual_min_date = val
             else:
                 MAX_YEAR = int(val)
-                print(f"Переопределен MAX_YEAR: {MAX_YEAR}")
+                logger.info(f"Переопределен MAX_YEAR: {MAX_YEAR}")
         except Exception:
             pass
 
     if len(sys.argv) > 4:
         manual_min_date = sys.argv[4]
-
-    if manual_min_date:
-        print(f"Используется ручная дата начала: {manual_min_date}")
+        logger.info(f"Используется ручная дата начала: {manual_min_date}")
 
     run_sync(mode, manual_min_date)

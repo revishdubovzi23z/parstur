@@ -2,8 +2,11 @@ import re
 
 from app_core import normalize_title
 from db import Database
-from logger import setup_tee_logger
+from logging_config import setup_logging
 from settings import settings
+import logging
+
+logger = setup_logging("parsclode.rezka_collections", settings.log_file_path)
 
 REZKA_EMAIL = settings.rezka_email
 REZKA_PASSWORD = settings.rezka_password
@@ -30,7 +33,7 @@ def _login():
 
     session = HdRezkaSession(REZKA_ORIGIN)
     session.login(REZKA_EMAIL, REZKA_PASSWORD)
-    print("  [+] Rezka login OK")
+    logger.info("  [+] Rezka login OK")
     return session
 
 
@@ -299,24 +302,24 @@ def _match_folder_to_collection(folder_name, collections):
 
 
 def sync_rezka_collections():
-    setup_tee_logger("rezka_collections", "rezka_collections_log.txt")
+    setup_logging("rezka_collections", "rezka_collections_log.txt")
 
     if not REZKA_EMAIL or not REZKA_PASSWORD:
-        print("[-] REZKA_EMAIL/REZKA_PASSWORD not set in .env")
+        logger.error("[-] REZKA_EMAIL/REZKA_PASSWORD not set in .env")
         return
 
-    print("=== REZKA COLLECTIONS BIDIRECTIONAL SYNC ===")
+    logger.info("=== REZKA COLLECTIONS BIDIRECTIONAL SYNC ===")
 
     session = _login()
     folders = _get_folders(session)
 
     if not folders:
-        print("[-] No folders found on Rezka")
+        logger.warning("[-] No folders found on Rezka")
         return
 
-    print(f"[*] Found {len(folders)} Rezka folders:")
+    logger.info(f"[*] Found {len(folders)} Rezka folders:")
     for f in folders:
-        print(f"    {f['name']} ({f['count']}) [id={f['id']}]")
+        logger.info(f"    {f['name']} ({f['count']}) [id={f['id']}]")
 
     db = Database()
     conn = db.get_connection()
@@ -348,7 +351,7 @@ def sync_rezka_collections():
         coll = _match_folder_to_collection(folder["name"], collections)
 
         if not coll:
-            print(f"\n  [+] Creating new collection '{folder['name']}'")
+            logger.info(f"\n  [+] Creating new collection '{folder['name']}'")
             db.create_collection(folder["name"])
             conn.commit()
             collections = db.get_collections()
@@ -363,7 +366,7 @@ def sync_rezka_collections():
         label = (
             folder["name"] if folder["name"] == coll_name else f"{folder['name']} -> {coll_name}"
         )
-        print(f"\n  [sync] '{label}' (cat_id={cat_id}, coll_id={coll_id})")
+        logger.info(f"\n  [sync] '{label}' (cat_id={cat_id}, coll_id={coll_id})")
 
         rezka_urls = _get_folder_items(folder["url"], session) if folder["count"] > 0 else []
         rezka_item_ids = set()
@@ -380,10 +383,10 @@ def sync_rezka_collections():
         project_item_ids = {r[0] for r in c.fetchall()}
 
         for rz_url in new_items_from_rezka:
-            print(f"    [new] Parsing Rezka page to create card: {rz_url}")
+            logger.info(f"    [new] Parsing Rezka page to create card: {rz_url}")
             parsed = _parse_rezka_page(rz_url, session)
             if not parsed:
-                print("      [-] Failed to parse page")
+                logger.error("      [-] Failed to parse page")
                 continue
 
             item_id = db.insert_item(parsed, conn=conn)
@@ -397,9 +400,9 @@ def sync_rezka_collections():
                 }
                 rezka_item_ids.add(item_id)
                 total_new_items += 1
-                print(f"      [+] Created card id={item_id}: {parsed['title']}")
+                logger.info(f"      [+] Created card id={item_id}: {parsed['title']}")
             else:
-                print(f"      [?] Could not create card for {rz_url}")
+                logger.warning(f"      [?] Could not create card for {rz_url}")
 
         only_on_rezka = rezka_item_ids - project_item_ids
         only_on_project = project_item_ids - rezka_item_ids
@@ -412,7 +415,7 @@ def sync_rezka_collections():
         if only_on_rezka:
             conn.commit()
             total_rezka_to_project += len(only_on_rezka)
-        print(f"    Rezka -> Project: +{len(only_on_rezka)} items")
+        logger.info(f"    Rezka -> Project: +{len(only_on_rezka)} items")
 
         pushed = 0
         searched = 0
@@ -423,7 +426,7 @@ def sync_rezka_collections():
 
             rz_url = info.get("rezka_url")
             if not rz_url:
-                print(f"    [search] Looking for Rezka URL: {info['title']} ({info['year']})")
+                logger.info(f"    [search] Looking for Rezka URL: {info['title']} ({info['year']})")
                 rz_url = _search_rezka_url(info["title"], info["year"], session)
                 if rz_url:
                     db.fill_item_metadata(item_id, conn=conn, rezka_url=rz_url, checked_rezka=1)
@@ -432,9 +435,9 @@ def sync_rezka_collections():
                     all_items[item_id]["rezka_url"] = rz_url
                     searched += 1
                     total_new_urls += 1
-                    print(f"      [+] Found: {rz_url}")
+                    logger.info(f"      [+] Found: {rz_url}")
                 else:
-                    print("      [-] Not found on Rezka")
+                    logger.info("      [-] Not found on Rezka")
                     continue
 
             post_id = _extract_post_id(rz_url)
@@ -443,21 +446,21 @@ def sync_rezka_collections():
                 if ok:
                     pushed += 1
                 else:
-                    print(f"      [!] Failed to push post {post_id} to Rezka")
+                    logger.error(f"      [!] Failed to push post {post_id} to Rezka")
 
         total_project_to_rezka += pushed
-        print(
+        logger.info(
             f"    Project -> Rezka: +{pushed} items pushed ({searched} Rezka URLs found by search)"
         )
 
         final_count = len(rezka_item_ids & (project_item_ids | only_on_rezka))
-        print(f"    Collection '{coll_name}' total: {final_count + pushed} items")
+        logger.info(f"    Collection '{coll_name}' total: {final_count + pushed} items")
 
-    print("\n=== SYNC COMPLETE ===")
-    print(f"  Rezka -> Project: +{total_rezka_to_project} items added to collections")
-    print(f"  Project -> Rezka: +{total_project_to_rezka} items pushed to Rezka")
-    print(f"  New cards created from Rezka: {total_new_items}")
-    print(f"  New Rezka URLs found by search: {total_new_urls}")
+    logger.info("\n=== SYNC COMPLETE ===")
+    logger.info(f"  Rezka -> Project: +{total_rezka_to_project} items added to collections")
+    logger.info(f"  Project -> Rezka: +{total_project_to_rezka} items pushed to Rezka")
+    logger.info(f"  New cards created from Rezka: {total_new_items}")
+    logger.info(f"  New Rezka URLs found by search: {total_new_urls}")
     conn.close()
 
 

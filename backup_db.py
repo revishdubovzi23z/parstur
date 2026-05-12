@@ -28,8 +28,11 @@ import os
 import sys
 import time
 from datetime import datetime, timezone
+import logging
 
 from db import db
+
+logger = logging.getLogger("parsclode.backup")
 
 
 def _default_dest(out_dir: str = "backups") -> str:
@@ -62,7 +65,7 @@ def _rotate(out_dir: str, keep: int) -> list[str]:
                 os.unlink(path)
                 removed.append(path)
             except OSError as e:
-                print(f"[backup] couldn't delete {path}: {e}", file=sys.stderr)
+                logger.error(f"[backup] couldn't delete {path}: {e}")
     return removed
 
 
@@ -96,15 +99,15 @@ def main(argv: list[str] | None = None) -> int:
     try:
         size = db.backup_to(dest, pages=args.pages)
     except Exception as e:
-        print(f"[backup] FAILED: {type(e).__name__}: {e}", file=sys.stderr)
+        logger.error(f"[backup] FAILED: {type(e).__name__}: {e}", exc_info=True)
         return 2
 
     elapsed = time.monotonic() - started
-    print(f"[backup] wrote {dest} ({size} bytes) in {elapsed:.2f}s")
+    logger.info(f"[backup] wrote {dest} ({size} bytes) in {elapsed:.2f}s")
 
     removed = _rotate(args.out_dir if not args.out else os.path.dirname(dest), args.rotate)
     for r in removed:
-        print(f"[backup] rotated out {r}")
+        logger.info(f"[backup] rotated out {r}")
     return 0
 
 

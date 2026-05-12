@@ -28,11 +28,11 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from db import db
-from logger import setup_logger
+from logging_config import setup_logging
 from script_utils import clear_checkpoint, clear_stop_flag, load_config
 from settings import settings
 
-logger = setup_logger("parsclode.main", settings.log_file_path)
+logger = setup_logging("parsclode.main", settings.log_file_path)
 
 # load_dotenv() - redundant, settings.py handles this
 
@@ -51,32 +51,29 @@ class TaskQueue:
     async def add_task(self, coro_func, status_key, *args, **kwargs):
         global process_status
         process_status[status_key] = "queued"
-        print(f"[QUEUE] Task added: {status_key}")
+        logger.info(f"[QUEUE] Task added: {status_key}")
         await self.queue.put((coro_func, status_key, args, kwargs))
 
     async def worker(self):
-        print("[WORKER] Started and waiting for tasks...")
+        logger.info("[WORKER] Started and waiting for tasks...")
         while True:
             coro_func, status_key, args, kwargs = await self.queue.get()
             try:
-                print(f"[WORKER] Executing task: {status_key} ({coro_func.__name__})")
+                logger.info(f"[WORKER] Executing task: {status_key} ({coro_func.__name__})")
                 await coro_func(*args, **kwargs)
-                print(f"[WORKER] Task finished: {status_key}")
+                logger.info(f"[WORKER] Task finished: {status_key}")
             except Exception as e:
-                print(f"[WORKER] Error in task {status_key}: {e}")
-                import traceback
-
-                traceback.print_exc()
+                logger.error(f"[WORKER] Error in task {status_key}: {e}", exc_info=True)
             finally:
                 self.queue.task_done()
 
     def start(self):
-        print("[QUEUE] Starting worker task...")
+        logger.info("[QUEUE] Starting worker task...")
         self.worker_task = asyncio.create_task(self.worker())
 
     def stop(self):
         if self.worker_task:
-            print("[QUEUE] Stopping worker task...")
+            logger.info("[QUEUE] Stopping worker task...")
             self.worker_task.cancel()
 
 
@@ -181,7 +178,7 @@ def _broadcast_threadsafe(message: dict) -> None:
     try:
         asyncio.run_coroutine_threadsafe(ws_manager.broadcast(message), _main_loop)
     except Exception as e:
-        print(f"[WS] threadsafe broadcast failed: {type(e).__name__}: {e}")
+        logger.error(f"[WS] threadsafe broadcast failed: {type(e).__name__}: {e}")
 
 
 # 6.1 — replaces the deprecated @app.on_event("startup"/"shutdown")
@@ -194,7 +191,7 @@ def _broadcast_threadsafe(message: dict) -> None:
 @asynccontextmanager
 async def lifespan(_app):
     # ── startup ────────────────────────────────────────────────────
-    print("[SERVER] Startup event triggered")
+    logger.info("[SERVER] Startup event triggered")
     # 6.3 — capture the running loop so threads spawned via
     # run_in_executor can schedule coroutines back on it via
     # asyncio.run_coroutine_threadsafe.
@@ -212,18 +209,18 @@ async def lifespan(_app):
         db.init_schema()
         db.check_and_migrate_schema()
     except Exception as e:
-        print(f"[DB] schema init failed: {type(e).__name__}: {e}")
+        logger.error(f"[DB] schema init failed: {type(e).__name__}: {e}", exc_info=True)
     task_queue.start()
     try:
         db.ensure_fts_indexed()
     except Exception as e:
-        print(f"[FTS5] Index init skipped: {e}")
+        logger.warning(f"[FTS5] Index init skipped: {e}")
     # Run one checkpoint at boot so the *previous* run's WAL is reaped
     # immediately rather than waiting WAL_CHECKPOINT_INTERVAL_SECONDS.
     try:
         await asyncio.to_thread(db.wal_checkpoint, "TRUNCATE")
     except Exception as e:
-        print(f"[WAL] startup checkpoint skipped: {type(e).__name__}: {e}")
+        logger.warning(f"[WAL] startup checkpoint skipped: {type(e).__name__}: {e}")
     global _wal_checkpoint_task, _session_gc_task, _rezka_retry_task
     _wal_checkpoint_task = asyncio.create_task(_wal_checkpoint_loop())
     _session_gc_task = asyncio.create_task(_session_gc_loop())
@@ -232,7 +229,7 @@ async def lifespan(_app):
     yield
 
     # ── shutdown ───────────────────────────────────────────────────
-    print("[SERVER] Shutdown event triggered")
+    logger.info("[SERVER] Shutdown event triggered")
     if _wal_checkpoint_task is not None:
         _wal_checkpoint_task.cancel()
         try:
@@ -262,7 +259,7 @@ async def lifespan(_app):
         if key in ("active_pipeline_proc", "active_pipeline_key"):
             continue
         if proc and proc.returncode is None:
-            print(f"[SHUTDOWN] Writing stop flag for: {key}")
+            logger.info(f"[SHUTDOWN] Writing stop flag for: {key}")
             flag_path = os.path.join(settings.app_data_dir, f"stop_{key}.flag")
             with open(flag_path, "w") as f:
                 f.write("stop")
@@ -271,7 +268,7 @@ async def lifespan(_app):
         if key in ("active_pipeline_proc", "active_pipeline_key"):
             continue
         if proc and proc.returncode is None:
-            print(f"[SHUTDOWN] Force terminating: {key}")
+            logger.info(f"[SHUTDOWN] Force terminating: {key}")
             proc.terminate()
     task_queue.stop()
 
@@ -422,11 +419,11 @@ def _rezka_request(method: str, url: str, **kwargs):
     resp = _req.request(method, url, **kwargs)
     if not _rezka_session_dead(resp):
         return resp
-    print(f"[REZKA] session looks dead (status={resp.status_code}, url={url}); re-login")
+    logger.warning(f"[REZKA] session looks dead (status={resp.status_code}, url={url}); re-login")
     try:
         _init_rezka_session()
     except Exception as e:
-        print(f"[REZKA] re-login failed: {type(e).__name__}: {e}")
+        logger.error(f"[REZKA] re-login failed: {type(e).__name__}: {e}", exc_info=True)
         return resp
     if rezka_session is None:
         # Re-login itself failed (e.g. credentials wrong now).
@@ -473,9 +470,9 @@ def _refresh_rezka_folders_cache():
                 if m:
                     folders[normalize_title(name)] = m.group(1)
         rezka_session_folders_cache = folders
-        print(f"[REZKA] Folders cache refreshed: {len(folders)} folders")
+        logger.info(f"[REZKA] Folders cache refreshed: {len(folders)} folders")
     except Exception as e:
-        print(f"[REZKA] Folders cache refresh failed: {e}")
+        logger.error(f"[REZKA] Folders cache refresh failed: {e}", exc_info=True)
         rezka_session_folders_cache = None
 
 
@@ -754,11 +751,11 @@ async def _wal_checkpoint_loop() -> None:
                 # A long-running reader/writer held the WAL; not fatal,
                 # the next tick will retry. Worth logging once so the
                 # operator knows why the sidecar didn't shrink.
-                print(f"[WAL] checkpoint busy (log_pages={log_pages}, checkpointed={ckpt_pages})")
+                logger.warning(f"[WAL] checkpoint busy (log_pages={log_pages}, checkpointed={ckpt_pages})")
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            print(f"[WAL] checkpoint error: {type(e).__name__}: {e}")
+            logger.error(f"[WAL] checkpoint error: {type(e).__name__}: {e}", exc_info=True)
 
 
 async def _session_gc_loop() -> None:
@@ -917,7 +914,7 @@ async def run_script(script_name, status_key):
 
     script_path = os.path.abspath(script_name)
     if not os.path.exists(script_path):
-        print(f"[WORKER] Script not found: {script_path}")
+        logger.error(f"[WORKER] Script not found: {script_path}")
         process_status[status_key] = "error"
         return
 
@@ -934,7 +931,7 @@ async def run_script(script_name, status_key):
         await proc.wait()
         process_status[status_key] = "completed" if proc.returncode == 0 else "stopped"
     except Exception as e:
-        print(f"Ошибка при запуске {script_name}: {e}")
+        logger.error(f"Ошибка при запуске {script_name}: {e}", exc_info=True)
         process_status[status_key] = "error"
     finally:
         running_processes[status_key] = None
@@ -983,7 +980,7 @@ async def run_pipeline_task():
     try:
         for script, args, key, log in steps:
             if pipeline_stop_requested:
-                print("ПАЙПЛАЙН ОСТАНОВЛЕН ПОЛЬЗОВАТЕЛЕМ")
+                logger.info("ПАЙПЛАЙН ОСТАНОВЛЕН ПОЛЬЗОВАТЕЛЕМ")
                 break
 
             # Запускаем шаг и ждем его завершения
@@ -991,7 +988,7 @@ async def run_pipeline_task():
 
             # Если шаг был остановлен или упал с ошибкой - прерываем цепочку
             if process_status[key] in ["stopped", "error"]:
-                print(f"Шаг {key} завершился со статусом {process_status[key]}. Прерываю цикл.")
+                logger.warning(f"Шаг {key} завершился со статусом {process_status[key]}. Прерываю цикл.")
                 break
 
         if pipeline_stop_requested:
@@ -1000,7 +997,7 @@ async def run_pipeline_task():
             process_status["full_pipeline"] = "completed"
 
     except Exception as e:
-        print(f"ОШИБКА В ПАЙПЛАЙНЕ: {e}")
+        logger.error(f"ОШИБКА В ПАЙПЛАЙНЕ: {e}", exc_info=True)
         process_status["full_pipeline"] = "error"
     finally:
         pipeline_stop_requested = False
@@ -1086,7 +1083,7 @@ async def run_script_with_args(
     # Используем абсолютный путь к скрипту
     script_path = os.path.abspath(script_name)
     if not os.path.exists(script_path):
-        print(f"[WORKER] Script not found: {script_path}")
+        logger.error(f"[WORKER] Script not found: {script_path}")
         process_status[status_key] = "error"
         return
 
@@ -1100,7 +1097,7 @@ async def run_script_with_args(
     status = "completed"
 
     try:
-        print(f"[WORKER] Starting process: {sys.executable} -u {script_path} {args}")
+        logger.info(f"[WORKER] Starting process: {sys.executable} -u {script_path} {args}")
 
         # Запускаем через PIPE для надежного чтения вывода в asyncio
         # Флаг -u отключает буферизацию вывода в самом Python
@@ -1114,7 +1111,7 @@ async def run_script_with_args(
             env=env,
         )
 
-        print(f"[WORKER] Process started with PID: {proc.pid}")
+        logger.info(f"[WORKER] Process started with PID: {proc.pid}")
         running_processes[status_key] = proc
         if is_pipeline_step:
             running_processes["active_pipeline_proc"] = proc
@@ -1146,10 +1143,6 @@ async def run_script_with_args(
                         }
                     )
 
-                    # 6.2 — `time.monotonic()` is exactly what
-                    # `loop.time()` returns under the hood (see
-                    # asyncio source) and avoids the deprecated
-                    # `get_event_loop()` call here.
                     now = time.monotonic()
                     if now - last_progress_broadcast > 1.0:
                         last_progress_broadcast = now
@@ -1176,16 +1169,12 @@ async def run_script_with_args(
             status = "error"
 
     except Exception as e:
-        print(f"Ошибка при выполнении {script_name}: {e}")
-        import traceback
-
-        tb = traceback.format_exc()
-        print(tb)
+        logger.error(f"Ошибка при выполнении {script_name}: {e}", exc_info=True)
         if log_file:
             try:
                 with open(log_file, "a", encoding="utf-8") as f:
                     f.write(f"\n[CRITICAL ERROR] Не удалось запустить процесс: {e}\n")
-                    f.write(tb)
+                    f.write(traceback.format_exc())
             except Exception:
                 pass
         status = "error"
@@ -1241,7 +1230,7 @@ async def run_script_with_args(
                 status,
             )
         except Exception as e:
-            print(f"Ошибка записи истории: {e}")
+            logger.error(f"Ошибка записи истории: {e}", exc_info=True)
 
 
 @app.post("/api/start_sync_rezka")
@@ -1531,11 +1520,9 @@ def _rezka_folder_action(action: str, params: dict):
             timeout=10,
         )
         if resp is not None:
-            result = resp.json()
-            _refresh_rezka_folders_cache()
-            return result
+            return resp.json()
     except Exception as e:
-        print(f"[REZKA FOLDER ACTION ERROR] {e}")
+        logger.error(f"[REZKA FOLDER ACTION ERROR] {e}", exc_info=True)
     return None
 
 
@@ -1792,11 +1779,7 @@ def _sync_rezka_folder(action, collection_id, item_id):
         )
         _refresh_rezka_folders_cache()
     except Exception as e:
-        print(f"[REZKA SYNC ERROR] {e}")
-        try:
-            _init_rezka_session()
-        except Exception:
-            pass
+        logger.error(f"[REZKA SYNC ERROR] {e}", exc_info=True)
 
 
 def _sync_rezka_folder_wrapper(action, collection_id, item_id):
@@ -1886,7 +1869,7 @@ def _recover_rezka_url(item_id: int, old_url: str) -> str | None:
             conn.execute("UPDATE items SET rezka_url = ? WHERE id = ?", (url, item_id))
             conn.commit()
             conn.close()
-            print(f"[REZKA] URL recovered for item {item_id}: {old_url} -> {url}")
+            logger.info(f"[REZKA] URL recovered for item {item_id}: {old_url} -> {url}")
             return url
     return None
 
@@ -2283,7 +2266,7 @@ async def backup_download():
             {"error": f"{type(e).__name__}: {e}"},
             status_code=500,
         )
-    print(f"[BACKUP] wrote {dest} ({size} bytes)")
+    logger.info(f"[BACKUP] wrote {dest} ({size} bytes)")
     return FileResponse(
         dest,
         media_type="application/octet-stream",

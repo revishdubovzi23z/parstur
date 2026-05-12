@@ -50,7 +50,7 @@ class PoiskKinoClient(BaseMovieClient):
             if result:
                 return self._parse_result(result)
         except Exception as e:
-            print(f"Ошибка PoiskKino get_by_id ({kp_id}): {e}")
+            self.logger.error(f"Ошибка PoiskKino get_by_id ({kp_id}): {e}", exc_info=True)
             self.network_error = True
         return None
 
@@ -75,7 +75,7 @@ class PoiskKinoClient(BaseMovieClient):
                     return self._parse_result(result)
                 return None
             except Exception as e:
-                print(f"Ошибка при запросе к PoiskKino API: {e}")
+                self.logger.error(f"Ошибка при запросе к PoiskKino API: {e}", exc_info=True)
                 self.network_error = True
                 time.sleep(1)
 
@@ -83,5 +83,8 @@ class PoiskKinoClient(BaseMovieClient):
 
 
 if __name__ == "__main__":
+    from logging_config import setup_logging
+    setup_logging("poiskkino_test")
     client = PoiskKinoClient()
-    print(client.search_movie("Матрица", 1999))
+    res = client.search_movie("Матрица", 1999)
+    logging.getLogger("poiskkino_test").info(res)

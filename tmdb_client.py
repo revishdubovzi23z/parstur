@@ -1,5 +1,8 @@
 import re
 import time
+import logging
+
+logger = logging.getLogger("parsclode.client.tmdb")
 
 from api_cache import get_cached_session
 from settings import settings
@@ -37,13 +40,9 @@ class TMDBClient:
             resp = self.session.get(url, params=params, headers=self.headers, timeout=5)
             if resp.status_code == 200:
                 return resp.json().get("imdb_id")
-            # Surface non-2xx so the operator can tell when TMDB is
-            # silently dropping requests (3.18). Previously we just
-            # returned None and the caller had no way to distinguish
-            # 'no IMDb id mapped' from 'request failed'.
-            print(f"TMDB external_ids({media_type}, {tmdb_id}) -> HTTP {resp.status_code}")
+            logger.warning(f"TMDB external_ids({media_type}, {tmdb_id}) -> HTTP {resp.status_code}")
         except Exception as e:
-            print(f"TMDB external_ids({media_type}, {tmdb_id}) failed: {type(e).__name__}: {e}")
+            logger.error(f"TMDB external_ids({media_type}, {tmdb_id}) failed: {type(e).__name__}: {e}", exc_info=True)
         return None
 
     def get_videos(self, media_type, tmdb_id):
@@ -75,7 +74,7 @@ class TMDBClient:
                     if results:
                         return results
             except Exception as e:
-                print(f"TMDB get_videos({media_type},{tmdb_id},{lang}): {type(e).__name__}: {e}")
+                logger.error(f"TMDB get_videos({media_type},{tmdb_id},{lang}): {type(e).__name__}: {e}", exc_info=True)
         return []
 
     def find_by_imdb_id(self, imdb_id, return_meta=False):
@@ -125,7 +124,7 @@ class TMDBClient:
                         out["media_type"] = "movie" if movie_hits else "tv"
                     return out
         except Exception as e:
-            print(f"Ошибка TMDB find_by_imdb_id ({imdb_id}): {e}")
+            logger.error(f"Ошибка TMDB find_by_imdb_id ({imdb_id}): {e}", exc_info=True)
         return None
 
     def search_movie(self, title, year=None, alt_title=None):
@@ -228,7 +227,7 @@ class TMDBClient:
                             }
                     break
                 except Exception as e:
-                    print(f"Ошибка при запросе к TMDB: {e}")
+                    logger.error(f"Ошибка при запросе к TMDB: {e}", exc_info=True)
                     time.sleep(1)
 
         if not candidates:
@@ -252,12 +251,13 @@ class TMDBClient:
 
 
 if __name__ == "__main__":
+    from logging_config import setup_logging
+    setup_logging("tmdb_test")
     client = TMDBClient()
-    print("Тест: 'The Bride!' 2026 (alt='Невеста!')")
     result = client.search_movie("The Bride!", 2026, alt_title="Невеста!")
     if result:
-        print(f"Название: {result['title']}")
-        print(f"Оригинал: {result['original_title']}")
-        print(f"Постер: {'да' if result['poster_url'] else 'нет'}")
+        logger.info(f"Название: {result['title']}")
+        logger.info(f"Оригинал: {result['original_title']}")
+        logger.info(f"Постер: {'да' if result['poster_url'] else 'нет'}")
     else:
-        print("Не найдено")
+        logger.info("Не найдено")

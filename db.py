@@ -3,6 +3,9 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
 from functools import lru_cache
+import logging
+
+logger = logging.getLogger("parsclode.db")
 
 from app_core import RUTOR_CATEGORIES, VIDEO_CATEGORY_IDS
 
@@ -589,7 +592,7 @@ class Database:
                 # — safe because `target` is parsed from a fixed
                 # filename regex and not user data.
                 c.executescript(f"BEGIN;\n{script}\nPRAGMA user_version = {target};\nCOMMIT;")
-                print(f"[DB] applied migration {fname} (user_version -> {target})")
+                logger.info(f"[DB] applied migration {fname} (user_version -> {target})")
                 current_version = target
 
     # ── Items ──────────────────────────────────────────────────────
@@ -1414,7 +1417,7 @@ class Database:
                         "INSERT INTO items_fts(rowid, title, original_title, title_norm) SELECT id, title, original_title, title_norm FROM items"
                     )
         except Exception as e:
-            print(f"[FTS5] Index init skipped: {e}")
+            logger.warning(f"[FTS5] Index init skipped: {e}")
 
     # ── Job History ─────────────────────────────────────────────────
 

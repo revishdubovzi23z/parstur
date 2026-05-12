@@ -7,7 +7,7 @@ import requests
 
 from app_core import VIDEO_CATEGORY_IDS
 from db import Database
-from logger import setup_tee_logger
+from logging_config import setup_logging
 from script_utils import clear_stop_flag, load_config, should_stop
 from settings import settings
 from tmdb_client import TMDBClient
@@ -41,6 +41,7 @@ _config = load_config()
 REPROCESS_BATCH_SIZE = _config.get("reprocess", {}).get("batch_size", 100)
 REPROCESS_REQUEST_DELAY = _config.get("reprocess", {}).get("request_delay", 0.5)
 STATUS_KEY = settings.status_key
+logger = setup_logging("parsclode.reprocess", "reprocess_log.txt")
 
 
 def has_garbage_title(title):
@@ -57,12 +58,12 @@ def report_progress(current, total, status_key="reprocess"):
 
 
 def reprocess_all(force_all=False, specific_id=None):
-    setup_tee_logger("reprocess", "reprocess_log.txt")
+    logger = setup_logging("parsclode.reprocess", "reprocess_log.txt")
     clear_stop_flag(STATUS_KEY)
     db = Database()
     conn = db.get_connection()
 
-    print("Подключено к БД. Режим WAL включен.", flush=True)
+    logger.info("Подключено к БД. Режим WAL включен.")
 
     cats_ph = ",".join(["?"] * len(VIDEO_CATEGORY_IDS))
     garbage_like = " OR ".join(["items.title LIKE ?" for _ in GARBAGE_KEYWORDS[:6]])
@@ -91,10 +92,10 @@ def reprocess_all(force_all=False, specific_id=None):
     tmdb = TMDBClient()
 
     mode_str = "ПОЛНОЕ ОБНОВЛЕНИЕ" if force_all else "УМНАЯ ПРОВЕРКА"
-    print(f"=== ЗАПУСК: {mode_str} ===", flush=True)
+    logger.info(f"=== ЗАПУСК: {mode_str} ===")
 
     total_to_process = db.get_items_count(where_clause, where_params, conn=conn)
-    print(f"Найдено элементов для обработки: {total_to_process}", flush=True)
+    logger.info(f"Найдено элементов для обработки: {total_to_process}")
 
     total_updated = 0
     total_fixed_all = 0
@@ -124,18 +125,17 @@ def reprocess_all(force_all=False, specific_id=None):
         if not items:
             report_progress(total_to_process, total_to_process)
             if total_updated == 0:
-                print("💎 Все карточки полностью заполнены!", flush=True)
+                logger.info("💎 Все карточки полностью заполнены!")
             else:
-                print(
-                    f"\n✅ Обработка завершена. Всего обновлено: {total_updated}, полностью заполнено: {total_fixed_all}",
-                    flush=True,
+                logger.info(
+                    f"\n✅ Обработка завершена. Всего обновлено: {total_updated}, полностью заполнено: {total_fixed_all}"
                 )
             break
 
-        print(f"\n📦 Обработка пакета из {len(items)} карточек...", flush=True)
+        logger.info(f"\n📦 Обработка пакета из {len(items)} карточек...")
         for idx, row in enumerate(items, 1):
             if should_stop(STATUS_KEY):
-                print("[STOP] Graceful shutdown requested.", flush=True)
+                logger.info("[STOP] Graceful shutdown requested.")
                 conn.close()
                 return
 
@@ -154,7 +154,7 @@ def reprocess_all(force_all=False, specific_id=None):
             final_title = old_title
 
             if tmdb.is_limited:
-                print("\n[!] Лимит TMDB исчерпан. Остановка процесса.", flush=True)
+                logger.warning("\n[!] Лимит TMDB исчерпан. Остановка процесса.")
                 conn.close()
                 return
 
@@ -172,9 +172,8 @@ def reprocess_all(force_all=False, specific_id=None):
             if has_garbage_title(old_title):
                 needs.append("чистое название")
 
-            print(f"\n[{total_updated + idx}] 🎬 {old_title}", flush=True)
             if needs:
-                print(f"  📋 Нужно: {', '.join(needs)}", flush=True)
+                logger.info(f"  📋 Нужно: {', '.join(needs)}")
 
             changes = []
 
@@ -191,9 +190,8 @@ def reprocess_all(force_all=False, specific_id=None):
                     try:
                         time.sleep(0.3)
                         MIRROR = RUTOR_MIRROR
-                        print(
-                            f"  🔍 Рутор (1.1): {MIRROR}/torrent/{rel_rutor_id}",
-                            flush=True,
+                        logger.info(
+                            f"  🔍 Рутор (1.1): {MIRROR}/torrent/{rel_rutor_id}"
                         )
                         resp = requests.get(f"{MIRROR}/torrent/{rel_rutor_id}", timeout=20)
                         if resp.status_code == 200:
@@ -215,9 +213,9 @@ def reprocess_all(force_all=False, specific_id=None):
                                     imdb_id = m.group(1)
                                     changes.append(f"    ✅ Нашел IMDb ID: {imdb_id}")
                         else:
-                            print(f"    ⚠️ Ошибка Rutor: {resp.status_code}", flush=True)
+                            logger.warning(f"    ⚠️ Ошибка Rutor: {resp.status_code}")
                     except Exception as e:
-                        print(f"    ⚠️ Ошибка глубокого поиска: {e}", flush=True)
+                        logger.warning(f"    ⚠️ Ошибка глубокого поиска: {e}")
 
             tmdb_data = None
             if not poster or not desc or not imdb_rating or has_garbage_title(old_title):
@@ -236,7 +234,7 @@ def reprocess_all(force_all=False, specific_id=None):
                         search_alt = ru_part if en_part else None
                         tmdb_data = tmdb.search_movie(search_primary, year, alt_title=search_alt)
                     if tmdb_data:
-                        print("  ✅ Данные в TMDB получены", flush=True)
+                        logger.info("  ✅ Данные в TMDB получены")
                         if not imdb_id and tmdb_data.get("imdb_id"):
                             imdb_id = tmdb_data["imdb_id"]
                             changes.append(f"    🎯 Нашел IMDb ID (через TMDB): {imdb_id}")
@@ -261,12 +259,12 @@ def reprocess_all(force_all=False, specific_id=None):
                             if new_orig:
                                 original_title = new_orig
                     else:
-                        print("  ⚠️ TMDB: ничего не найдено", flush=True)
+                        logger.info("  ⚠️ TMDB: ничего не найдено")
                 except Exception as e:
-                    print(f"    ⚠️ Ошибка TMDB: {e}", flush=True)
+                    logger.warning(f"    ⚠️ Ошибка TMDB: {e}")
 
             for c in changes:
-                print(c, flush=True)
+                logger.info(c)
 
             all_ok = (
                 poster
@@ -279,10 +277,10 @@ def reprocess_all(force_all=False, specific_id=None):
             is_fixed = 1 if all_ok else 0
 
             if is_fixed:
-                print("  ✅ Карточка полностью заполнена.", flush=True)
+                logger.info("  ✅ Карточка полностью заполнена.")
                 total_fixed_all += 1
             elif not changes:
-                print("  💎 Изменений не найдено.", flush=True)
+                logger.info("  💎 Изменений не найдено.")
                 if kp_id and imdb_id:
                     is_fixed = 1
                     total_fixed_all += 1
@@ -304,9 +302,8 @@ def reprocess_all(force_all=False, specific_id=None):
                 conn.commit()
                 total_updated += 1
             except Exception:
-                print(
-                    f"  🔗 Обнаружен дубликат для '{final_title}'. Сливаю карточки...",
-                    flush=True,
+                logger.info(
+                    f"  🔗 Обнаружен дубликат для '{final_title}'. Сливаю карточки..."
                 )
                 existing_id = db.find_duplicate_item_id(
                     final_title, year, row["category_id"], item_id, conn=conn
@@ -316,7 +313,7 @@ def reprocess_all(force_all=False, specific_id=None):
                     db.update_item(existing_id, conn=conn, is_reprocessed=1)
                     db.delete_item(item_id, conn=conn)
                     conn.commit()
-                    print(f"  ✅ Успешно слито с карточкой ID {existing_id}", flush=True)
+                    logger.info(f"  ✅ Успешно слито с карточкой ID {existing_id}")
                 else:
                     db.update_item(item_id, conn=conn, is_reprocessed=1)
                     conn.commit()

@@ -2,8 +2,11 @@ import re
 from difflib import SequenceMatcher
 
 from db import Database
-from logger import setup_tee_logger
+from logging_config import setup_logging
 from script_utils import load_config
+from settings import settings
+
+logger = setup_logging("parsclode.cleanup", "cleanup_log.txt")
 
 # 5.11 — tunables loaded from config.json (with the historical
 # hard-coded values as fallbacks). Operators can now tune these
@@ -60,10 +63,10 @@ def get_item_score(item):
 
 
 def merge_duplicates():
-    setup_tee_logger("cleanup", "cleanup_log.txt")
-    print("\n" + "=" * 50)
-    print("=== ЗАПУСК ГЛУБОКОЙ ОЧИСТКИ ДУБЛИКАТОВ ===")
-    print("=" * 50)
+    logger = setup_logging("parsclode.cleanup", "cleanup_log.txt")
+    logger.info("\n" + "=" * 50)
+    logger.info("=== ЗАПУСК ГЛУБОКОЙ ОЧИСТКИ ДУБЛИКАТОВ ===")
+    logger.info("=" * 50)
 
     db = Database()
     conn = db.get_connection()
@@ -135,11 +138,12 @@ def merge_duplicates():
             if reason in ("Kinopoisk ID", "IMDb ID", "Rezka URL"):
                 # External id matches: strong signal, but if years are
                 # known and differ by more than one, demand a strict
+                # differ by more than one, demand a strict
                 # similarity bar before merging — different remakes /
                 # spin-offs can share an external id by accident.
                 if year_known and not same_year:
                     if similarity < NAME_SIMILARITY_STRICT:
-                        print(
+                        logger.info(
                             f"  [ПРОПУСК ({reason}, разные годы)] "
                             f"'{dup['title']}' ({dup['year']}) != "
                             f"'{master['title']}' ({master['year']}) "
@@ -147,7 +151,7 @@ def merge_duplicates():
                         )
                         continue
                 elif similarity < NAME_SIMILARITY_FUZZY:
-                    print(
+                    logger.info(
                         f"  [ПРОПУСК ({reason})] "
                         f"'{dup['title']}' ({dup['year']}) != "
                         f"'{master['title']}' ({master['year']}) "
@@ -162,7 +166,7 @@ def merge_duplicates():
                 ):
                     continue
 
-            print(
+            logger.info(
                 f"  [СЛИЯНИЕ ({reason})] '{dup['title']}' ({dup['year']}) -> '{master['title']}' ({master['year']})"
             )
 
@@ -179,19 +183,19 @@ def merge_duplicates():
             merged_ids.add(dup_id)
             merged_total += 1
 
-    print("--- Поиск по Kinopoisk ID ---")
+    logger.info("--- Поиск по Kinopoisk ID ---")
     for kp, items in kp_groups.items():
         do_merge(items, "Kinopoisk ID")
 
-    print("--- Поиск по IMDb ID ---")
+    logger.info("--- Поиск по IMDb ID ---")
     for imdb, items in imdb_groups.items():
         do_merge(items, "IMDb ID")
 
-    print("--- Поиск по Rezka URL ---")
+    logger.info("--- Поиск по Rezka URL ---")
     for url, items in rezka_groups.items():
         do_merge(items, "Rezka URL")
 
-    print("--- Поиск по названию и году ---")
+    logger.info("--- Поиск по названию и году ---")
     for key, items in name_groups.items():
         active_items = [it for it in items if it["id"] not in merged_ids]
         if len(active_items) < 2:
@@ -204,13 +208,13 @@ def merge_duplicates():
         # duplicate runs — refuse to do an O(N^2) merge over them.
         if len(active_items) > NAME_GROUP_MAX:
             sample = ", ".join(repr(it["title"]) for it in active_items[:3])
-            print(
+            logger.warning(
                 f"[CLEANUP] skipping name group {key!r}: "
                 f"size={len(active_items)} > {NAME_GROUP_MAX} (sample: {sample})"
             )
             continue
         if len(active_items) >= NAME_GROUP_WARN:
-            print(f"[CLEANUP] large name group {key!r}: size={len(active_items)} (proceeding)")
+            logger.info(f"[CLEANUP] large name group {key!r}: size={len(active_items)} (proceeding)")
 
         active_items.sort(key=get_item_score, reverse=True)
 
@@ -234,9 +238,9 @@ def merge_duplicates():
 
     conn.commit()
     conn.close()
-    print("=" * 50)
-    print(f"=== ГОТОВО! Удалено {merged_total} дубликатов. ===")
-    print("=" * 50)
+    logger.info("=" * 50)
+    logger.info(f"=== ГОТОВО! Удалено {merged_total} дубликатов. ===")
+    logger.info("=" * 50)
 
 
 if __name__ == "__main__":

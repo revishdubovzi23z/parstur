@@ -4,7 +4,7 @@ import time
 
 from db import Database
 from kinopoisk_client import KinopoiskClient
-from logger import setup_tee_logger
+from logging_config import setup_logging
 from poiskkino_client import PoiskKinoClient
 from script_utils import clear_stop_flag, load_config, should_stop
 from settings import settings
@@ -13,10 +13,10 @@ _config = load_config()
 FIX_BATCH_SIZE = _config.get("fix_posters", {}).get("batch_size", 300)
 FIX_REQUEST_DELAY = _config.get("fix_posters", {}).get("request_delay", 0.5)
 STATUS_KEY = settings.status_key
+logger = setup_logging("parsclode.fix", "fix_log.txt")
 
 
 def fix_metadata(api_type="tech"):
-    setup_tee_logger("fix", "fix_log.txt")
     clear_stop_flag(STATUS_KEY)
     if api_type == "tech":
         client = KinopoiskClient()
@@ -25,7 +25,7 @@ def fix_metadata(api_type="tech"):
         client = PoiskKinoClient()
         api_name = "PoiskKino (Dev)"
 
-    print(f"\n\n=== ЗАПУСК: {api_name} ({time.strftime('%H:%M:%S')}) ===")
+    logger.info(f"\n\n=== ЗАПУСК: {api_name} ({time.strftime('%H:%M:%S')}) ===")
     check_col = f"checked_{api_type}"
 
     db = Database()
@@ -33,17 +33,17 @@ def fix_metadata(api_type="tech"):
 
     items = db.get_items_needing_metadata(check_col, FIX_BATCH_SIZE, conn=conn)
 
-    print(f"Найдено {len(items)} релизов с пропусками данных.")
+    logger.info(f"Найдено {len(items)} релизов с пропусками данных.")
     if not items:
-        print("Все данные в порядке!")
+        logger.info("Все данные в порядке!")
     else:
         for idx, item_data in enumerate(items, 1):
             if should_stop(STATUS_KEY):
-                print("\n[STOP] Graceful shutdown requested.")
+                logger.info("\n[STOP] Graceful shutdown requested.")
                 break
 
             if client.is_limited:
-                print("\n[!] Лимит API исчерпан. Остановка.")
+                logger.warning("\n[!] Лимит API исчерпан. Остановка.")
                 break
 
             item_id = item_data["id"]
@@ -78,26 +78,19 @@ def fix_metadata(api_type="tech"):
             ]
             for tag in tags:
                 search_title = re.sub(f"(?i){tag}", "", search_title)
-            search_title = search_title.strip()
-
-            print(f"\n[{idx}/{len(items)}] 🎬 {search_title} ({year})")
-
-            needed = []
-            if not item_data["poster_url"]:
-                needed.append("постер")
-            if not item_data["kp_rating"]:
-                needed.append("КП")
             if not item_data["imdb_rating"]:
                 needed.append("IMDb")
-            print(f"  📋 Нужно: {', '.join(needed)}")
+            logger.info(f"\n[{idx}/{len(items)}] 🎬 {search_title} ({year})")
+            if needed:
+                logger.info(f"  📋 Нужно: {', '.join(needed)}")
 
             data = None
             if kp_id and hasattr(client, "get_by_id"):
-                print(f"  🎯 Прямой запрос по ID: {kp_id}")
+                logger.info(f"  🎯 Прямой запрос по ID: {kp_id}")
                 data = client.get_by_id(kp_id)
 
             if not data:
-                print(f"  🔍 Поиск через API по названию: {search_title}...")
+                logger.info(f"  🔍 Поиск через API по названию: {search_title}...")
                 data = client.search_movie(search_title, year)
 
             if data:
@@ -141,12 +134,12 @@ def fix_metadata(api_type="tech"):
 
                 if found_parts:
                     for p in found_parts:
-                        print(f"    {p}")
-                    print("  ✅ Данные обновлены")
+                        logger.info(f"    {p}")
+                    logger.info("  ✅ Данные обновлены")
                 else:
-                    print("  💎 Новых данных не найдено.")
+                    logger.info("  💎 Новых данных не найдено.")
             else:
-                print("  ❌ API не вернул данных.")
+                logger.info("  ❌ API не вернул данных.")
 
             if not client.is_limited:
                 db.mark_checked(item_id, api_type, conn=conn)
@@ -155,11 +148,11 @@ def fix_metadata(api_type="tech"):
             time.sleep(FIX_REQUEST_DELAY)
 
     total, no_p, no_r = db.get_db_stats(conn=conn)
-    print("\n=== ИТОГОВАЯ СТАТИСТИКА ===")
-    print(f"Всего видео: {total}")
-    print(f"Осталось БЕЗ постеров: {no_p}")
-    print(f"Осталось БЕЗ оценок: {no_r}")
-    print("===========================\n")
+    logger.info("\n=== ИТОГОВАЯ СТАТИСТИКА ===")
+    logger.info(f"Всего видео: {total}")
+    logger.info(f"Осталось БЕЗ постеров: {no_p}")
+    logger.info(f"Осталось БЕЗ оценок: {no_r}")
+    logger.info("===========================\n")
 
     conn.close()
 

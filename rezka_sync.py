@@ -9,11 +9,12 @@ from bs4 import BeautifulSoup
 
 from app_core import clean_title_for_search, normalize_title
 from db import Database
-from logger import setup_tee_logger
+from logging_config import setup_logging
 from script_utils import clear_stop_flag, load_config, should_stop
 from settings import settings
 
 _config = load_config()
+logger = setup_logging("parsclode.rezka", settings.log_file_path)
 
 
 # Concurrency precedence (4.4): CLI flag (set in __main__) > env >
@@ -83,9 +84,8 @@ def _login_cookies() -> dict:
         cookies.update(session.cookies)
         return cookies
     except Exception as e:
-        print(
-            f"[rezka] login failed ({type(e).__name__}: {e}); falling back to anonymous cookies",
-            flush=True,
+        logger.warning(
+            f"[rezka] login failed ({type(e).__name__}: {e}); falling back to anonymous cookies"
         )
         return dict(REZKA_COOKIES)
 
@@ -270,29 +270,29 @@ def _evaluate_candidate(
             current_score -= 80
 
     if page_year:
-        print(f"      [*] Год на странице: {page_year}")
+        logger.debug(f"      [*] Год на странице: {page_year}")
 
     id_match = False
     id_conflict = False
 
     if kp_id and page_kp_id:
         if str(kp_id) == str(page_kp_id):
-            print(f"      [+] MATCH KP ID: {kp_id}")
+            logger.debug(f"      [+] MATCH KP ID: {kp_id}")
             id_match = True
         else:
-            print(f"      [-] CONFLICT KP ID: {kp_id} != {page_kp_id}")
+            logger.debug(f"      [-] CONFLICT KP ID: {kp_id} != {page_kp_id}")
             id_conflict = True
 
     if imdb_id and page_imdb_id:
         if str(imdb_id) == str(page_imdb_id):
-            print(f"      [+] MATCH IMDb ID: {imdb_id}")
+            logger.debug(f"      [+] MATCH IMDb ID: {imdb_id}")
             id_match = True
         else:
-            print(f"      [-] CONFLICT IMDb ID: {imdb_id} != {page_imdb_id}")
+            logger.debug(f"      [-] CONFLICT IMDb ID: {imdb_id} != {page_imdb_id}")
             id_conflict = True
 
     if print_id_check_line:
-        print(
+        logger.debug(
             f"      [?] ID Check: DB({kp_id or '-'}, {imdb_id or '-'}) vs "
             f"Rezka({page_kp_id or '-'}, {page_imdb_id or '-'})"
         )
@@ -308,12 +308,12 @@ def _evaluate_candidate(
     elif (kp_id or imdb_id) and not (page_kp_id or page_imdb_id):
         if current_score >= 90:
             if print_id_check_line:
-                print(f"      [+] Trusting by title (Score: {current_score})")
+                logger.debug(f"      [+] Trusting by title (Score: {current_score})")
             is_valid = True
             reason = "trust_by_title"
         else:
             if print_id_check_line:
-                print(f"      [-] Not enough data (Score: {current_score})")
+                logger.debug(f"      [-] Not enough data (Score: {current_score})")
     elif not (kp_id or imdb_id) and current_score >= 90:
         is_valid = True
         reason = "high_score"
@@ -486,9 +486,9 @@ def search_rezka_for_item(title, year, kp_id=None, imdb_id=None, kp_rating=0, im
 
     clean_parts, search_queries = _parse_title(title)
 
-    print(f"    🔍 Поиск на Rezka: {title} ({year})")
+    logger.info(f"    🔍 Поиск на Rezka: {title} ({year})")
     if kp_id or imdb_id:
-        print(f"    📋 Имеем ID: KP:{kp_id or '-'}, IMDb:{imdb_id or '-'}")
+        logger.info(f"    📋 Имеем ID: KP:{kp_id or '-'}, IMDb:{imdb_id or '-'}")
 
     all_results = []
     seen_urls = set()
@@ -523,11 +523,11 @@ def search_rezka_for_item(title, year, kp_id=None, imdb_id=None, kp_rating=0, im
                     all_results.append(r)
                     seen_urls.add(r["url"])
         except Exception as e:
-            print(f"    ⚠️ Ошибка поиска по '{s_title}': {e}")
+            logger.warning(f"    ⚠️ Ошибка поиска по '{s_title}': {e}")
 
     if not all_results and clean_parts:
         try:
-            print(f"    [?] Fallback search for '{clean_parts[0]}'...")
+            logger.info(f"    [?] Fallback search for '{clean_parts[0]}'...")
             res_fallback = _sync_search(clean_parts[0])
             for r in res_fallback:
                 if r["url"] not in seen_urls:
@@ -537,10 +537,10 @@ def search_rezka_for_item(title, year, kp_id=None, imdb_id=None, kp_rating=0, im
             pass
 
     if not all_results:
-        print("    [-] Ничего не найдено на Rezka.")
+        logger.info("    [-] Ничего не найдено на Rezka.")
         return result
 
-    print(f"    [*] Найдено {len(all_results)} результатов.")
+    logger.info(f"    [*] Найдено {len(all_results)} результатов.")
 
     candidates = _score_candidates(all_results, clean_parts, year)
 
@@ -577,7 +577,7 @@ def search_rezka_for_item(title, year, kp_id=None, imdb_id=None, kp_rating=0, im
                 continue
 
             if is_valid:
-                print(f"    [?] {res['title']} (Score: {score}) -> {reason}")
+                logger.info(f"    [?] {res['title']} (Score: {score}) -> {reason}")
                 kp_r, imdb_r, poster, desc = _extract_metadata_from_rezka(
                     rezka_obj, kp_rating, imdb_rating
                 )
@@ -602,10 +602,10 @@ def search_rezka_for_item(title, year, kp_id=None, imdb_id=None, kp_rating=0, im
             break
 
     if not final_res:
-        print("    [-] Подходящий результат не найден.")
+        logger.info("    [-] Подходящий результат не найден.")
         return result
 
-    print(f"    [+] ПОДТВЕРЖДЕНО: {final_res['title']} (Score: {final_data['score']})")
+    logger.info(f"    [+] ПОДТВЕРЖДЕНО: {final_res['title']} (Score: {final_data['score']})")
 
     result["found"] = True
     result["rezka_url"] = final_res["url"]
@@ -638,7 +638,7 @@ def _print_batch_errors(label: str) -> None:
     by_class: dict[str, int] = {}
     for _kind, _key, cls in _BATCH_ERRORS:
         by_class[cls] = by_class.get(cls, 0) + 1
-    print(
+    logger.info(
         f"  [Phase {label}] aggregated transport errors: total={len(_BATCH_ERRORS)} "
         + ", ".join(f"{k}={v}" for k, v in sorted(by_class.items()))
     )
@@ -697,7 +697,7 @@ async def _async_load_page(session, url, semaphore):
 
 async def _search_rezka_batch(items, db, conn):
     total = len(items)
-    print(f"[rezka] concurrency={REZKA_CONCURRENCY}", flush=True)
+    logger.info(f"[rezka] concurrency={REZKA_CONCURRENCY}")
     semaphore = asyncio.Semaphore(REZKA_CONCURRENCY)
     _reset_batch_errors()
 
@@ -725,7 +725,7 @@ async def _search_rezka_batch(items, db, conn):
             for s_title in info["search_queries"]:
                 with_year_queries.add(f"{s_title} {year}")
 
-        print(f"  [Phase 1a] {len(with_year_queries)} unique 'with year' queries for {total} items")
+        logger.info(f"  [Phase 1a] {len(with_year_queries)} unique 'with year' queries for {total} items")
         coros = [_async_search(session, q, semaphore) for q in with_year_queries]
         raw = await asyncio.gather(*coros)
         with_year_results = {}
@@ -768,7 +768,7 @@ async def _search_rezka_batch(items, db, conn):
 
         no_year_results = {}
         if no_year_queries:
-            print(f"  [Phase 1b] {len(no_year_queries)} unique 'without year' queries")
+            logger.info(f"  [Phase 1b] {len(no_year_queries)} unique 'without year' queries")
             coros = [_async_search(session, q, semaphore) for q in no_year_queries]
             raw = await asyncio.gather(*coros)
             for q, results in raw:
@@ -806,7 +806,7 @@ async def _search_rezka_batch(items, db, conn):
 
         fallback_results = {}
         if fallback_queries:
-            print(f"  [Phase 1c] {len(fallback_queries)} fallback queries")
+            logger.info(f"  [Phase 1c] {len(fallback_queries)} fallback queries")
             coros = [_async_search(session, q, semaphore) for q in fallback_queries]
             raw = await asyncio.gather(*coros)
             for q, results in raw:
@@ -815,7 +815,7 @@ async def _search_rezka_batch(items, db, conn):
             _reset_batch_errors()
 
         # ── PHASE 1d: Collect & score ──
-        print(f"  [Phase 1d] Scoring candidates for {total} items...")
+        logger.info(f"  [Phase 1d] Scoring candidates for {total} items...")
         item_candidates = {}
 
         for idx, info in enumerate(item_infos):
@@ -855,7 +855,7 @@ async def _search_rezka_batch(items, db, conn):
                     item_candidates[idx] = viable
 
         viable_count = len(item_candidates)
-        print(f"  [*] {viable_count}/{total} items have viable candidates")
+        logger.info(f"  [*] {viable_count}/{total} items have viable candidates")
 
         # ── PHASE 2: Load pages & verify ──
         page_soup_cache = {}
@@ -869,7 +869,7 @@ async def _search_rezka_batch(items, db, conn):
         if all_candidate_urls:
             urls_to_load = [u for u in all_candidate_urls if u not in page_soup_cache]
             if urls_to_load:
-                print(f"  [Phase 2] Loading {len(urls_to_load)} candidate pages...")
+                logger.info(f"  [Phase 2] Loading {len(urls_to_load)} candidate pages...")
                 sem = asyncio.Semaphore(REZKA_CONCURRENCY)
                 coros = [_async_load_page(session, u, sem) for u in urls_to_load]
                 raw = await asyncio.gather(*coros)
@@ -928,14 +928,14 @@ async def _search_rezka_batch(items, db, conn):
             if chosen:
                 candidate, r_data, reason, current_score = chosen
                 item_results[idx] = r_data
-                print(f"    [+] {row['title']}: CONFIRMED ({reason}, score: {current_score})")
+                logger.info(f"    [+] {row['title']}: CONFIRMED ({reason}, score: {current_score})")
                 if id_match_result and fallback_result and id_match_result is not fallback_result:
-                    print("    ℹ️  ID-match preferred over trust_by_title")
+                    logger.info("    ℹ️  ID-match preferred over trust_by_title")
             else:
-                print(f"    [-] {row['title']}: no suitable candidate")
+                logger.info(f"    [-] {row['title']}: no suitable candidate")
 
         # ── PHASE 3: Write results ──
-        print("\n  [Phase 3] Writing results to database...")
+        logger.info("\n  [Phase 3] Writing results to database...")
         found_count = 0
 
         for idx, row in enumerate(items):
@@ -964,12 +964,13 @@ async def _search_rezka_batch(items, db, conn):
 
         conn.commit()
         not_found_count = total - found_count
-        print(f"  Found: {found_count}, Not found: {not_found_count}")
+        logger.info(f"  Found: {found_count}, Not found: {not_found_count}")
         return found_count, not_found_count
 
 
 def search_rezka_metadata():
-    setup_tee_logger("rezka", "rezka_log.txt")
+    global logger
+    logger = setup_logging("parsclode.rezka", "rezka_log.txt")
     clear_stop_flag(STATUS_KEY)
     db = Database()
     conn = db.get_connection()
@@ -994,16 +995,16 @@ def search_rezka_metadata():
     items = cursor.fetchall()
 
     total_count = len(items)
-    print(f"=== REZKA SYNC (Total: {total_count}) ===")
+    logger.info(f"=== REZKA SYNC (Total: {total_count}) ===")
 
     if total_count > 0:
         found, not_found = asyncio.run(_search_rezka_batch(items, db, conn))
-        print(f"\n=== RESULTS: Found={found}, Not found={not_found} ===")
+        logger.info(f"\n=== RESULTS: Found={found}, Not found={not_found} ===")
     else:
-        print("No items to process.")
+        logger.info("No items to process.")
 
     conn.close()
-    print("\n=== FINISHED ===")
+    logger.info("\n=== FINISHED ===")
 
 
 if __name__ == "__main__":

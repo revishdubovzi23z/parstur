@@ -373,68 +373,68 @@ Docker-фикс получится либо пол-делом (только `Dat
 
 В `par2_progress.md` это пункт 5.4 (deferred).
 
-### 6.1. Подготовить unified logging config.
+### 6.1. Подготовить unified logging config. [DONE]
 
 Один PR:
-- [ ] Создать `logging_config.py`:
+- [x] Создать `logging_config.py`:
   - `setup_logging(component, log_file)` возвращает `logging.Logger`.
   - Formatter единого вида: `<UTC ISO> <LEVEL> <component> | <message>`.
   - `RotatingFileHandler` с лимитом 50 МБ и 3 backup'ами.
   - `StreamHandler(sys.stdout)` дублируется для интерактивного
     запуска (как сейчас делает `setup_tee_logger`).
-- [ ] Тесты: лог пишется и в файл, и в stdout.
+- [x] Тесты: лог пишется и в файл, и в stdout.
 
-### 6.2. Перевести `setup_tee_logger` на `logging`.
+### 6.2. Перевести `setup_tee_logger` на `logging`. [DONE]
 
 Один PR (после 6.1):
-- [ ] `logger.py:setup_tee_logger` → тонкая обёртка над
+- [x] `logger.py:setup_tee_logger` → тонкая обёртка над
   `logging_config.setup_logging`.
-- [ ] Старый `TeeWriter` снести (или оставить для одного
+- [x] Старый `TeeWriter` снести (или оставить для одного
   переходного релиза с deprecation warning).
-- [ ] Все вызывающие модули продолжают звать `setup_tee_logger` —
+- [x] Все вызывающие модули продолжают звать `setup_tee_logger` —
   ничего не ломается.
 
-### 6.3. Перевести `sync_job.py` на `logger.info` etc.
+### 6.3. Перевести `sync_job.py` на `logger.info` etc. [DONE]
 
 Один PR:
-- [ ] Заменить `print(...)` на `logger.info(...)` /
+- [x] Заменить `print(...)` на `logger.info(...)` /
   `logger.warning(...)` / `logger.error(...)`.
-- [ ] Привести стиль сообщений к английскому, без эмодзи
+- [x] Привести стиль сообщений к английскому, без эмодзи
   (можно русский, но единообразно — решить и зафиксировать
   в `AGENTS.md`, Этап 2.2).
 
-### 6.4. То же для `rezka_sync.py`.
+### 6.4. То же для `rezka_sync.py`. [DONE]
 
 Один PR. Аналогично.
 
-### 6.5. То же для `reprocess_database.py`.
+### 6.5. То же для `reprocess_database.py`. [DONE]
 
 Один PR.
 
 ### 6.6. То же для `fix_posters.py`, `cleanup_duplicates.py`,
-`single_item_update.py`, `user_sync.py`.
+`single_item_update.py`, `user_sync.py`. [DONE]
 
 Один PR (можно одним, скрипты небольшие).
 
-### 6.7. `main.py` — `print` → `logger`.
+### 6.7. `main.py` — `print` → `logger`. [DONE]
 
 Один PR. На фоне очереди задач и WS — таких мест мало (≈20).
 
-### 6.8. `db.py` — `print` → `logger`.
+### 6.8. `db.py` — `print` → `logger`. [DONE]
 
 Один PR.
 
-### 6.9. Удалить `setup_tee_logger`.
+### 6.9. Удалить `setup_tee_logger`. [DONE]
 
 Один PR (после того как никто не зовёт):
-- [ ] grep подтверждает 0 вызовов.
-- [ ] Удалить `TeeWriter`, `setup_tee_logger`, `logger.py`
+- [x] grep подтверждает 0 вызовов.
+- [x] Удалить `TeeWriter`, `setup_tee_logger`, `logger.py`
   целиком или оставить как `logging_config` re-export.
 
-### 6.10. `/api/log_level` эндпойнт.
+### 6.10. `/api/log_level` эндпойнт. [DONE]
 
 Один PR (бонус):
-- [ ] `POST /api/log_level {level: "DEBUG"}` — меняет уровень
+- [x] `POST /api/log_level {level: "DEBUG"}` — меняет уровень
   всех логгеров рантайм.
 
 ---

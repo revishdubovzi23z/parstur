@@ -6,13 +6,14 @@ import sys
 import requests
 
 from db import Database
-from logger import setup_tee_logger
+from logging_config import setup_logging
 from poiskkino_client import PoiskKinoClient
 from rezka_sync import search_rezka_for_item
 from settings import settings
 from tmdb_client import TMDBClient
 
 RUTOR_MIRROR = settings.rutor_mirror.rstrip("/")
+logger = setup_logging("parsclode.single_update", "single_update_log.txt")
 
 
 def report_progress(current, total, status_key="single_update"):
@@ -25,18 +26,17 @@ def report_progress(current, total, status_key="single_update"):
 
 
 def update_single_item(item_id):
-    setup_tee_logger("single_update", "single_update_log.txt")
     db = Database()
     conn = db.get_connection()
 
     item = db.get_item(item_id, conn=conn)
     if not item:
-        print(f"Item {item_id} not found.")
+        logger.error(f"Item {item_id} not found.")
         conn.close()
         return
 
-    print(f"=== ОБНОВЛЕНИЕ МЕТАДАННЫХ ДЛЯ ID {item_id} ===")
-    print(f"🎬 {item['title']} ({item['year']})")
+    logger.info(f"=== ОБНОВЛЕНИЕ МЕТАДАННЫХ ДЛЯ ID {item_id} ===")
+    logger.info(f"🎬 {item['title']} ({item['year']})")
 
     kp_id = item["kp_id"]
     imdb_id = item["imdb_id"]
@@ -48,7 +48,7 @@ def update_single_item(item_id):
                 break
             try:
                 url = f"{RUTOR_MIRROR}/torrent/{rutor_id}"
-                print(f"  🔍 Проверка Rutor: {url}")
+                logger.info(f"  🔍 Проверка Rutor: {url}")
                 resp = requests.get(url, timeout=15)
                 if resp.status_code == 200:
                     if not kp_id:
@@ -57,12 +57,12 @@ def update_single_item(item_id):
                             m = re.search(r"kinopoisk\.ru/(?:film|series)/(\d+)", resp.text)
                         if m:
                             kp_id = m.group(1)
-                            print(f"    ✅ Нашел KP ID: {kp_id}")
+                            logger.info(f"    ✅ Нашел KP ID: {kp_id}")
                     if not imdb_id:
                         m = re.search(r"imdb\.com/title/(tt\d+)", resp.text)
                         if m:
                             imdb_id = m.group(1)
-                            print(f"    ✅ Нашел IMDb ID: {imdb_id}")
+                            logger.info(f"    ✅ Нашел IMDb ID: {imdb_id}")
             except Exception:
                 pass
 
@@ -81,7 +81,7 @@ def update_single_item(item_id):
         tmdb_data = tmdb.search_movie(search_primary, item["year"], alt_title=search_alt)
 
     if tmdb_data:
-        print("  ✅ TMDB данные получены")
+        logger.info("  ✅ TMDB данные получены")
         tmdb_fields = {}
         if tmdb_data.get("poster_url"):
             tmdb_fields["poster_url"] = tmdb_data["poster_url"]
@@ -97,7 +97,7 @@ def update_single_item(item_id):
             conn.commit()
 
     poisk = PoiskKinoClient()
-    print("  🔍 Запрос к PoiskKino...")
+    logger.info("  🔍 Запрос к PoiskKino...")
     pk_data = None
     if kp_id:
         pk_data = poisk.get_by_id(kp_id)
@@ -105,13 +105,13 @@ def update_single_item(item_id):
         pk_data = poisk.search_movie(item["title"].split(" / ")[0], item["year"])
 
     if pk_data:
-        print("  ✅ PoiskKino данные получены")
+        logger.info("  ✅ PoiskKino данные получены")
         kp_rating = pk_data.get("kp_rating", 0.0)
         imdb_rating = pk_data.get("imdb_rating", 0.0)
         db.fill_item_metadata(item_id, conn=conn, kp_rating=kp_rating, imdb_rating=imdb_rating)
         conn.commit()
 
-    print("  🔍 Поиск на Rezka...")
+    logger.info("  🔍 Поиск на Rezka...")
     r = search_rezka_for_item(
         title=item["title"],
         year=item["year"],
@@ -121,7 +121,7 @@ def update_single_item(item_id):
         imdb_rating=item["imdb_rating"] or 0,
     )
     if r["found"]:
-        print(f"  ✅ Rezka найдена: {r['rezka_url']} (Score: {r['score']})")
+        logger.info(f"  ✅ Rezka найдена: {r['rezka_url']} (Score: {r['score']})")
         db.fill_item_metadata(
             item_id,
             conn=conn,
@@ -141,7 +141,7 @@ def update_single_item(item_id):
         if not imdb_id and r["imdb_id"]:
             imdb_id = r["imdb_id"]
 
-    print("=== ОБНОВЛЕНИЕ ЗАВЕРШЕНО ===")
+    logger.info("=== ОБНОВЛЕНИЕ ЗАВЕРШЕНО ===")
     conn.close()
 
 
@@ -149,4 +149,6 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         update_single_item(int(sys.argv[1]))
     else:
-        print("Usage: python single_item_update.py <item_id>")
+        from logging_config import setup_logging
+        logger = setup_logging('parsclode.single_update')
+        logger.info("Usage: python single_item_update.py <item_id>")

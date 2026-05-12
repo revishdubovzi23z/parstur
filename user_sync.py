@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 
 from app_core import normalize_title
 from db import Database
-from logger import setup_tee_logger
+from logging_config import setup_logging
 from script_utils import load_config
 from tmdb_client import TMDBClient
 
@@ -13,7 +13,7 @@ load_dotenv()
 
 class UserSync:
     def __init__(self, db_path="app_data.db"):
-        setup_tee_logger("user_sync", "user_sync_log.txt")
+        self.logger = setup_logging("parsclode.user_sync", "user_sync_log.txt")
         self.db_path = db_path
         self.db = Database(db_path)
         self.tmdb = TMDBClient()
@@ -58,7 +58,7 @@ class UserSync:
             return (t, year)
 
         if os.path.exists(imdb_path):
-            print(f"Загрузка IMDb: {imdb_path}")
+            self.logger.info(f"Загрузка IMDb: {imdb_path}")
             try:
                 with open(imdb_path, encoding="utf-8-sig") as f:
                     reader = csv.DictReader(f)
@@ -98,10 +98,10 @@ class UserSync:
                         if not added and imdb_id:
                             pass
             except Exception as e:
-                print(f"Ошибка IMDb: {e}")
+                self.logger.error(f"Ошибка IMDb: {e}")
 
         if os.path.exists(kp_path):
-            print(f"Загрузка Кинопоиска: {kp_path}")
+            self.logger.info(f"Загрузка Кинопоиска: {kp_path}")
             encodings = ["utf-8-sig", "utf-16", "cp1251", "utf-16le"]
             content = None
             for enc in encodings:
@@ -171,9 +171,9 @@ class UserSync:
                         except Exception:
                             pass
                 except Exception as e:
-                    print(f"Ошибка Кинопоиска: {e}")
+                    self.logger.error(f"Ошибка Кинопоиска: {e}")
 
-        print(
+        self.logger.info(
             f"Всего уникальных записей после мерджа: {len(set(id(v) for v in merged_data.values()))}"
         )
         added = 0
@@ -197,7 +197,7 @@ class UserSync:
         conn.commit()
         conn.close()
 
-        print(f"Синхронизация завершена. Добавлено: {added}, Обновлено: {updated}")
+        self.logger.info(f"Синхронизация завершена. Добавлено: {added}, Обновлено: {updated}")
         return added + updated
 
 
@@ -207,8 +207,8 @@ if __name__ == "__main__":
 
     try:
         total_ratings = sync.db.get_user_ratings_count()
-        print("\n==========================================")
-        print(f"ИТОГО В ВАШЕЙ БАЗЕ СОХРАНЕНО: {total_ratings} ОЦЕНОК")
-        print("==========================================\n")
+        sync.logger.info("\n==========================================")
+        sync.logger.info(f"ИТОГО В ВАШЕЙ БАЗЕ СОХРАНЕНО: {total_ratings} ОЦЕНОК")
+        sync.logger.info("==========================================\n")
     except Exception as e:
-        print(f"Ошибка при подсчете оценок: {e}")
+        sync.logger.error(f"Ошибка при подсчете оценок: {e}")

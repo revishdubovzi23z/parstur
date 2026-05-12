@@ -43,7 +43,7 @@ class KinopoiskClient(BaseMovieClient):
             if result:
                 return self._parse_result(result)
         except Exception as e:
-            print(f"Ошибка Kinopoisk Tech get_by_id ({kp_id}): {e}")
+            self.logger.error(f"Ошибка Kinopoisk Tech get_by_id ({kp_id}): {e}", exc_info=True)
             self.network_error = True
         return None
 
@@ -68,7 +68,7 @@ class KinopoiskClient(BaseMovieClient):
                     return self._parse_result(result)
                 return None
             except Exception as e:
-                print(f"Ошибка при запросе к Kinopoisk API (поиск): {e}")
+                self.logger.error(f"Ошибка при запросе к Kinopoisk API (поиск): {e}", exc_info=True)
                 self.network_error = True
                 time.sleep(1)
 
@@ -76,5 +76,8 @@ class KinopoiskClient(BaseMovieClient):
 
 
 if __name__ == "__main__":
+    from logging_config import setup_logging
+    setup_logging("kinopoisk_test")
     client = KinopoiskClient()
-    print(client.search_movie("Матрица", 1999))
+    res = client.search_movie("Матрица", 1999)
+    logging.getLogger("kinopoisk_test").info(res)

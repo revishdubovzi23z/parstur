@@ -1,5 +1,8 @@
 import re
 import unicodedata
+import logging
+
+logger = logging.getLogger("parsclode.core")
 
 
 def normalize_title(title):
@@ -55,4 +58,4 @@ class TrackerAppCore:
 
     def ignore_item(self, item_id: int):
         self.db.toggle_ignore(item_id)
-        print(f"Сущность {item_id} добавлена в игнор-лист.")
+        logger.info(f"Сущность {item_id} добавлена в игнор-лист.")
