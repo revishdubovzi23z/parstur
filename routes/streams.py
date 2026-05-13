@@ -8,6 +8,7 @@ from db import db
 
 router = APIRouter()
 
+
 @router.get("/api/online_sources/{item_id}")
 def get_online_sources(item_id: int):
     row = (
@@ -106,6 +107,7 @@ def get_stream_info(item_id: int):
         return {"error": "no rezka_url"}
 
     import main
+
     rezka, _ = main._get_rezka_obj(item_id, row["rezka_url"])
     if not rezka:
         return {"error": "failed to load page"}
@@ -145,6 +147,7 @@ def get_stream(
     translator: str | None = None,
 ):
     import main
+
     row = (
         db.get_connection()
         .cursor()
@@ -367,6 +370,7 @@ def get_stream_url(
     quality: str | None = None,
 ):
     import main
+
     with db._conn() as c:
         row = c.execute("SELECT rezka_url, title FROM items WHERE id = ?", (item_id,)).fetchone()
     if not row or not row["rezka_url"]:
@@ -471,5 +475,3 @@ def subtitle_proxy(url: str):
         )
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=502)
-
-

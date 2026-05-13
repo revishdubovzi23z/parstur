@@ -13,9 +13,11 @@ from settings import settings
 
 router = APIRouter()
 
+
 @router.get("/api/backup/download")
 async def backup_download():
     import main
+
     out_dir = "backups"
     os.makedirs(out_dir, exist_ok=True)
     from datetime import timezone
@@ -109,6 +111,7 @@ def database_export():
 @router.post("/api/database_import")
 async def database_import(file: UploadFile):
     import main
+
     db_path = settings.resolved_db_path
     content = await file.read()
 
@@ -187,5 +190,3 @@ def reset_database(confirm: str | None = None):
     if restarted:
         return {"status": "success", "message": "Database deleted, server is restarting..."}
     return {"status": "success", "message": "Database deleted, please restart server manually"}
-
-

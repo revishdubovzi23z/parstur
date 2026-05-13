@@ -14,11 +14,7 @@
 -- the ALTER is wrapped in a sentinel that errors out cleanly if
 -- the column already exists. We just catch that at the runner level.
 
--- Probe (no-op when column exists, will return zero rows when missing
--- — used only to keep this file readable).
-SELECT 1 WHERE NOT EXISTS (
-    SELECT 1 FROM pragma_table_info('items') WHERE name = 'tmdb_id'
-);
+ALTER TABLE items ADD COLUMN tmdb_id TEXT;
 
 -- Idempotent index. The column is created either by init_schema or
 -- by the previous boot (an old DB will pick it up on the next start

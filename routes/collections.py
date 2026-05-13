@@ -26,6 +26,7 @@ class CollectionCreate(BaseModel):
 
 def _rezka_folder_action(action: str, params: dict):
     import main
+
     if not main.rezka_session:
         return None
     try:
@@ -51,6 +52,7 @@ def _rezka_folder_action(action: str, params: dict):
 @router.post("/api/collections")
 def create_collection(data: CollectionCreate):
     import main
+
     try:
         db.create_collection(data.name)
     except Exception:
@@ -63,6 +65,7 @@ def create_collection(data: CollectionCreate):
 @router.delete("/api/collections/{id}")
 def delete_collection(id: int):
     import main
+
     if main.rezka_session:
         row = (
             db.get_connection()
@@ -89,6 +92,7 @@ class CollectionRename(BaseModel):
 @router.put("/api/collections/{id}")
 def rename_collection(id: int, data: CollectionRename):
     import main
+
     cat_id = None
     if main.rezka_session:
         row = (
@@ -221,6 +225,7 @@ class CollectionItemRequest(BaseModel):
 
 def _sync_rezka_folder(action, collection_id, item_id):
     import main
+
     try:
         from app_core import normalize_title
 
@@ -283,6 +288,7 @@ def _sync_rezka_folder(action, collection_id, item_id):
 
 def _sync_rezka_folder_wrapper(action, collection_id, item_id):
     import main
+
     try:
         _sync_rezka_folder(action, collection_id, item_id)
     except Exception as e:
@@ -300,6 +306,7 @@ def _sync_rezka_folder_wrapper(action, collection_id, item_id):
 @router.post("/api/collections/{collection_id}/toggle")
 async def toggle_collection_item(collection_id: int, data: CollectionItemRequest):
     import main
+
     action = db.toggle_collection_item(collection_id, data.item_id)
 
     if action in ("added", "removed") and main.rezka_session:

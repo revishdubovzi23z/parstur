@@ -135,7 +135,6 @@ async def lifespan(_app):
     # will see it on the very first request after upgrade.
     try:
         db.init_schema()
-        db.check_and_migrate_schema()
     except Exception as e:
         logger.error(f"[DB] schema init failed: {type(e).__name__}: {e}", exc_info=True)
     task_queue.start()
@@ -894,12 +893,6 @@ async def run_pipeline_task():
         pipeline_stop_requested = False
 
 
-
-
-
-
-
-
 async def run_script_with_args(
     script_name, args, status_key, log_file=None, is_pipeline_step=False
 ):
@@ -1071,22 +1064,6 @@ async def run_script_with_args(
             logger.error(f"Ошибка записи истории: {e}", exc_info=True)
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def _recover_rezka_url(item_id: int, old_url: str) -> str | None:
     from HdRezkaApi.search import HdRezkaSearch
 
@@ -1149,16 +1126,6 @@ def _get_rezka_obj(item_id: int, rezka_url: str):
     return None, rezka_url
 
 
-
-
-
-
-
-
-
-
-
-
 @app.get("/", response_class=HTMLResponse)
 def get_index():
     with open("index.html", encoding="utf-8") as f:
@@ -1179,14 +1146,6 @@ _LOG_FILES = {
 }
 
 
-
-
-
-
-
-
-
-
 # 6.6 — on-demand DB backup download.
 #
 # Generates a fresh consistent snapshot of the SQLite database and
@@ -1199,8 +1158,6 @@ _LOG_FILES = {
 # `app_data-<UTC-timestamp>.db`; the same file is served back. The
 # caller can also drive periodic snapshots from cron via
 # `python backup_db.py --rotate N`.
-
-
 
 
 # 8.17 — manual rebind of KP/IMDb/Rezka identifiers from the card UI.
@@ -1292,8 +1249,6 @@ _SUBTITLE_HOST_ALLOWLIST = (
 )
 
 
-
-
 # 8.18 — audit log endpoints + undo.
 @app.get("/api/audit_log")
 def audit_log_list(limit: int = 50, item_id: int | None = None):
@@ -1370,17 +1325,7 @@ def _trigger_restart():
     return False
 
 
-
-
-
-
-
-
 _reset_tokens: dict = {}
-
-
-
-
 
 
 if __name__ == "__main__":

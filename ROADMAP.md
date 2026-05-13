@@ -567,19 +567,19 @@ Docker-фикс получится либо пол-делом (только `Dat
 ### 9.1. Вынести все ALTER из `init_schema` в миграции.
 
 Один PR:
-- [ ] Каждое `ALTER TABLE ... ADD COLUMN tmdb_id` и т.п. в
+- [x] Каждое `ALTER TABLE ... ADD COLUMN tmdb_id` и т.п. в
   `init_schema` оборачиваем в `migrations/NNNN_*.sql`.
-- [ ] Из `init_schema` оставляем только `CREATE TABLE IF NOT
+- [x] Из `init_schema` оставляем только `CREATE TABLE IF NOT
   EXISTS` для baseline-схемы.
-- [ ] Тест: на старом snapshot БД (без новой колонки) после
+- [x] Тест: на старом snapshot БД (без новой колонки) после
   `init_schema()` колонка добавлена через миграцию.
 
 ### 9.2. Снести `check_and_migrate_schema`.
 
 Один PR:
-- [ ] Все ALTER из неё → миграции с большими номерами.
-- [ ] Удалить функцию.
-- [ ] grep на её вызовы → переадресовать на `_apply_migrations`.
+- [x] Все ALTER из неё → миграции с большими номерами.
+- [x] Удалить функцию.
+- [x] grep на её вызовы → переадресовать на `_apply_migrations`.
 
 ---
 

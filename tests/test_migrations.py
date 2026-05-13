@@ -56,12 +56,14 @@ def test_second_init_is_idempotent(tmp_db_no_init) -> None:
 
 def test_runner_skips_already_applied(tmp_db_no_init) -> None:
     d, p = tmp_db_no_init
-    # Pretend the database is already at version 5 (higher than any
+    # Initialize the database normally first so tables exist
+    d.init_schema()
+    # Pretend the database is already at version 9999 (higher than any
     # shipped migration). The runner must NOT regress it.
     with d._conn() as c:
-        c.execute("PRAGMA user_version = 5")
+        c.execute("PRAGMA user_version = 9999")
     d.init_schema()
-    assert _user_version(p) == 5
+    assert _user_version(p) == 9999
 
 
 def test_runner_ignores_non_numeric_filenames(tmp_db_no_init, tmp_path) -> None:

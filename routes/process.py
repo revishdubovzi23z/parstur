@@ -8,9 +8,11 @@ from fastapi.responses import FileResponse, JSONResponse
 
 router = APIRouter()
 
+
 @router.post("/api/start_full_pipeline")
 async def start_full_pipeline():
     import main
+
     main.check_any_running()
     await main.task_queue.add_task(main.run_pipeline_task, "full_pipeline")
     return {"status": "started"}
@@ -23,6 +25,7 @@ async def start_sync_video(
     min_date: str = None,
 ):
     import main
+
     main.check_any_running()
 
     log_file = "sync_video_log.txt"
@@ -52,6 +55,7 @@ async def start_sync_other(
     min_date: str = None,
 ):
     import main
+
     main.check_any_running()
 
     log_file = "sync_other_log.txt"
@@ -73,19 +77,23 @@ async def start_sync_other(
 @router.post("/api/start_sync_rezka")
 async def start_sync_rezka():
     import main
+
     main.check_any_running()
 
     log_file = "sync_rezka_log.txt"
     with open(log_file, "w", encoding="utf-8") as f:
         f.write(f"=== Запуск синхронизации REZKA ({datetime.now().strftime('%H:%M:%S')}) ===\n")
 
-    await main.task_queue.add_task(main.run_script_with_args, "rezka", "rezka_sync.py", [], "rezka", log_file)
+    await main.task_queue.add_task(
+        main.run_script_with_args, "rezka", "rezka_sync.py", [], "rezka", log_file
+    )
     return {"status": "started"}
 
 
 @router.post("/api/start_cleanup")
 async def start_cleanup():
     import main
+
     # cleanup_duplicates rewrites items/releases/collection_items and may
     # delete rows; it must never run alongside another job (e.g. sync_job
     # or reprocess_database) that mutates the same tables.
@@ -107,6 +115,7 @@ async def start_cleanup():
 @router.post("/api/start_rezka_collections")
 async def start_rezka_collections():
     import main
+
     # main.check_any_running() raises HTTPException itself when something is busy
     # and returns None otherwise; calling it as a boolean was misleading
     # (the if branch only ever fired through the raised exception inside
@@ -129,7 +138,6 @@ async def start_rezka_collections():
 @router.post("/api/stop/{key}")
 async def stop_process(key: str):
     import main
-
 
     if not main._is_valid_status_key(key):
         raise HTTPException(status_code=400, detail="Unknown process key")
@@ -168,6 +176,7 @@ async def stop_process(key: str):
 @router.post("/api/start_fix")
 async def start_fix():
     import main
+
     main.check_any_running()
 
     log_file = "fix_tech_log.txt"
@@ -187,6 +196,7 @@ async def start_fix():
 @router.post("/api/start_fix_poisk")
 async def start_fix_poisk():
     import main
+
     main.check_any_running()
 
     log_file = "fix_poiskkino_log.txt"
@@ -206,6 +216,7 @@ async def start_fix_poisk():
 @router.post("/api/start_reprocess")
 async def start_reprocess(force: bool = False):
     import main
+
     main.check_any_running()
 
     log_file = "reprocess_log.txt"
@@ -230,6 +241,7 @@ async def start_reprocess(force: bool = False):
 @router.get("/api/process_status")
 def get_process_status():
     import main
+
     """Возвращает статусы и прогресс всех процессов."""
     progress = {}
     for key in main.process_status.keys():
@@ -249,6 +261,7 @@ def get_process_status():
 @router.get("/api/sync_log")
 def get_sync_log(log_type: str = "video"):
     import main
+
     filename = main._LOG_FILES.get(log_type)
     if not filename:
         return JSONResponse(
@@ -269,6 +282,7 @@ def get_sync_log(log_type: str = "video"):
 @router.get("/api/download_log")
 def download_log(log_type: str = "video"):
     import main
+
     filename = main._LOG_FILES.get(log_type)
     if filename and os.path.exists(filename):
         return FileResponse(path=filename, filename=filename, media_type="text/plain")
@@ -278,6 +292,7 @@ def download_log(log_type: str = "video"):
 @router.post("/api/clear_log")
 def clear_log(log_type: str = "video"):
     import main
+
     filename = main._LOG_FILES.get(log_type)
     if not filename:
         return {"status": "error", "message": "Unknown log type"}
@@ -289,9 +304,8 @@ def clear_log(log_type: str = "video"):
 @router.post("/api/sync_user")
 async def sync_user_data():
     import main
+
     with open("user_sync_log.txt", "w", encoding="utf-8") as f:
         f.write("=== Старт ===\n")
     await main.task_queue.add_task(main.run_script, "user", "user_sync.py", "user")
     return {"status": "started"}
-
-

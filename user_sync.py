@@ -25,7 +25,7 @@ class UserSync:
             "Connection": "keep-alive",
             "Upgrade-Insecure-Requests": "1",
         }
-        self.db.check_and_migrate_schema()
+        self.db._apply_migrations()
 
     def lookup_missing_ids(self, title, year, external_id=None):
         try:

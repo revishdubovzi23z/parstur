@@ -16,6 +16,7 @@ from db.settings_db import DbSettingsMixin
 class Database(DbItemsMixin, DbCollectionsMixin, DbHistoryMixin, DbSettingsMixin, DbCore):
     pass
 
+
 from settings import settings
 
 db = Database(path=settings.resolved_db_path)
