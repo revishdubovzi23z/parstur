@@ -34,6 +34,16 @@ export interface FeedItem {
   kp_id: string | null
   imdb_id: string | null
   rezka_url: string | null
+  /** kino.pub item id (numeric) once the row is bound. Set via
+   * the `/api/kinopub/bind/{item_id}` endpoint or the future
+   * sync_kinopub matcher. */
+  kinopub_id?: number | null
+  /** Cached `https://kino.pub/item/<id>` URL for the "open on
+   * kino.pub" chip — saves a round-trip to render the link. */
+  kinopub_url?: string | null
+  /** "movie" | "serial" | "3D" | ... — used by the player to pick
+   * the correct UI tab. */
+  kinopub_type?: string | null
   original_title: string | null
   is_ignored?: number | null
   latest_release?: string | null

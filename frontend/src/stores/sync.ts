@@ -43,6 +43,7 @@ export const PROCESS_KEYS = [
   'cleanup',
   'rezka',
   'rezka_collections',
+  'kinopub',
   'full_pipeline',
   'single_update',
 ] as const
@@ -513,6 +514,10 @@ export const useSyncStore = defineStore('sync', {
 
     startRezkaCollections(): Promise<boolean> {
       return this._post('/api/start_rezka_collections', 'Папки Rezka')
+    },
+
+    startSyncKinopub(): Promise<boolean> {
+      return this._post('/api/start_sync_kinopub', 'Синхронизация kino.pub')
     },
 
     startCleanup(): Promise<boolean> {

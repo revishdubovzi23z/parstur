@@ -298,11 +298,14 @@ describe('ItemCardModal.vue', () => {
     ).toBe(false)
   })
 
-  it('clicking the ✕ button toggles ignore and closes the modal', async () => {
-    vi.mocked(globalThis.fetch)
-      .mockResolvedValueOnce(mockJson(DETAIL))
-      .mockResolvedValueOnce(mockJson({ status: 'success' }))
-      .mockResolvedValueOnce(mockJson(DETAIL))
+  it('clicking the ✕ button closes the modal without toggling ignore', async () => {
+    // Stage 10.7h regression guard — the ✕ button used to flip the
+    // ignore flag as well, but user feedback was that "close" should
+    // mean only "close". The explicit ignore toggle now lives on the
+    // feed card. We assert here that the close click does NOT hit
+    // /api/ignore/{id}; the matching positive test for the feed card
+    // is in FeedItemCard.test.ts.
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockJson(DETAIL))
     authorise()
     const items = useItemsStore()
     const wrapper = mount(ItemCardModal)
@@ -315,7 +318,7 @@ describe('ItemCardModal.vue', () => {
     const calls = vi
       .mocked(globalThis.fetch)
       .mock.calls.map(([u]) => String(u))
-    expect(calls.some((u) => u === '/api/ignore/42')).toBe(true)
+    expect(calls.some((u) => u === '/api/ignore/42')).toBe(false)
   })
 
   it('does not double-toggle ignore when the item is already ignored', async () => {

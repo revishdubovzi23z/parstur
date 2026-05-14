@@ -79,10 +79,12 @@ def ignore_item(item_id: int):
 async def reset_item(item_id: int, data: ResetFieldsRequest):
     from logging_config import setup_logging
     from settings import settings
-    l = setup_logging("routes.items", settings.log_file_path)
-    l.info(f"[API] Reset request for item {item_id}, fields: {data.fields}")
+
+    logger = setup_logging("routes.items", settings.log_file_path)
+    logger.info(f"[API] Reset request for item {item_id}, fields: {data.fields}")
     db.reset_item(item_id, data.fields)
     from runtime.ws import ws_manager
+
     await ws_manager.broadcast({"type": "item_updated", "item_id": item_id})
     return {"status": "success"}
 

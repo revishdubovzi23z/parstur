@@ -97,7 +97,9 @@ def self_update():
 
         # 2. Pip Install
         # Use sys.executable to ensure we use the same python/venv
-        run_cmd([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"], project_root, 120)
+        run_cmd(
+            [sys.executable, "-m", "pip", "install", "-r", "requirements.txt"], project_root, 120
+        )
 
         # 3. Frontend Build (if directory exists)
         if os.path.isdir(frontend_dir):
