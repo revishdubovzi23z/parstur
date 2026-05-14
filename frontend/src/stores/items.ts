@@ -323,6 +323,19 @@ export const useItemsStore = defineStore('items', {
       return ok
     },
 
+    /**
+     * `POST /api/ignore/{id}` for a card in the feed.
+     */
+    async toggleIgnoreById(id: number): Promise<void> {
+      const ok = await this._post(`/api/ignore/${id}`, null, 'Игнор')
+      if (ok) {
+        // Remove from feed list immediately so it vanishes from view
+        const feed = useFeedStore()
+        feed.items = feed.items.filter((it) => it.id !== id)
+        useToastStore().success('Фильм отправлен в корзину')
+      }
+    },
+
     /** Open the item modal and pre-pop the reset dialog inside.
      *  Used by the «🗑️ Сброс» hover shortcut. */
     async openWithResetDialog(

@@ -128,7 +128,17 @@ function onHoverReset(): void {
       >
         <button
           type="button"
-          class="flex items-center gap-1 rounded-lg bg-white/90 px-2 py-1 text-xs font-semibold text-slate-700 shadow hover:bg-white disabled:opacity-50"
+          class="flex items-center justify-center w-7 h-7 rounded-lg bg-white/90 text-sm font-bold text-red-600 shadow hover:bg-white disabled:opacity-50"
+          title="Скрыть (в корзину)"
+          aria-label="Скрыть"
+          data-testid="feed-item-hover-ignore"
+          @click.stop="items.toggleIgnoreById(item.id)"
+        >
+          ✕
+        </button>
+        <button
+          type="button"
+          class="flex items-center justify-center w-7 h-7 rounded-lg bg-white/90 text-sm font-semibold text-slate-700 shadow hover:bg-white disabled:opacity-50"
           :disabled="singleUpdateRunning"
           :title="singleUpdateRunning ? 'Уже идёт перепроверка' : 'Обновить метаданные'"
           aria-label="Обновить метаданные"
@@ -139,7 +149,7 @@ function onHoverReset(): void {
         </button>
         <button
           type="button"
-          class="flex items-center gap-1 rounded-lg bg-white/90 px-2 py-1 text-xs font-semibold text-slate-700 shadow hover:bg-white"
+          class="flex items-center justify-center w-7 h-7 rounded-lg bg-white/90 text-xs font-semibold text-slate-400 shadow hover:bg-white"
           title="Сбросить данные…"
           aria-label="Сбросить данные"
           data-testid="feed-item-hover-reset"
