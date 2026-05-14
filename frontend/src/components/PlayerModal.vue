@@ -60,13 +60,49 @@ const episodeEntries = computed(() => {
 
 /** Subtitle pairs (lang, entry) for `<track>` elements. Only `.vtt`
  *  subs are wired straight through; everything else still works
- *  because `subtitle_proxy` converts SRT → VTT on the backend. */
+ *  because `subtitle_proxy` converts SRT → VTT on the backend.
+ *  When the active source is kino.pub, swap to the kinopub video's
+ *  subtitles[] list instead of the rezka `player.subtitles` dict. */
 const subtitleEntries = computed(() => {
+  if (player.source === 'kinopub') {
+    const subs = player.kinopubVideo?.subtitles ?? []
+    return subs
+      .filter((s) => Boolean(s.url))
+      .map((s, idx) => ({
+        lang: s.lang || `sub-${idx}`,
+        title: s.lang || `Subtitle ${idx + 1}`,
+        src: `/api/subtitle_proxy?url=${encodeURIComponent(s.url)}`,
+      }))
+  }
   return Object.entries(player.subtitles).map(([lang, sub]) => ({
     lang,
     title: sub.title || lang,
     src: `/api/subtitle_proxy?url=${encodeURIComponent(sub.link)}`,
   }))
+})
+
+// PR 5 — kino.pub picker entries. Computed off the active video so
+// switching seasons/episodes re-renders the quality and audio lists
+// without an explicit reset in PlayerModal.
+const kinopubFileEntries = computed(() => {
+  const files = player.kinopubVideo?.files ?? []
+  return files.map((f, idx) => ({
+    idx,
+    label: f.quality
+      ? `${f.quality}${f.codec ? ` (${f.codec})` : ''}`
+      : `Источник ${idx + 1}`,
+  }))
+})
+
+const kinopubAudioEntries = computed(() => {
+  const audios = player.kinopubVideo?.audios ?? []
+  return audios.map((a, idx) => {
+    const parts = [a.lang, a.author, a.type].filter(Boolean) as string[]
+    return {
+      idx,
+      label: parts.length > 0 ? parts.join(' • ') : `Дорожка ${idx + 1}`,
+    }
+  })
 })
 
 function destroyHls(): void {
@@ -165,6 +201,29 @@ async function onMarkSeasonSeen(): Promise<void> {
 
 function onCycleTrailer(): void {
   player.cycleTrailerCandidate()
+}
+
+// PR 5 — kino.pub picker handlers. Selecting a season auto-seeds
+// episode 1; the player store handles the cascade in
+// `_refreshKinopubStream()`.
+function onKinopubSeasonChange(event: Event): void {
+  const value = Number((event.target as HTMLSelectElement).value)
+  if (Number.isFinite(value)) player.selectKinopubSeason(value)
+}
+
+function onKinopubEpisodeChange(event: Event): void {
+  const value = Number((event.target as HTMLSelectElement).value)
+  if (Number.isFinite(value)) player.selectKinopubEpisode(value)
+}
+
+function onKinopubFileChange(event: Event): void {
+  const value = Number((event.target as HTMLSelectElement).value)
+  if (Number.isFinite(value)) player.selectKinopubFile(value)
+}
+
+function onKinopubSubtitleChange(event: Event): void {
+  const value = (event.target as HTMLSelectElement).value
+  player.selectKinopubSubtitle(value)
 }
 </script>
 
@@ -311,6 +370,7 @@ function onCycleTrailer(): void {
                  «Плееры: Alloha, Collaps, Turbo …» — отдельные
                  iframe-источники из kinobox API. -->
           <section
+            v-if="player.source !== 'kinopub'"
             class="rounded-md border border-slate-200 bg-slate-50 p-3"
             data-testid="player-stream-online"
           >
@@ -379,7 +439,7 @@ function onCycleTrailer(): void {
           </p>
 
           <!-- Rezka controls — only when stream_info loaded -->
-          <template v-if="player.info">
+          <template v-if="player.source !== 'kinopub' && player.info">
             <label
               v-if="translatorEntries.length > 0"
               class="block"
@@ -462,74 +522,194 @@ function onCycleTrailer(): void {
               </button>
             </template>
 
+          </template>
+
+          <!-- ── kino.pub controls (PR 5) ───────────────────────────── -->
+          <template v-if="player.source === 'kinopub'">
             <p
-              v-if="player.streamLoading"
+              v-if="player.kinopubLoading"
               class="text-xs text-slate-500"
-              data-testid="player-stream-resolving"
+              data-testid="player-kinopub-loading"
             >
-              Резолвим поток…
+              Загружаем kino.pub…
             </p>
             <p
-              v-if="player.streamError"
+              v-if="player.kinopubError"
               class="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800"
-              data-testid="player-stream-error"
+              data-testid="player-kinopub-error"
             >
-              {{ player.streamError }}
-            </p>
-            <p
-              v-if="playerError"
-              class="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800"
-              data-testid="player-stream-attach-error"
-            >
-              {{ playerError }}
+              {{ player.kinopubError }}
             </p>
 
-            <div
-              v-if="player.streamUrl"
-              data-testid="player-stream-video-wrap"
-            >
-              <video
-                ref="videoRef"
-                controls
-                autoplay
-                crossorigin="anonymous"
-                class="aspect-video max-h-[60vh] w-full rounded-lg bg-black object-contain"
-                data-testid="player-stream-video"
+            <template v-if="player.kinopubInfo">
+              <template v-if="player.isKinopubSeries">
+                <label
+                  v-if="player.kinopubSeasons.length > 0"
+                  class="block"
+                  data-testid="player-kinopub-season-wrap"
+                >
+                  <span class="block text-xs font-medium text-slate-500">Сезон</span>
+                  <select
+                    class="mt-1 w-full rounded-md border border-slate-300 px-2 py-1 text-sm focus:border-indigo-500 focus:outline-none"
+                    :value="player.kinopubSeasonNumber ?? ''"
+                    data-testid="player-kinopub-season"
+                    @change="onKinopubSeasonChange"
+                  >
+                    <option
+                      v-for="s in player.kinopubSeasons"
+                      :key="s.number"
+                      :value="s.number"
+                    >
+                      Сезон {{ s.number }} ({{ s.episodeCount }})
+                    </option>
+                  </select>
+                </label>
+                <label
+                  v-if="(player.kinopubInfo?.seasons?.find((s) => s.number === player.kinopubSeasonNumber)?.episodes?.length ?? 0) > 0"
+                  class="block"
+                  data-testid="player-kinopub-episode-wrap"
+                >
+                  <span class="block text-xs font-medium text-slate-500">Серия</span>
+                  <select
+                    class="mt-1 w-full rounded-md border border-slate-300 px-2 py-1 text-sm focus:border-indigo-500 focus:outline-none"
+                    :value="player.kinopubEpisodeNumber ?? ''"
+                    data-testid="player-kinopub-episode"
+                    @change="onKinopubEpisodeChange"
+                  >
+                    <option
+                      v-for="ep in player.kinopubInfo?.seasons?.find((s) => s.number === player.kinopubSeasonNumber)?.episodes ?? []"
+                      :key="ep.number ?? -1"
+                      :value="ep.number ?? -1"
+                    >
+                      Серия {{ ep.number }}{{ ep.title ? ` — ${ep.title}` : '' }}
+                    </option>
+                  </select>
+                </label>
+              </template>
+
+              <label
+                v-if="kinopubFileEntries.length > 0"
+                class="block"
+                data-testid="player-kinopub-quality-wrap"
               >
-                <track
-                  v-for="(sub, idx) in subtitleEntries"
-                  :key="sub.lang"
-                  kind="subtitles"
-                  :label="sub.title"
-                  :srclang="sub.lang"
-                  :src="sub.src"
-                  :default="idx === 0"
-                />
-              </video>
-              <div class="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
-                <span class="rounded bg-slate-100 px-2 py-0.5 text-slate-600">
-                  Качество: {{ player.streamQuality ?? '—' }}
-                </span>
-                <a
-                  v-if="player.streamM3uUrl"
-                  :href="player.streamM3uUrl"
-                  class="rounded-md bg-orange-500 px-2.5 py-1 font-medium text-white hover:bg-orange-600"
-                  data-testid="player-stream-m3u"
+                <span class="block text-xs font-medium text-slate-500">Качество</span>
+                <select
+                  class="mt-1 w-full rounded-md border border-slate-300 px-2 py-1 text-sm focus:border-indigo-500 focus:outline-none"
+                  :value="player.kinopubFileIdx ?? 0"
+                  data-testid="player-kinopub-quality"
+                  @change="onKinopubFileChange"
                 >
-                  VLC (M3U)
-                </a>
-                <a
-                  :href="player.streamUrl"
-                  target="_blank"
-                  rel="noopener"
-                  class="rounded-md bg-slate-200 px-2.5 py-1 font-medium text-slate-700 hover:bg-slate-300"
-                  data-testid="player-stream-direct-url"
+                  <option
+                    v-for="f in kinopubFileEntries"
+                    :key="f.idx"
+                    :value="f.idx"
+                  >
+                    {{ f.label }}
+                  </option>
+                </select>
+              </label>
+
+              <p
+                v-if="kinopubAudioEntries.length > 0"
+                class="text-[11px] text-slate-500"
+                data-testid="player-kinopub-audio-info"
+              >
+                Дорожки: {{ kinopubAudioEntries.map((a) => a.label).join(', ') }}
+              </p>
+
+              <label
+                v-if="subtitleEntries.length > 0"
+                class="block"
+                data-testid="player-kinopub-subtitle-wrap"
+              >
+                <span class="block text-xs font-medium text-slate-500">Субтитры</span>
+                <select
+                  class="mt-1 w-full rounded-md border border-slate-300 px-2 py-1 text-sm focus:border-indigo-500 focus:outline-none"
+                  :value="player.kinopubSubtitleLang"
+                  data-testid="player-kinopub-subtitle"
+                  @change="onKinopubSubtitleChange"
                 >
-                  В браузере
-                </a>
-              </div>
-            </div>
+                  <option value="">Отключены</option>
+                  <option
+                    v-for="s in subtitleEntries"
+                    :key="s.lang"
+                    :value="s.lang"
+                  >
+                    {{ s.title }}
+                  </option>
+                </select>
+              </label>
+            </template>
           </template>
+
+          <!-- ── Shared video element ───────────────────────────────── -->
+          <p
+            v-if="player.streamLoading"
+            class="text-xs text-slate-500"
+            data-testid="player-stream-resolving"
+          >
+            Резолвим поток…
+          </p>
+          <p
+            v-if="player.streamError"
+            class="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800"
+            data-testid="player-stream-error"
+          >
+            {{ player.streamError }}
+          </p>
+          <p
+            v-if="playerError"
+            class="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800"
+            data-testid="player-stream-attach-error"
+          >
+            {{ playerError }}
+          </p>
+
+          <div
+            v-if="player.streamUrl"
+            data-testid="player-stream-video-wrap"
+          >
+            <video
+              ref="videoRef"
+              controls
+              autoplay
+              crossorigin="anonymous"
+              class="aspect-video max-h-[60vh] w-full rounded-lg bg-black object-contain"
+              data-testid="player-stream-video"
+            >
+              <track
+                v-for="(sub, idx) in subtitleEntries"
+                :key="sub.lang"
+                kind="subtitles"
+                :label="sub.title"
+                :srclang="sub.lang"
+                :src="sub.src"
+                :default="player.source === 'kinopub' ? sub.lang === player.kinopubSubtitleLang : idx === 0"
+              />
+            </video>
+            <div class="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
+              <span class="rounded bg-slate-100 px-2 py-0.5 text-slate-600">
+                Качество: {{ player.streamQuality ?? '—' }}
+              </span>
+              <a
+                v-if="player.streamM3uUrl"
+                :href="player.streamM3uUrl"
+                class="rounded-md bg-orange-500 px-2.5 py-1 font-medium text-white hover:bg-orange-600"
+                data-testid="player-stream-m3u"
+              >
+                VLC (M3U)
+              </a>
+              <a
+                :href="player.streamUrl"
+                target="_blank"
+                rel="noopener"
+                class="rounded-md bg-slate-200 px-2.5 py-1 font-medium text-slate-700 hover:bg-slate-300"
+                data-testid="player-stream-direct-url"
+              >
+                В браузере
+              </a>
+            </div>
+          </div>
         </section>
       </div>
     </div>

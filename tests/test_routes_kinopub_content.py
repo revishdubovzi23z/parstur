@@ -286,3 +286,172 @@ def test_unbind_idempotent_on_already_unbound(client: TestClient) -> None:
     audit = main.db.list_audit(item_id=item_id)
     # No-op unbind should NOT emit an audit row (before == after).
     assert not any(a["action"] == "kinopub_unbind" for a in audit)
+
+
+# ── /m3u/{item_id} (PR 5) ───────────────────────────────────────────────
+
+
+def _movie_stream_info() -> dict:
+    return {
+        "id": 555,
+        "title": "Inception",
+        "year": 2010,
+        "type": "movie",
+        "url": "https://kino.pub/item/555",
+        "videos": [
+            {
+                "number": 1,
+                "title": None,
+                "duration": 8880,
+                "files": [
+                    {"url": "https://cdn.kino.pub/720.mp4", "quality": "720p", "codec": "h264"},
+                    {"url": "https://cdn.kino.pub/1080.mp4", "quality": "1080p", "codec": "h264"},
+                    {"url": "https://cdn.kino.pub/2160.mp4", "quality": "2160p", "codec": "h265"},
+                ],
+                "audios": [],
+                "subtitles": [],
+            }
+        ],
+        "seasons": [],
+    }
+
+
+def _serial_stream_info() -> dict:
+    return {
+        "id": 777,
+        "title": "Серии",
+        "year": 2020,
+        "type": "serial",
+        "url": "https://kino.pub/item/777",
+        "videos": [],
+        "seasons": [
+            {
+                "number": 1,
+                "episodes": [
+                    {
+                        "number": 1,
+                        "title": "Pilot",
+                        "duration": 2400,
+                        "files": [
+                            {"url": "https://cdn.kino.pub/s1e1-720.mp4", "quality": "720p"},
+                            {"url": "https://cdn.kino.pub/s1e1-1080.mp4", "quality": "1080p"},
+                        ],
+                        "audios": [],
+                        "subtitles": [],
+                    },
+                    {
+                        "number": 2,
+                        "title": "Second",
+                        "duration": 2400,
+                        "files": [
+                            {"url": "https://cdn.kino.pub/s1e2-1080.mp4", "quality": "1080p"},
+                        ],
+                        "audios": [],
+                        "subtitles": [],
+                    },
+                ],
+            }
+        ],
+    }
+
+
+def test_m3u_404_when_item_missing(client: TestClient) -> None:
+    r = client.get("/api/kinopub/m3u/999999")
+    assert r.status_code == 404
+
+
+def test_m3u_409_when_not_bound(client: TestClient) -> None:
+    import main
+
+    item_id = _insert_item(main.db)
+    r = client.get(f"/api/kinopub/m3u/{item_id}")
+    assert r.status_code == 409
+
+
+def test_m3u_movie_picks_best_quality_by_default(client: TestClient, monkeypatch) -> None:
+    import main
+    from runtime import kinopub as rk
+
+    item_id = _insert_item(main.db, title="Inception")
+    main.db.kinopub_bind(item_id, kinopub_id=555, kinopub_type="movie")
+    monkeypatch.setattr(rk, "get_stream_info", lambda kid: _movie_stream_info(), raising=True)
+
+    r = client.get(f"/api/kinopub/m3u/{item_id}")
+    assert r.status_code == 200, r.text
+    body = r.text
+    assert body.startswith("#EXTM3U")
+    assert "https://cdn.kino.pub/2160.mp4" in body
+    assert "Inception" in body
+    cd = r.headers.get("Content-Disposition", "")
+    assert "attachment" in cd.lower()
+    assert ".m3u" in cd
+
+
+def test_m3u_movie_honours_requested_quality(client: TestClient, monkeypatch) -> None:
+    import main
+    from runtime import kinopub as rk
+
+    item_id = _insert_item(main.db, title="Inception")
+    main.db.kinopub_bind(item_id, kinopub_id=555)
+    monkeypatch.setattr(rk, "get_stream_info", lambda kid: _movie_stream_info(), raising=True)
+
+    r = client.get(f"/api/kinopub/m3u/{item_id}", params={"quality": "720p"})
+    assert r.status_code == 200, r.text
+    assert "https://cdn.kino.pub/720.mp4" in r.text
+    assert "https://cdn.kino.pub/1080.mp4" not in r.text
+
+
+def test_m3u_serial_picks_correct_episode(client: TestClient, monkeypatch) -> None:
+    import main
+    from runtime import kinopub as rk
+
+    item_id = _insert_item(main.db, title="MySeries")
+    main.db.kinopub_bind(item_id, kinopub_id=777, kinopub_type="serial")
+    monkeypatch.setattr(rk, "get_stream_info", lambda kid: _serial_stream_info(), raising=True)
+
+    r = client.get(
+        f"/api/kinopub/m3u/{item_id}",
+        params={"season": 1, "episode": 2},
+    )
+    assert r.status_code == 200, r.text
+    body = r.text
+    assert "https://cdn.kino.pub/s1e2-1080.mp4" in body
+    assert "S01E02" in body
+
+
+def test_m3u_serial_404_when_episode_unknown(client: TestClient, monkeypatch) -> None:
+    import main
+    from runtime import kinopub as rk
+
+    item_id = _insert_item(main.db, title="MySeries")
+    main.db.kinopub_bind(item_id, kinopub_id=777, kinopub_type="serial")
+    monkeypatch.setattr(rk, "get_stream_info", lambda kid: _serial_stream_info(), raising=True)
+
+    r = client.get(
+        f"/api/kinopub/m3u/{item_id}",
+        params={"season": 9, "episode": 1},
+    )
+    assert r.status_code == 404
+
+
+def test_m3u_503_when_disabled(client: TestClient, monkeypatch) -> None:
+    from runtime import kinopub as rk
+
+    monkeypatch.setattr(rk.settings, "kinopub_enabled", False, raising=True)
+    r = client.get("/api/kinopub/m3u/1")
+    assert r.status_code == 503
+
+
+def test_m3u_maps_auth_error_to_401(client: TestClient, monkeypatch) -> None:
+    import main
+    from runtime import kinopub as rk
+
+    item_id = _insert_item(main.db)
+    main.db.kinopub_bind(item_id, kinopub_id=555)
+
+    def _raise(_kid):
+        raise KinopubAuthError("nope")
+
+    monkeypatch.setattr(rk, "get_stream_info", _raise, raising=True)
+    r = client.get(f"/api/kinopub/m3u/{item_id}")
+    assert r.status_code == 401

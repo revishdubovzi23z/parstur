@@ -23,8 +23,10 @@ from __future__ import annotations
 
 import json as _json
 import logging
+import re
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -291,3 +293,148 @@ def unbind(item_id: int) -> BindResponse:
             new_value=_json.dumps(result["after"], ensure_ascii=False),
         )
     return BindResponse(status="success", before=result["before"], after=result["after"])
+
+
+# ── PR 5: M3U playlist for external players (VLC / Infuse / KMPlayer) ────
+
+
+# Match the priority table used by `routes/streams.py:get_stream_m3u` for
+# the rezka equivalent — "best" quality wins when the caller doesn't
+# pin a specific one. Includes the labels kino.pub returns
+# (`360p` / `480p` / `720p` / `1080p` / `2160p` / `4K`).
+_KINOPUB_QUALITY_RANK: dict[str, int] = {
+    "4k": 8,
+    "2160p": 7,
+    "2k": 6,
+    "1440p": 5,
+    "1080p": 4,
+    "720p": 3,
+    "480p": 2,
+    "360p": 1,
+}
+
+
+def _pick_video(info: dict, *, season: int | None, episode: int | None) -> dict | None:
+    """Return the single `_map_video()` dict the caller wants to play.
+
+    For movies, `info["videos"][0]` is the only entry. For serials, walk
+    `info["seasons"][*]` and find the matching `(season, episode)`. Falls
+    back to the first available video when the caller passes no
+    coordinates and the catalog row only contains one video.
+    """
+    videos = info.get("videos") or []
+    seasons = info.get("seasons") or []
+
+    if season is None and episode is None:
+        if isinstance(videos, list) and videos:
+            return videos[0] if isinstance(videos[0], dict) else None
+        # Movie row with a single episode wrapped in a season — pick it.
+        if isinstance(seasons, list) and seasons:
+            first = seasons[0]
+            eps = first.get("episodes") if isinstance(first, dict) else None
+            if isinstance(eps, list) and eps and isinstance(eps[0], dict):
+                return eps[0]
+        return None
+
+    for s in seasons:
+        if not isinstance(s, dict):
+            continue
+        if season is not None and s.get("number") != season:
+            continue
+        for ep in s.get("episodes") or []:
+            if not isinstance(ep, dict):
+                continue
+            if episode is None or ep.get("number") == episode:
+                return ep
+    return None
+
+
+def _pick_file(video: dict, *, quality: str | None) -> dict | None:
+    """Return the `files[]` entry that matches `quality` (case-insensitive),
+    or the highest-quality available entry when `quality` is not provided
+    or doesn't exist on the video."""
+    files = video.get("files") or []
+    if not isinstance(files, list) or not files:
+        return None
+
+    if quality:
+        q_norm = quality.strip().lower()
+        for f in files:
+            if not isinstance(f, dict):
+                continue
+            f_q = str(f.get("quality") or "").strip().lower()
+            if f_q == q_norm:
+                return f
+
+    # Fallback: highest known rank, ties → first occurrence.
+    best: dict | None = None
+    best_rank = -1
+    for f in files:
+        if not isinstance(f, dict):
+            continue
+        rank = _KINOPUB_QUALITY_RANK.get(str(f.get("quality") or "").strip().lower(), 0)
+        if rank > best_rank:
+            best = f
+            best_rank = rank
+    return best
+
+
+@router.get("/m3u/{item_id}")
+def m3u(
+    item_id: int,
+    season: int | None = Query(default=None, ge=1, le=999),
+    episode: int | None = Query(default=None, ge=1, le=9999),
+    quality: str | None = Query(default=None, max_length=16),
+) -> Response:
+    """Return an `.m3u` playlist for the bound kino.pub item.
+
+    Mirrors `/api/stream_m3u/{id}` for Rezka so the existing "Open in
+    VLC" / Infuse / KMPlayer UI hooks work unchanged. The playlist is
+    one-entry — kino.pub URLs are short-lived and IP-locked, so
+    downloading the playlist and opening it later usually still works
+    as long as the client IP matches.
+    """
+    _ensure_enabled()
+    item = db.get_item(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="item not found")
+    kinopub_id = item.get("kinopub_id")
+    if not kinopub_id:
+        raise HTTPException(
+            status_code=409,
+            detail="item is not bound to a kino.pub id",
+        )
+
+    try:
+        info = _kinopub.get_stream_info(int(kinopub_id))
+    except KinopubError as e:
+        raise _map_kinopub_error(e) from e
+
+    video = _pick_video(info, season=season, episode=episode)
+    if video is None:
+        raise HTTPException(
+            status_code=404,
+            detail="no matching season/episode on kino.pub",
+        )
+    file_entry = _pick_file(video, quality=quality)
+    if file_entry is None or not file_entry.get("url"):
+        raise HTTPException(
+            status_code=404,
+            detail="no playable file on kino.pub for the requested quality",
+        )
+
+    url = str(file_entry["url"])
+    title = item.get("title") or info.get("title") or f"kinopub-{kinopub_id}"
+    if season is not None and episode is not None:
+        title = f"{title} - S{season:02d}E{episode:02d}"
+
+    safe_title = re.sub(r'[<>:"/\\|?*]', "", str(title)).encode("ascii", "replace")
+    safe_title_str = safe_title.decode("ascii") or f"kinopub-{kinopub_id}"
+    m3u_body = f"#EXTM3U\n#EXTINF:-1,{title}\n{url}\n"
+    return Response(
+        content=m3u_body.encode("utf-8"),
+        media_type="audio/mpegurl; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{safe_title_str}.m3u"',
+        },
+    )
