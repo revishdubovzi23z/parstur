@@ -55,6 +55,16 @@ def test_env_vars_are_picked_up(monkeypatch: pytest.MonkeyPatch) -> None:
     assert s.sync_min_year == 1950
 
 
+def test_blank_kinopub_credentials_fall_back_to_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("KINOPUB_CLIENT_ID", "")
+    monkeypatch.setenv("KINOPUB_CLIENT_SECRET", "  ")
+    s = reload_settings()
+    assert s.kinopub_client_id == "xbmc"
+    assert s.kinopub_client_secret
+
+
 def test_case_insensitive_env(monkeypatch: pytest.MonkeyPatch) -> None:
     # `case_sensitive=False` is essential because users sometimes
     # write `auth_user=` in their .env (lowercase).
