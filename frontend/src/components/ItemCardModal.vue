@@ -638,14 +638,17 @@ function onToggleEditIds(): void {
               :data-testid="`item-modal-reset-${f}`"
             />
             {{
-              {
-                poster: 'Постер',
-                description: 'Описание',
-                kp_id: 'Кинопоиск ID',
-                imdb_id: 'IMDb ID',
-                rezka_url: 'Ссылка Rezka',
-                ratings: 'Рейтинги',
-              }[f] || f
+              (
+                {
+                  poster_url: 'Постер',
+                  description: 'Описание',
+                  kp_id: 'Кинопоиск ID',
+                  imdb_id: 'IMDb ID',
+                  rezka_url: 'Ссылка Rezka',
+                  kp_rating: 'Рейтинг КП',
+                  imdb_rating: 'Рейтинг IMDb',
+                } as Record<string, string>
+              )[f] || f
             }}
           </label>
         </div>

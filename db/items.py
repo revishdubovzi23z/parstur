@@ -204,11 +204,14 @@ class DbItemsMixin:
     def reset_item(self, item_id: int, fields: list[str], conn=None) -> None:
         field_map = {
             "poster": "poster_url = NULL",
+            "poster_url": "poster_url = NULL",
             "description": "description = NULL",
             "kp_id": "kp_id = NULL",
             "imdb_id": "imdb_id = NULL",
             "rezka_url": "rezka_url = NULL",
             "ratings": "kp_rating = 0, imdb_rating = 0",
+            "kp_rating": "kp_rating = 0",
+            "imdb_rating": "imdb_rating = 0",
         }
         updates = [field_map[f] for f in fields if f in field_map]
         if not updates:
