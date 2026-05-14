@@ -141,6 +141,14 @@ const CONTROLS: ControlRow[] = [
     startLabel: 'Старт',
   },
   {
+    key: 'kinopub',
+    label: 'kino.pub · матчер',
+    description:
+      'Сопоставляет раздачи с каталогом kino.pub: пишет kinopub_id / kinopub_url. Требует включённой OAuth-авторизации (Admin → kino.pub).',
+    start: () => sync.startSyncKinopub(),
+    startLabel: 'Старт',
+  },
+  {
     key: 'cleanup',
     label: 'Очистка дубликатов',
     description: 'Сворачивает повторы из items / releases.',

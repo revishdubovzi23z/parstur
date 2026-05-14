@@ -62,6 +62,7 @@ PROCESS_KEYS: tuple[str, ...] = (
     "cleanup",
     "rezka",
     "rezka_collections",
+    "kinopub",
     "full_pipeline",
     "single_update",
 )
