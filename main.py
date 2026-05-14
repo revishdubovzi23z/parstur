@@ -501,6 +501,21 @@ def get_manifest():
     return FileResponse("manifest.json")
 
 
+@app.get("/favicon.png")
+def get_favicon():
+    return FileResponse(os.path.join(_FRONTEND_DIST, "favicon.png"))
+
+
+@app.get("/icon-192.png")
+def get_icon192():
+    return FileResponse(os.path.join(_FRONTEND_DIST, "icon-192.png"))
+
+
+@app.get("/icon-512.png")
+def get_icon512():
+    return FileResponse(os.path.join(_FRONTEND_DIST, "icon-512.png"))
+
+
 def _sw_version() -> str:
     """Build a cache-bust token for the service worker.
 
