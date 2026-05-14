@@ -9,6 +9,7 @@ import { useCategoriesStore } from '../../stores/categories'
 import { useCollectionsStore } from '../../stores/collections'
 import { useFeedStore } from '../../stores/feed'
 import { useSessionStore } from '../../stores/session'
+import { useSyncStore } from '../../stores/sync'
 
 function mockJson(body: unknown, init?: ResponseInit): Response {
   return new Response(JSON.stringify(body), {
@@ -198,6 +199,89 @@ describe('Sidebar.vue', () => {
       order: [2, 1],
     })
     expect(collections.items.map((c) => c.id)).toEqual([2, 1])
+  })
+
+  // ── Lazy collections: empty-state CTA ───────────────────────────
+  describe('empty-state HDRezka sync CTA', () => {
+    it('renders the empty-state card and Sync button when no collections exist', () => {
+      const pinia = setActivePinia(createPinia())
+      const session = useSessionStore()
+      session.$patch({ status: 'disabled' })
+      const collections = useCollectionsStore()
+      collections.items = [] // fresh DB
+      void pinia
+
+      const wrapper = mount(Sidebar)
+      expect(
+        wrapper.find('[data-testid="sidebar-collections-empty"]').exists(),
+      ).toBe(true)
+      const btn = wrapper.find(
+        '[data-testid="sidebar-collections-empty-sync"]',
+      )
+      expect(btn.exists()).toBe(true)
+      expect(btn.text()).toContain('Sync с HDRezka')
+      expect(btn.attributes('disabled')).toBeUndefined()
+    })
+
+    it('clicking the Sync button calls startRezkaCollections + collections.refresh', async () => {
+      // First call: POST /api/start_rezka_collections. Second:
+      // GET /api/collections (the refresh after success).
+      vi.mocked(globalThis.fetch)
+        .mockResolvedValueOnce(mockJson({ status: 'started' }))
+        .mockResolvedValueOnce(
+          mockJson([
+            { id: 99, name: 'New from HDRezka', count: 0, sort_order: 0 },
+          ]),
+        )
+      const pinia = setActivePinia(createPinia())
+      const session = useSessionStore()
+      session.$patch({ status: 'disabled' })
+      const collections = useCollectionsStore()
+      collections.items = []
+      void pinia
+
+      const wrapper = mount(Sidebar)
+      await wrapper
+        .find('[data-testid="sidebar-collections-empty-sync"]')
+        .trigger('click')
+      await flushPromises()
+
+      const calls = vi
+        .mocked(globalThis.fetch)
+        .mock.calls.map(([u]) => String(u))
+      expect(calls).toContain('/api/start_rezka_collections')
+      expect(calls).toContain('/api/collections')
+    })
+
+    it('disables the button while a sync is already in flight', () => {
+      const pinia = setActivePinia(createPinia())
+      const session = useSessionStore()
+      session.$patch({ status: 'disabled' })
+      const collections = useCollectionsStore()
+      collections.items = []
+      const sync = useSyncStore()
+      // The store keeps a per-process_key status map. Anything
+      // other than the idle states (`idle` / `success` / `error`)
+      // counts as "busy"; `running` is the one the sidebar binds
+      // to, so use it explicitly.
+      sync.statuses.rezka_collections = 'running'
+      void pinia
+
+      const wrapper = mount(Sidebar)
+      const btn = wrapper.find(
+        '[data-testid="sidebar-collections-empty-sync"]',
+      )
+      expect(btn.attributes('disabled')).toBeDefined()
+      expect(btn.text()).toContain('Синхронизация')
+    })
+
+    it('hides the empty-state card when at least one collection exists', () => {
+      setup()
+      const wrapper = mount(Sidebar)
+      expect(
+        wrapper.find('[data-testid="sidebar-collections-empty"]').exists(),
+      ).toBe(false)
+    })
   })
 
   it('renaming a collection forwards the new name', async () => {

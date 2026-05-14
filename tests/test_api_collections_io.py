@@ -39,15 +39,25 @@ def client(monkeypatch, tmp_path) -> TestClient:
 
 
 def test_export_json_envelope(client: TestClient) -> None:
+    # Seed a single collection so the export has something to round-trip.
+    # `init_schema` used to seed 11 default collections by name, but as
+    # of the "lazy collections" change the table starts empty on a
+    # fresh DB. We create one explicitly here so this test still
+    # exercises the export shape.
+    client.post(
+        "/api/collections/import",
+        json={
+            "collections": [{"name": "test-export-source", "sort_order": 0, "items": []}],
+            "replace": False,
+        },
+    )
     r = client.get("/api/collections/export")
     assert r.status_code == 200
     assert r.headers["content-disposition"].endswith("collections.json")
     body = r.json()
     assert body["version"] == 1
     assert isinstance(body["collections"], list)
-    # Default collections (e.g. "топ фильмы") are guaranteed by
-    # init_schema, so the list is never empty.
-    assert body["collections"], "expected default collections in fresh DB"
+    assert body["collections"], "expected at least the seeded collection in export"
     for col in body["collections"]:
         assert "name" in col
         assert "items" in col

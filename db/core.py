@@ -340,21 +340,15 @@ class DbCore:
                     )
                 """)
 
-            default_collections = [
-                "говноозвучки",
-                "на телефон просмотр",
-                "детские",
-                "в первую очередь",
-                "Проходняк сериал завершенные",
-                "Топ сериалы с завершённые",
-                "Топ сериал с продолжением",
-                "Проходняк сериал с продолжением",
-                "тв шоу",
-                "топ фильмы",
-                "docum",
-            ]
-            for name in default_collections:
-                cur.execute("INSERT OR IGNORE INTO collections (name) VALUES (?)", (name,))
+            # NOTE: a hard-coded seed list of 11 personal collections
+            # used to live here. It was confusing on a fresh install —
+            # the UI showed the previous owner's taxonomy before any
+            # HDRezka sync had run. Collections now stay empty until
+            # `sync_rezka_collections` (or manual creation) populates
+            # them, and the SPA shows an empty-state banner inviting
+            # the user to kick off the first sync. Existing installs
+            # are unaffected: removing the seed only stops new INSERTs
+            # via `INSERT OR IGNORE`, it doesn't touch existing rows.
 
             # tokenize: 'unicode61' with remove_diacritics=2 normalises
             # combining marks AND folds case. The previous string
