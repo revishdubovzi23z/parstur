@@ -83,6 +83,43 @@ def test_runner_ignores_non_numeric_filenames(tmp_db_no_init, tmp_path) -> None:
     assert _user_version(p) >= 1
 
 
+def test_migration_0006_adds_kinopub_columns_and_table(tmp_db_no_init) -> None:
+    """Migration 0006 introduces the kino.pub integration tables.
+
+    Pinning the column/table presence here so a future schema rewrite
+    can't accidentally drop them.
+    """
+    d, p = tmp_db_no_init
+    d.init_schema()
+    conn = sqlite3.connect(p)
+    try:
+        items_cols = {row[1] for row in conn.execute("PRAGMA table_info(items)")}
+        assert "kinopub_id" in items_cols
+        assert "kinopub_type" in items_cols
+        assert "kinopub_url" in items_cols
+        assert "checked_kinopub" in items_cols
+
+        # kinopub_auth one-row table exists with the expected columns.
+        auth_cols = {row[1] for row in conn.execute("PRAGMA table_info(kinopub_auth)")}
+        assert auth_cols == {
+            "id",
+            "access_token",
+            "refresh_token",
+            "expires_at",
+            "client_id",
+            "client_secret_sha256",
+            "updated_at",
+        }
+        # Partial index on items.kinopub_id is present.
+        indices = {row[1] for row in conn.execute("PRAGMA index_list(items)")}
+        assert "idx_items_kinopub_id" in indices
+
+        # user_version must have advanced at least to 6.
+        assert _user_version(p) >= 6
+    finally:
+        conn.close()
+
+
 def test_apply_migrations_is_safe_when_dir_missing(tmp_path: Path) -> None:
     """If a fresh deploy somehow ships without the migrations/
     folder, the runner should silently no-op rather than crash. We

@@ -32,6 +32,15 @@ def test_defaults_present() -> None:
     assert s.rutor_mirror == "https://rutor.info"
     assert s.debug is False
     assert s.log_level == "INFO"
+    # kino.pub defaults: integration off, but the well-known 'xbmc'
+    # OAuth credentials are baked in so the integration works the
+    # moment the operator flips KINOPUB_ENABLED=true.
+    assert s.kinopub_enabled is False
+    assert s.kinopub_client_id == "xbmc"
+    assert s.kinopub_client_secret  # non-empty
+    assert s.kinopub_api_base_url == "https://api.service-kp.com"
+    assert s.kinopub_device_verification_uri == "https://kino.pub/device"
+    assert s.kinopub_refresh_skew_seconds == 300
 
 
 def test_env_vars_are_picked_up(monkeypatch: pytest.MonkeyPatch) -> None:
