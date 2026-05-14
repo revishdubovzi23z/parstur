@@ -106,8 +106,8 @@ const rutorUrl = computed(() => {
   const releases = [...(it.releases || [])].sort((a, b) => {
     return (b.date_added || '').localeCompare(a.date_added || '')
   })
-  const latestWithUrl = releases.find((r) => r.url)
-  if (latestWithUrl?.url) return latestWithUrl.url
+  const latestWithUrl = releases.find((r) => r.link)
+  if (latestWithUrl?.link) return latestWithUrl.link
 
   if (!it.title) return null
   const query = it.year ? `${it.title} ${it.year}` : it.title

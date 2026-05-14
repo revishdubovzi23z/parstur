@@ -19,7 +19,7 @@ export interface FeedRelease {
   title?: string | null
   quality?: string | null
   size?: string | null
-  url?: string | null
+  link?: string | null
 }
 
 export interface FeedItem {
