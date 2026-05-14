@@ -367,4 +367,84 @@ describe('ItemCardModal.vue', () => {
       wrapper.find('[data-testid="item-modal-toggle-ignore"]').exists(),
     ).toBe(true)
   })
+
+  // ── PR 6: Android intent:// deep-link ───────────────────────────
+  describe('kino.pub Android deep-link', () => {
+    it('hides the Android button when no kinopub_id is bound', async () => {
+      vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockJson(DETAIL))
+      authorise()
+      const items = useItemsStore()
+      const wrapper = mount(ItemCardModal)
+      await items.open(42, baseItem())
+      await flushPromises()
+      expect(
+        wrapper
+          .find('[data-testid="item-modal-watch-kinopub-android"]')
+          .exists(),
+      ).toBe(false)
+    })
+
+    it('renders the intent:// URL with the canonical https fallback', async () => {
+      const detail = {
+        ...DETAIL,
+        item: baseItem({
+          kinopub_id: 7777,
+          kinopub_url: 'https://kino.pub/item/7777',
+          kinopub_type: 'movie',
+        }),
+      }
+      vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockJson(detail))
+      authorise()
+      const items = useItemsStore()
+      const wrapper = mount(ItemCardModal)
+      await items.open(
+        42,
+        baseItem({
+          kinopub_id: 7777,
+          kinopub_url: 'https://kino.pub/item/7777',
+          kinopub_type: 'movie',
+        }),
+      )
+      await flushPromises()
+      const href = wrapper
+        .find('[data-testid="item-modal-watch-kinopub-android"]')
+        .attributes('href')
+      expect(href).toBeDefined()
+      // Authority + path must mirror the canonical kino.pub URL so
+      // the Android app's https:// intent-filter picks it up.
+      expect(href).toContain('intent://kino.pub/item/7777#Intent;')
+      expect(href).toContain('scheme=https;')
+      expect(href).toContain('package=com.kinopub;')
+      // The fallback URL is URL-encoded so `:` and `/` survive
+      // ParserURI roundtripping on the browser side.
+      expect(href).toContain(
+        `S.browser_fallback_url=${encodeURIComponent(
+          'https://kino.pub/item/7777',
+        )}`,
+      )
+      expect(href?.endsWith(';end')).toBe(true)
+    })
+
+    it('falls back to the canonical /item/<id> path when kinopub_url is empty', async () => {
+      const detail = {
+        ...DETAIL,
+        item: baseItem({ kinopub_id: 4242, kinopub_url: null }),
+      }
+      vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockJson(detail))
+      authorise()
+      const items = useItemsStore()
+      const wrapper = mount(ItemCardModal)
+      await items.open(42, baseItem({ kinopub_id: 4242, kinopub_url: null }))
+      await flushPromises()
+      const href = wrapper
+        .find('[data-testid="item-modal-watch-kinopub-android"]')
+        .attributes('href')
+      expect(href).toContain('intent://kino.pub/item/4242#')
+      expect(href).toContain(
+        `S.browser_fallback_url=${encodeURIComponent(
+          'https://kino.pub/item/4242',
+        )}`,
+      )
+    })
+  })
 })
