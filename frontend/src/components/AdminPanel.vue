@@ -15,6 +15,7 @@
 import { computed, ref, watch } from 'vue'
 
 import CollectionsIO from './CollectionsIO.vue'
+import KinopubAuthPanel from './KinopubAuthPanel.vue'
 import { useAdminStore } from '../stores/admin'
 
 const props = defineProps<{ open: boolean }>()
@@ -287,6 +288,8 @@ async function onRebuildFts(): Promise<void> {
         </section>
 
         <CollectionsIO />
+
+        <KinopubAuthPanel :visible="open" />
 
         <section class="rounded-lg border border-slate-200 p-4">
           <h3 class="text-sm font-semibold text-slate-900">
