@@ -89,6 +89,7 @@ describe('useKinopubStore', () => {
       expect(store.flow?.userCode).toBe('WXYZ-1234')
       expect(store.flow?.interval).toBe(5)
       expect(store.pollState).toBe('pending')
+      expect(store.flowBusy).toBe(false)
     })
 
     it('surfaces backend detail on 503', async () => {
@@ -100,7 +101,9 @@ describe('useKinopubStore', () => {
       await store.startDeviceFlow()
       expect(store.flow).toBe(null)
       expect(store.pollError).toContain('kino.pub disabled')
+      expect(store.statusError).toContain('kino.pub disabled')
       expect(store.pollState).toBe('expired')
+      expect(store.flowBusy).toBe(false)
     })
   })
 

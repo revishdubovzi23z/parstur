@@ -91,6 +91,7 @@ interface KinopubStoreState {
   statusError: string
 
   flow: DeviceFlow | null
+  flowBusy: boolean
   pollBusy: boolean
   pollError: string
   /** "pending" until user confirms; "confirmed" / "expired" at end. */
@@ -143,6 +144,7 @@ export const useKinopubStore = defineStore('kinopub', {
     statusBusy: false,
     statusError: '',
     flow: null,
+    flowBusy: false,
     pollBusy: false,
     pollError: '',
     pollState: 'idle',
@@ -195,7 +197,9 @@ export const useKinopubStore = defineStore('kinopub', {
       this.stopPolling()
       this.flow = null
       this.pollError = ''
+      this.statusError = ''
       this.pollState = 'idle'
+      this.flowBusy = true
       try {
         const res = await apiFetch('/api/kinopub/device/start', {
           method: 'POST',
@@ -216,7 +220,10 @@ export const useKinopubStore = defineStore('kinopub', {
         this.pollState = 'pending'
       } catch (err) {
         this.pollError = describeError(err)
+        this.statusError = this.pollError
         this.pollState = 'expired'
+      } finally {
+        this.flowBusy = false
       }
     },
 
