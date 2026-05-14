@@ -192,5 +192,33 @@ export const useFeedStore = defineStore('feed', {
       this.page -= 1
       await this.fetchFeed()
     },
+
+    /**
+     * Pull fresh data for a single item (e.g. after a background
+     * update finished) and replace it in the items list if present.
+     */
+    async updateItemById(id: number): Promise<void> {
+      const session = useSessionStore()
+      if (!session.canCallApi) return
+
+      try {
+        const res = await apiFetch(`/api/item/${id}`)
+        if (!res.ok) return
+
+        const data = (await res.json()) as {
+          item: FeedItem
+          releases: FeedRelease[]
+          collections: number[]
+        }
+        const index = this.items.findIndex((it) => it.id === id)
+        if (index !== -1) {
+          // Merge releases into the item object so the card reflects them
+          const updated = { ...data.item, releases: data.releases }
+          this.items[index] = updated
+        }
+      } catch {
+        /* silent fail */
+      }
+    },
   },
 })

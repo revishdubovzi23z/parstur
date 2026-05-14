@@ -98,12 +98,18 @@ interface RezkaSessionMessage {
   state?: RezkaSessionState
 }
 
+interface ItemUpdatedMessage {
+  type: 'item_updated'
+  item_id: number
+}
+
 type WsMessage =
   | StatusMessage
   | ProgressMessage
   | LogMessage
   | RezkaSyncErrorMessage
   | RezkaSessionMessage
+  | ItemUpdatedMessage
 
 export interface SyncFilters {
   minYear: number | null
@@ -276,6 +282,14 @@ export const useSyncStore = defineStore('sync', {
       } else if (msg.type === 'log') {
         if (msg.key && msg.data && isProcessKey(msg.key)) {
           useLogsStore().appendChunk(msg.key, msg.data)
+        }
+      } else if (msg.type === 'item_updated') {
+        // Broad refresh for the feed card
+        void useFeedStore().updateItemById(msg.item_id)
+        // If the same item is currently open in a modal, refresh the modal too
+        const itemsStore = useItemsStore()
+        if (itemsStore.item?.id === msg.item_id) {
+          void itemsStore.refresh()
         }
       }
     },

@@ -44,20 +44,26 @@ def get_item(item_id: int):
     }
 
 
+async def _run_single_update(item_id: int, log_file: str):
+    from runtime.ws import ws_manager
+
+    await run_script_with_args(
+        "single_item_update.py",
+        [str(item_id)],
+        "single_update",
+        log_file,
+    )
+    # Broadcast specifically that THIS item was updated so the frontend can refresh it
+    await ws_manager.broadcast({"type": "item_updated", "item_id": item_id})
+
+
 @router.post("/api/update_item/{item_id}")
 async def update_item(item_id: int):
     log_file = "single_update_log.txt"
     with open(log_file, "w", encoding="utf-8") as f:
         f.write(f"=== Обновление карточки ID {item_id} ===\n")
 
-    await task_queue.add_task(
-        run_script_with_args,
-        "single_update",
-        "single_item_update.py",
-        [str(item_id)],
-        "single_update",
-        log_file,
-    )
+    await task_queue.add_task(_run_single_update, "single_update", item_id, log_file)
     return {"status": "started"}
 
 
