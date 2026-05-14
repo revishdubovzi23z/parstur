@@ -32,9 +32,9 @@ Adding a new setting:
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import ClassVar, Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -113,15 +113,18 @@ class _KinopubSettings(BaseSettings):
         default=False,
         description="Master switch for kino.pub integration.",
     )
+    _DEFAULT_KINOPUB_CLIENT_ID: ClassVar[str] = "xbmc"
+    _DEFAULT_KINOPUB_CLIENT_SECRET: ClassVar[str] = "cgg3gtifu46urtfp2zp1nqtba0k2ezxh"
+
     kinopub_client_id: str = Field(
-        default="xbmc",
+        default=_DEFAULT_KINOPUB_CLIENT_ID,
         description=(
             "OAuth client_id. Default is the open-source 'xbmc' identifier "
             "used by quarckster/kodi.kino.pub."
         ),
     )
     kinopub_client_secret: str = Field(
-        default="cgg3gtifu46urtfp2zp1nqtba0k2ezxh",
+        default=_DEFAULT_KINOPUB_CLIENT_SECRET,
         description=(
             "OAuth client_secret paired with the 'xbmc' client_id. Override "
             "via env if you have your own credentials from support@kino.pub."
@@ -143,6 +146,20 @@ class _KinopubSettings(BaseSettings):
             "than this many seconds. 300 = refresh 5 minutes early."
         ),
     )
+
+    @field_validator("kinopub_client_id", mode="before")
+    @classmethod
+    def _default_blank_kinopub_client_id(cls, value: object) -> object:
+        if isinstance(value, str) and value.strip() == "":
+            return cls._DEFAULT_KINOPUB_CLIENT_ID
+        return value
+
+    @field_validator("kinopub_client_secret", mode="before")
+    @classmethod
+    def _default_blank_kinopub_client_secret(cls, value: object) -> object:
+        if isinstance(value, str) and value.strip() == "":
+            return cls._DEFAULT_KINOPUB_CLIENT_SECRET
+        return value
 
 
 class _StorageSettings(BaseSettings):
