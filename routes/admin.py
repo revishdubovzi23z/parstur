@@ -70,13 +70,39 @@ def export_data(fmt: str = "json", category_id: int = -1):
 def self_update():
     import subprocess
 
+    # Path to our new update script
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    update_script = os.path.join(project_root, "update.sh")
+
     try:
+        # If the script exists, run it. It handles git pull, pip, npm, and restart.
+        if os.path.exists(update_script):
+            logger.info(f"[UPDATE] Executing update script: {update_script}")
+            # We run it in the background or with a long timeout because npm build takes time.
+            # However, for a simple implementation, we'll run it and wait.
+            result = subprocess.run(
+                [update_script],
+                capture_output=True,
+                text=True,
+                timeout=300,  # 5 minutes for npm build
+                cwd=project_root,
+            )
+            if result.returncode != 0:
+                logger.error(f"[UPDATE] Script failed: {result.stderr}")
+                return {"status": "error", "message": f"Script failed: {result.stderr[:500]}"}
+
+            return {
+                "status": "updated",
+                "message": "Update script finished successfully. Server should be restarting.",
+            }
+
+        # Fallback to old behavior if script is missing
         result = subprocess.run(
             ["git", "pull"],
             capture_output=True,
             text=True,
             timeout=60,
-            cwd=os.path.dirname(os.path.abspath(__file__)),
+            cwd=project_root,
         )
         output = result.stdout.strip()
         if result.returncode != 0:
@@ -93,6 +119,7 @@ def self_update():
 
         return {"status": "updated", "message": msg}
     except Exception as e:
+        logger.error(f"[UPDATE] Unexpected error: {e}")
         return {"status": "error", "message": str(e)[:500]}
 
 
