@@ -1,0 +1,50 @@
+{
+  "sync": {
+    "page_depth": 20,
+    "stop_threshold": 5,
+    "default_period_days": 30,
+    "request_delay": 0.3
+  },
+  "reprocess": {
+    "batch_size": 100,
+    "request_delay": 0.5
+  },
+  "fix_posters": {
+    "batch_size": 300,
+    "request_delay": 0.5
+  },
+  "rezka": {
+    "request_delay": 0.5,
+    "concurrency": 6,
+    "score_min_with_ids": -150,
+    "score_min_without_ids": 70,
+    "score_min_resync_with_ids": -50
+  },
+  "rutor": {
+    "max_retries": 3,
+    "retry_delay_base": 5
+  },
+  "shutdown": {
+    "graceful_timeout": 5
+  },
+  "cache": {
+    "backend": "sqlite",
+    "db_path": "api_cache.db",
+    "expire_hours": 168,
+    "allowable_methods": ["GET"],
+    "match_headers": ["Authorization", "X-API-KEY"]
+  },
+  "user_sync": {
+    "imdb_csv": "IMDBOCENKI.csv",
+    "kp_csv": "kinopoiskocenki.csv"
+  },
+  "feed": {
+    "default_limit": 20
+  },
+  "cleanup": {
+    "name_similarity_strict": 0.85,
+    "name_similarity_fuzzy": 0.6,
+    "name_group_warn": 50,
+    "name_group_max": 200
+  }
+}

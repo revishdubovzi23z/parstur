@@ -1,0 +1,47 @@
+# 5.7: top-level dependency manifest. requirements.txt is the
+# locked output of `pip-compile requirements.in`. Constraints below
+# match the historic hand-pinned values in requirements.txt to avoid
+# unintended dependency-bumps the first time CI runs pip-compile.
+#
+# To upgrade:
+#   1. Loosen the constraint here (e.g. fastapi>=0.140).
+#   2. Run:   pip-compile --upgrade-package fastapi requirements.in
+#   3. Test, then commit BOTH files.
+#
+# To add a new dependency:
+#   1. Add a line here with the desired floor version.
+#   2. Run:   pip-compile requirements.in
+#   3. Commit BOTH files.
+
+# --- Core HTTP / scraping --------------------------------------------------
+requests==2.33.1
+requests-cache==1.3.1
+beautifulsoup4==4.14.3
+aiohttp>=3.9.0
+
+# --- Web framework ---------------------------------------------------------
+fastapi==0.136.1
+uvicorn==0.46.0
+pydantic==2.13.3
+pydantic-settings>=2.4
+websockets>=12.0
+slowapi>=0.1.9
+# httpx is pulled in by fastapi.testclient (used in tests/test_health.py,
+# tests/test_api_collections_io.py, tests/test_rebind_audit.py). Without
+# it pytest fails at collection time with RuntimeError from
+# starlette.testclient. Pinned >=0.27 because starlette 0.41+ uses the
+# new client API; <1.0 to avoid a future breaking-major-bump.
+httpx>=0.27,<1.0
+# python-multipart is required at runtime by FastAPI's UploadFile (used
+# in /api/database_import). Was missing from this manifest historically
+# (it lived only in the hand-curated requirements.txt); the first
+# pip-compile run dropped it, breaking startup. Pinned explicitly so
+# the resolver always keeps it.
+python-multipart>=0.0.6
+
+# --- Configuration ---------------------------------------------------------
+python-dotenv==1.2.2
+
+# --- Domain libraries ------------------------------------------------------
+parse-torrent-name==1.1.1
+HdRezkaApi==11.2.3

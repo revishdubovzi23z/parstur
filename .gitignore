@@ -1,0 +1,46 @@
+# Environments
+.env
+venv/
+.venv/
+ENV/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+.ruff_cache/
+
+# Databases
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+
+# Logs
+*.log
+*_log.txt
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+pars.zip
+rutor_check_*.html
+rutor_test.html
+temp_csv_head.txt
+IMDBOCENKI.csv
+kinopoiskocenki.csv
+progress_*.json
+checkpoint_*.json
+stop_*.flag
+
+# Frontend (ROADMAP Stage 10.1) — derivative artifacts.
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/*.tsbuildinfo
