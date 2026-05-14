@@ -25,6 +25,7 @@
 import { defineStore } from 'pinia'
 
 import { apiFetch, getStoredToken } from '../api/client'
+import { useFeedStore } from './feed'
 import { useItemsStore } from './items'
 import { useLogsStore } from './logs'
 import { useSessionStore } from './session'

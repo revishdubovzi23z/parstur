@@ -21,6 +21,7 @@ import {
   DEFAULT_FEED_FILTERS,
   type FeedFilters,
   type FeedItem,
+  type FeedRelease,
   type FeedResponse,
 } from '../types/feed'
 
