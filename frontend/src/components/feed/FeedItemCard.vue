@@ -129,13 +129,13 @@ function onHoverReset(): void {
         <button
           type="button"
           class="flex items-center justify-center w-7 h-7 rounded-lg bg-white/90 text-sm font-bold shadow hover:bg-white disabled:opacity-50"
-          :class="item.is_ignored ? 'text-emerald-600' : 'text-red-600'"
-          :title="item.is_ignored ? 'Восстановить из корзины' : 'Скрыть (в корзину)'"
-          :aria-label="item.is_ignored ? 'Восстановить' : 'Скрыть'"
+          :class="item.is_ignored === 1 ? 'text-emerald-600' : 'text-red-600'"
+          :title="item.is_ignored === 1 ? 'Восстановить из корзины' : 'Скрыть (в корзину)'"
+          :aria-label="item.is_ignored === 1 ? 'Восстановить' : 'Скрыть'"
           data-testid="feed-item-hover-ignore"
           @click.stop="items.toggleIgnoreById(item.id)"
         >
-          {{ item.is_ignored ? '↩' : '✕' }}
+          {{ item.is_ignored === 1 ? '↩' : '✕' }}
         </button>
         <button
           type="button"

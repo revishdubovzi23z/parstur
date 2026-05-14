@@ -327,12 +327,17 @@ export const useItemsStore = defineStore('items', {
      * `POST /api/ignore/{id}` for a card in the feed.
      */
     async toggleIgnoreById(id: number): Promise<void> {
+      const feed = useFeedStore()
+      const cached = feed.items.find((it) => it.id === id)
+      const wasIgnored = cached?.is_ignored === 1
+
       const ok = await this._post(`/api/ignore/${id}`, null, 'Игнор')
       if (ok) {
-        // Remove from feed list immediately so it vanishes from view
-        const feed = useFeedStore()
+        // Remove from current view immediately
         feed.items = feed.items.filter((it) => it.id !== id)
-        useToastStore().success('Фильм отправлен в корзину')
+        useToastStore().success(
+          wasIgnored ? 'Фильм восстановлен' : 'Фильм отправлен в корзину',
+        )
       }
     },
 
