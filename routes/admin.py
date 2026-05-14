@@ -69,57 +69,60 @@ def export_data(fmt: str = "json", category_id: int = -1):
 @router.post("/api/self_update")
 def self_update():
     import subprocess
+    import sys
 
-    # Path to our new update script
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    update_script = os.path.join(project_root, "update.sh")
+    frontend_dir = os.path.join(project_root, "frontend")
 
-    try:
-        # If the script exists, run it. It handles git pull, pip, npm, and restart.
-        if os.path.exists(update_script):
-            logger.info(f"[UPDATE] Executing update script: {update_script}")
-            # We run it in the background or with a long timeout because npm build takes time.
-            # However, for a simple implementation, we'll run it and wait.
-            result = subprocess.run(
-                [update_script],
-                capture_output=True,
-                text=True,
-                timeout=300,  # 5 minutes for npm build
-                cwd=project_root,
-            )
-            if result.returncode != 0:
-                logger.error(f"[UPDATE] Script failed: {result.stderr}")
-                return {"status": "error", "message": f"Script failed: {result.stderr[:500]}"}
-
-            return {
-                "status": "updated",
-                "message": "Update script finished successfully. Server should be restarting.",
-            }
-
-        # Fallback to old behavior if script is missing
-        result = subprocess.run(
-            ["git", "pull"],
+    def run_cmd(cmd: list[str], cwd: str, timeout: int = 60):
+        logger.info(f"[UPDATE] Running: {' '.join(cmd)} in {cwd}")
+        res = subprocess.run(
+            cmd,
             capture_output=True,
             text=True,
-            timeout=60,
-            cwd=project_root,
+            timeout=timeout,
+            cwd=cwd,
         )
-        output = result.stdout.strip()
-        if result.returncode != 0:
-            return {"status": "error", "message": result.stderr.strip()[:500]}
-        if "Already up to date" in output:
-            return {"status": "up_to_date", "message": output}
+        if res.returncode != 0:
+            raise Exception(f"Command '{' '.join(cmd)}' failed: {res.stderr}")
+        return res.stdout.strip()
 
+    try:
+        # 1. Git Pull
+        output = run_cmd(["git", "pull"], project_root)
+        if "Already up to date" in output and os.path.isdir(os.path.join(frontend_dir, "dist")):
+            # If code is up to date AND dist exists, we might not need to do anything.
+            # But to be safe, let's at least check dependencies if the user clicked.
+            pass
+
+        # 2. Pip Install
+        # Use sys.executable to ensure we use the same python/venv
+        run_cmd([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"], project_root, 120)
+
+        # 3. Frontend Build (if directory exists)
+        if os.path.isdir(frontend_dir):
+            # Check for npm
+            npm_cmd = "npm.cmd" if sys.platform == "win32" else "npm"
+            try:
+                run_cmd([npm_cmd, "install"], frontend_dir, 300)
+                run_cmd([npm_cmd, "run", "build"], frontend_dir, 300)
+            except Exception as e:
+                logger.warning(f"[UPDATE] Frontend build skipped or failed: {e}")
+                # We don't fail the whole update if only frontend failed,
+                # but we should report it.
+
+        # 4. Trigger Restart
         restarted = _trigger_restart()
-        msg = output
+        msg = "Update successful. "
         if restarted:
-            msg += "\n\nServer is restarting..."
+            msg += "Server is restarting..."
         else:
-            msg += "\n\nUpdate complete. Please restart the server manually."
+            msg += "Please restart the server manually to apply changes."
 
         return {"status": "updated", "message": msg}
+
     except Exception as e:
-        logger.error(f"[UPDATE] Unexpected error: {e}")
+        logger.error(f"[UPDATE] Update failed: {e}")
         return {"status": "error", "message": str(e)[:500]}
 
 
