@@ -96,10 +96,10 @@ async function onLogout(): Promise<void> {
         type="button"
         class="mt-3 inline-flex items-center justify-center rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
         data-testid="kinopub-connect"
-        :disabled="store.statusBusy || store.pollBusy"
+        :disabled="store.statusBusy || store.flowBusy || store.pollBusy"
         @click="onConnect"
       >
-        Подключить kino.pub
+        {{ store.flowBusy ? 'Запрашиваем код…' : 'Подключить kino.pub' }}
       </button>
       <p
         v-if="store.statusError"
