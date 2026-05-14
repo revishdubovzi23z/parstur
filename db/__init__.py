@@ -17,6 +17,7 @@ from db.core import (
 )
 from db.history import DbHistoryMixin
 from db.items import DbItemsMixin
+from db.kinopub_auth import DbKinopubAuthMixin
 from db.sessions import DbSessionsMixin
 from db.settings_db import DbSettingsMixin
 
@@ -27,6 +28,7 @@ class Database(
     DbHistoryMixin,
     DbSettingsMixin,
     DbSessionsMixin,
+    DbKinopubAuthMixin,
     DbCore,
 ):
     pass
@@ -39,6 +41,7 @@ __all__ = [
     "DbCore",
     "DbHistoryMixin",
     "DbItemsMixin",
+    "DbKinopubAuthMixin",
     "DbSessionsMixin",
     "DbSettingsMixin",
     "_compile_filter_pattern",

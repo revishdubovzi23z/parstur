@@ -23,7 +23,7 @@ from slowapi.util import get_remote_address
 
 from db import db
 from logging_config import setup_logging
-from routes import admin, auth, collections, feed, items, process, streams
+from routes import admin, auth, collections, feed, items, kinopub, process, streams
 from routes.auth import (
     _auth_enabled,
     _check_auth,
@@ -146,6 +146,7 @@ app.include_router(process.router)
 app.include_router(streams.router)
 app.include_router(admin.router)
 app.include_router(items.router)
+app.include_router(kinopub.router)
 
 # ROADMAP Stage 10.7z — the Vite/Vue 3/TS SPA in `frontend/dist` is now
 # THE frontend; the legacy CDN-driven `index.html` at the repo root is
