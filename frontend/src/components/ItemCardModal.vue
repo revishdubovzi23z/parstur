@@ -174,6 +174,7 @@ async function onResetSelected(): Promise<void> {
   const selected = RESETTABLE_FIELDS.filter(
     (f) => resetSelection.value[f],
   ) as ResettableField[]
+  console.log('[DEBUG] Selected fields for reset:', selected)
   if (selected.length === 0) return
   const ok = await items.resetFields(selected)
   if (ok) {
@@ -636,7 +637,16 @@ function onToggleEditIds(): void {
               type="checkbox"
               :data-testid="`item-modal-reset-${f}`"
             />
-            {{ f }}
+            {{
+              {
+                poster: 'Постер',
+                description: 'Описание',
+                kp_id: 'Кинопоиск ID',
+                imdb_id: 'IMDb ID',
+                rezka_url: 'Ссылка Rezka',
+                ratings: 'Рейтинги',
+              }[f] || f
+            }}
           </label>
         </div>
         <div class="mt-4 flex justify-end gap-2">
