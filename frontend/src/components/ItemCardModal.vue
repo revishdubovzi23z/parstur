@@ -30,12 +30,19 @@ import {
   type ResettableField,
 } from '../stores/items'
 import { useItemPlayerStore } from '../stores/player'
+import {
+  useKinopubStore,
+  type KinopubSearchResult,
+} from '../stores/kinopub'
 import { useSyncStore } from '../stores/sync'
+import { useToastStore } from '../stores/toast'
 import PlayerModal from './PlayerModal.vue'
 
 const items = useItemsStore()
 const player = useItemPlayerStore()
 const sync = useSyncStore()
+const kinopub = useKinopubStore()
+const toast = useToastStore()
 
 /** True whenever the items-store has an item set. The store is
  *  populated by `items.open(id, seed)` (called from
@@ -122,6 +129,106 @@ const imdbUrl = computed(() => {
   const id = items.item?.imdb_id?.trim()
   return id ? `https://www.imdb.com/title/${encodeURIComponent(id)}/` : null
 })
+
+// PR 3 of the kino.pub stack — show an "Open on kino.pub" chip
+// alongside RUTOR/КП/REZKA/IMDB once the row is bound. We prefer the
+// cached `kinopub_url` (set by /bind) and fall back to the canonical
+// "/item/<id>" shape if only the id is set (e.g. older rows from
+// the sync_kinopub matcher that didn't capture the URL yet).
+const kinopubUrl = computed(() => {
+  const it = items.item
+  if (!it) return null
+  if (it.kinopub_url && it.kinopub_url.trim().length > 0) {
+    return it.kinopub_url
+  }
+  if (it.kinopub_id) {
+    return `https://kino.pub/item/${it.kinopub_id}`
+  }
+  return null
+})
+
+// Edit-IDs panel — kino.pub bind state.
+const draftKinopub = ref('')
+const kinopubSearchQuery = ref('')
+const kinopubSearchOpen = ref(false)
+
+function seedKinopubDraft(): void {
+  const id = items.item?.kinopub_id ?? null
+  draftKinopub.value = id ? String(id) : ''
+  kinopubSearchQuery.value = items.item?.title ?? ''
+  kinopubSearchOpen.value = false
+  kinopub.clearSearch()
+}
+
+watch(
+  () => items.item?.id ?? null,
+  () => {
+    seedKinopubDraft()
+  },
+)
+
+async function onKinopubBindManual(): Promise<void> {
+  const cur = items.item
+  if (!cur) return
+  const id = Number(draftKinopub.value.trim())
+  if (!Number.isFinite(id) || id <= 0) {
+    toast.error('kino.pub ID должен быть положительным числом')
+    return
+  }
+  const ok = await kinopub.bind(cur.id, { kinopub_id: id })
+  if (ok) {
+    toast.success(`Привязано к kino.pub #${id}`)
+    // The items store doesn't know about kinopub_*; reload the
+    // detail payload so the badge re-renders.
+    await items.open(cur.id, cur)
+    seedKinopubDraft()
+  } else {
+    toast.error(kinopub.bindError || 'Не удалось привязать')
+  }
+}
+
+async function onKinopubUnbind(): Promise<void> {
+  const cur = items.item
+  if (!cur) return
+  const ok = await kinopub.unbind(cur.id)
+  if (ok) {
+    toast.success('Отвязано от kino.pub')
+    await items.open(cur.id, cur)
+    seedKinopubDraft()
+  } else {
+    toast.error(kinopub.bindError || 'Не удалось отвязать')
+  }
+}
+
+async function onKinopubSearch(): Promise<void> {
+  const cur = items.item
+  if (!cur) return
+  const q = kinopubSearchQuery.value.trim()
+  if (q.length === 0) return
+  kinopubSearchOpen.value = true
+  await kinopub.search(q, {
+    year: cur.year ?? undefined,
+  })
+}
+
+async function onKinopubPickResult(r: KinopubSearchResult): Promise<void> {
+  const cur = items.item
+  if (!cur) return
+  const ok = await kinopub.bind(cur.id, {
+    kinopub_id: r.id,
+    kinopub_type: r.type,
+    kinopub_url: r.url,
+  })
+  if (ok) {
+    toast.success(`Привязано: ${r.title ?? r.id}`)
+    kinopubSearchOpen.value = false
+    kinopub.clearSearch()
+    await items.open(cur.id, cur)
+    seedKinopubDraft()
+  } else {
+    toast.error(kinopub.bindError || 'Не удалось привязать')
+  }
+}
 
 function dirtyIds(): { kp_id?: string | null; imdb_id?: string | null } {
   const out: { kp_id?: string | null; imdb_id?: string | null } = {}
@@ -445,6 +552,17 @@ function onToggleEditIds(): void {
               >
                 IMDB
               </a>
+              <a
+                v-if="kinopubUrl"
+                :href="kinopubUrl"
+                target="_blank"
+                rel="noopener"
+                class="rounded-md bg-fuchsia-600 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-fuchsia-700"
+                data-testid="item-modal-link-kinopub"
+                :title="`kino.pub id: ${items.item?.kinopub_id ?? ''}`"
+              >
+                KINO.PUB
+              </a>
             </div>
 
             <!-- 10.7g — primary playback actions, always visible -->
@@ -548,6 +666,136 @@ function onToggleEditIds(): void {
               data-testid="item-modal-input-rezka"
             />
           </label>
+
+          <!-- kino.pub bind sub-panel (PR 3) ───────────────────────── -->
+          <div
+            class="space-y-2 rounded-md border border-fuchsia-200 bg-fuchsia-50/40 p-2"
+            data-testid="item-modal-kinopub-panel"
+          >
+            <p class="text-xs font-medium uppercase tracking-wide text-fuchsia-700">
+              kino.pub
+              <span
+                v-if="items.item?.kinopub_id"
+                class="ml-1 rounded bg-fuchsia-200 px-1.5 py-0.5 text-[10px] text-fuchsia-900"
+                data-testid="item-modal-kinopub-current-id"
+              >
+                привязано: #{{ items.item.kinopub_id }}
+              </span>
+              <span
+                v-else
+                class="ml-1 text-[10px] text-slate-500"
+                data-testid="item-modal-kinopub-current-none"
+              >
+                не привязано
+              </span>
+            </p>
+            <label class="block">
+              <span class="block text-xs text-slate-500">ID на kino.pub</span>
+              <div class="mt-1 flex gap-1">
+                <input
+                  v-model="draftKinopub"
+                  type="number"
+                  min="1"
+                  class="flex-1 rounded-md border border-slate-300 px-2 py-1 text-sm focus:border-fuchsia-500 focus:outline-none"
+                  data-testid="item-modal-kinopub-input"
+                />
+                <button
+                  type="button"
+                  class="rounded-md bg-fuchsia-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-fuchsia-700 disabled:opacity-50"
+                  :disabled="kinopub.bindBusy"
+                  data-testid="item-modal-kinopub-bind"
+                  @click="onKinopubBindManual"
+                >
+                  Привязать
+                </button>
+                <button
+                  v-if="items.item?.kinopub_id"
+                  type="button"
+                  class="rounded-md bg-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-300 disabled:opacity-50"
+                  :disabled="kinopub.bindBusy"
+                  data-testid="item-modal-kinopub-unbind"
+                  @click="onKinopubUnbind"
+                >
+                  Отвязать
+                </button>
+              </div>
+            </label>
+
+            <div class="space-y-1">
+              <label class="block">
+                <span class="block text-xs text-slate-500">Поиск по kino.pub</span>
+                <div class="mt-1 flex gap-1">
+                  <input
+                    v-model="kinopubSearchQuery"
+                    type="text"
+                    class="flex-1 rounded-md border border-slate-300 px-2 py-1 text-sm focus:border-fuchsia-500 focus:outline-none"
+                    data-testid="item-modal-kinopub-search-input"
+                    @keydown.enter.prevent="onKinopubSearch"
+                  />
+                  <button
+                    type="button"
+                    class="rounded-md bg-fuchsia-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-fuchsia-600 disabled:opacity-50"
+                    :disabled="kinopub.searchBusy"
+                    data-testid="item-modal-kinopub-search"
+                    @click="onKinopubSearch"
+                  >
+                    Найти
+                  </button>
+                </div>
+              </label>
+
+              <p
+                v-if="kinopub.searchError"
+                class="text-[11px] text-rose-600"
+                data-testid="item-modal-kinopub-search-error"
+              >
+                {{ kinopub.searchError }}
+              </p>
+
+              <ul
+                v-if="kinopubSearchOpen && kinopub.searchResults.length > 0"
+                class="max-h-48 divide-y divide-slate-200 overflow-y-auto rounded border border-slate-200 bg-white"
+                data-testid="item-modal-kinopub-search-results"
+              >
+                <li
+                  v-for="r in kinopub.searchResults"
+                  :key="r.id"
+                  class="flex items-center justify-between gap-2 px-2 py-1.5 text-xs hover:bg-fuchsia-50"
+                >
+                  <span class="flex-1 truncate text-slate-700">
+                    <span class="font-medium">{{ r.title ?? '—' }}</span>
+                    <span v-if="r.year" class="ml-1 text-slate-400">
+                      ({{ r.year }})
+                    </span>
+                    <span v-if="r.type" class="ml-1 text-[10px] uppercase text-slate-400">
+                      {{ r.type }}
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    class="rounded bg-fuchsia-600 px-2 py-0.5 text-[10px] font-medium text-white hover:bg-fuchsia-700"
+                    data-testid="item-modal-kinopub-search-pick"
+                    @click="onKinopubPickResult(r)"
+                  >
+                    Привязать
+                  </button>
+                </li>
+              </ul>
+              <p
+                v-else-if="
+                  kinopubSearchOpen &&
+                  !kinopub.searchBusy &&
+                  kinopub.searchResults.length === 0 &&
+                  !kinopub.searchError
+                "
+                class="text-[11px] italic text-slate-400"
+                data-testid="item-modal-kinopub-search-empty"
+              >
+                Ничего не найдено.
+              </p>
+            </div>
+          </div>
+
           <label class="flex items-center gap-2 text-xs text-slate-600">
             <input
               v-model="useFullRebind"
