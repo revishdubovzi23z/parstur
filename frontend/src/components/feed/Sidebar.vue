@@ -10,12 +10,34 @@ import { computed, ref } from 'vue'
 import { useCategoriesStore } from '../../stores/categories'
 import { useCollectionsStore } from '../../stores/collections'
 import { useFeedStore } from '../../stores/feed'
+import { useSyncStore } from '../../stores/sync'
 import { useVisitStore } from '../../stores/visits'
 
 const categories = useCategoriesStore()
 const collections = useCollectionsStore()
 const feed = useFeedStore()
+const sync = useSyncStore()
 const visits = useVisitStore()
+
+// "Lazy collections": a fresh DB no longer ships with 11 seeded
+// rows, so we offer the user a one-click HDRezka pull right where
+// the empty list lives. The sync store exposes a `statuses` map
+// keyed by process_key — reading `rezka_collections` mirrors the
+// running-flag the existing SyncPanel already binds to.
+const collectionsSyncing = computed(
+  () => sync.statuses?.rezka_collections === 'running',
+)
+
+async function syncCollectionsNow(): Promise<void> {
+  // The store handles the POST + toast + status polling. We just
+  // refresh the local collections list afterwards so the banner
+  // disappears as soon as the sync produced rows. Polling will
+  // also pull the new rows in via the websocket, but refreshing
+  // explicitly keeps the UX snappy when the user is staring at
+  // the sidebar waiting for it.
+  const ok = await sync.startRezkaCollections()
+  if (ok) await collections.refresh()
+}
 
 async function toggleNewOnly(): Promise<void> {
   await visits.toggleNewOnly()
@@ -315,9 +337,23 @@ const categoryLabel = (id: number, name: string): string => {
         </li>
         <li
           v-if="!collections.items.length"
-          class="px-2 py-1.5 text-xs text-slate-400"
+          class="mt-1 rounded-md border border-dashed border-slate-300 bg-slate-50 px-3 py-3 text-xs text-slate-600"
+          data-testid="sidebar-collections-empty"
         >
-          Коллекций пока нет.
+          <p class="font-medium text-slate-700">Коллекций пока нет.</p>
+          <p class="mt-1 text-slate-500">
+            Подтяните их одной кнопкой с HDRezka — либо создайте
+            свою через «+» выше.
+          </p>
+          <button
+            type="button"
+            class="mt-2 w-full rounded-md bg-slate-900 px-2 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-slate-700 disabled:opacity-50"
+            data-testid="sidebar-collections-empty-sync"
+            :disabled="collectionsSyncing"
+            @click="syncCollectionsNow"
+          >
+            {{ collectionsSyncing ? '⏳ Синхронизация…' : '▶ Sync с HDRezka' }}
+          </button>
         </li>
       </ul>
     </section>

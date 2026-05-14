@@ -63,8 +63,8 @@ def test_export_groups_by_collection(src_db) -> None:
     d, _ = src_db
     payload = d.export_collections()
     by_name = {c["name"]: c for c in payload}
-    # The schema's default_collections are also present, but our two
-    # custom ones must each carry the right items.
+    # Only the two custom collections we created in src_db should be
+    # present — fresh DBs no longer seed any default collections.
     assert "test-col-A" in by_name
     assert "test-col-B" in by_name
     a_titles = {it["title"] for it in by_name["test-col-A"]["items"]}
@@ -105,9 +105,10 @@ def test_round_trip_import_to_fresh_db(src_db, tmp_path: Path) -> None:
     )
     report = dest.import_collections(payload)
     assert report["missing_items"] == 0
-    # `created_collections` may be 0 because the default_collections
-    # set already has the same names, OR may be 2 if those didn't
-    # exist; the contract is just that no items were lost.
+    # `created_collections` should be exactly 2 — the dest DB starts
+    # empty (no seeded default collections), so the import has to
+    # create both `test-col-A` and `test-col-B`. The stronger
+    # invariant is that no items were lost.
     assert report["added_items"] == 3
 
     # Verify the membership ended up correct on the dest DB.
