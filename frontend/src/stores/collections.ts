@@ -123,12 +123,18 @@ export const useCollectionsStore = defineStore('collections', {
         if (!res.ok) return null
         const data = (await res.json()) as ToggleResponse
         const current = this.itemCollections[itemId] ?? []
+        const feedStore = (await import('./feed')).useFeedStore()
+
         if (data.action === 'added') {
           this.itemCollections = {
             ...this.itemCollections,
             [itemId]: current.includes(collectionId)
               ? current
               : [...current, collectionId],
+          }
+          // If the feed is set to hide collected items, remove this one now
+          if (feedStore.filters.hideCollected) {
+            feedStore.items = feedStore.items.filter((it) => it.id !== itemId)
           }
           return 'added'
         }
