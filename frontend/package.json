@@ -1,0 +1,32 @@
+{
+  "name": "antigravity-tracker-frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Vite + Vue 3 + TypeScript SPA for the Antigravity Tracker. ROADMAP Stage 10 — coexists with the legacy index.html until feature parity is reached; the new bundle is mounted at /beta and the legacy frontend keeps serving / unchanged.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "type-check": "vue-tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "hls.js": "^1.5.15",
+    "pinia": "^2.2.4",
+    "vue": "^3.4.27"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.1.4",
+    "@vue/test-utils": "^2.4.6",
+    "autoprefixer": "^10.4.20",
+    "happy-dom": "^15.7.4",
+    "postcss": "^8.4.47",
+    "tailwindcss": "^3.4.13",
+    "typescript": "^5.6.2",
+    "vite": "^5.4.8",
+    "vitest": "^2.1.2",
+    "vue-tsc": "^2.1.6"
+  }
+}

@@ -1,6 +1,7 @@
 import asyncio
 import csv
 import io
+import logging
 import os
 import secrets
 from datetime import datetime
@@ -9,15 +10,16 @@ from fastapi import APIRouter, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
 from db import db
+from runtime.admin import _reset_tokens, _trigger_restart
 from settings import settings
+
+logger = logging.getLogger("parsclode.routes.admin")
 
 router = APIRouter()
 
 
 @router.get("/api/backup/download")
 async def backup_download():
-    import main
-
     out_dir = "backups"
     os.makedirs(out_dir, exist_ok=True)
     from datetime import timezone
@@ -32,7 +34,7 @@ async def backup_download():
             {"error": f"{type(e).__name__}: {e}"},
             status_code=500,
         )
-    main.logger.info(f"[BACKUP] wrote {dest} ({size} bytes)")
+    logger.info(f"[BACKUP] wrote {dest} ({size} bytes)")
     return FileResponse(
         dest,
         media_type="application/octet-stream",
@@ -68,8 +70,6 @@ def export_data(fmt: str = "json", category_id: int = -1):
 def self_update():
     import subprocess
 
-    import main
-
     try:
         result = subprocess.run(
             ["git", "pull"],
@@ -84,7 +84,7 @@ def self_update():
         if "Already up to date" in output:
             return {"status": "up_to_date", "message": output}
 
-        restarted = main._trigger_restart()
+        restarted = _trigger_restart()
         msg = output
         if restarted:
             msg += "\n\nServer is restarting..."
@@ -110,8 +110,6 @@ def database_export():
 
 @router.post("/api/database_import")
 async def database_import(file: UploadFile):
-    import main
-
     db_path = settings.resolved_db_path
     content = await file.read()
 
@@ -137,15 +135,15 @@ async def database_import(file: UploadFile):
         backup_path = os.path.join(backup_dir, f"pre_import_{timestamp}.db")
         try:
             shutil.copy2(db_path, backup_path)
-            main.logger.info(f"Backup created: {backup_path}")
+            logger.info(f"Backup created: {backup_path}")
         except Exception as e:
-            main.logger.error(f"Failed to create backup: {e}")
+            logger.error(f"Failed to create backup: {e}")
             # We continue anyway, as the user requested an import.
 
     with open(db_path, "wb") as f:
         f.write(content)
 
-    restarted = main._trigger_restart()
+    restarted = _trigger_restart()
     if restarted:
         return {"status": "success", "message": "Database imported, server is restarting..."}
     return {"status": "success", "message": "Database imported, please restart server manually"}
@@ -155,11 +153,9 @@ async def database_import(file: UploadFile):
 def get_reset_token():
     from datetime import datetime, timedelta
 
-    import main
-
     token = secrets.token_urlsafe(16)
     expiry = datetime.now() + timedelta(seconds=60)
-    main._reset_tokens[token] = expiry
+    _reset_tokens[token] = expiry
     return {"token": token}
 
 
@@ -167,15 +163,13 @@ def get_reset_token():
 def reset_database(confirm: str | None = None):
     from datetime import datetime
 
-    import main
-
-    if not confirm or confirm not in main._reset_tokens:
+    if not confirm or confirm not in _reset_tokens:
         return JSONResponse(
             {"status": "error", "message": "Confirmation token missing or invalid"},
             status_code=403,
         )
 
-    expiry = main._reset_tokens.pop(confirm)
+    expiry = _reset_tokens.pop(confirm)
     if datetime.now() > expiry:
         return JSONResponse(
             {"status": "error", "message": "Confirmation token expired"}, status_code=403
@@ -186,7 +180,7 @@ def reset_database(confirm: str | None = None):
         return {"status": "error", "message": "Database file not found"}
     os.remove(db_path)
 
-    restarted = main._trigger_restart()
+    restarted = _trigger_restart()
     if restarted:
         return {"status": "success", "message": "Database deleted, server is restarting..."}
     return {"status": "success", "message": "Database deleted, please restart server manually"}

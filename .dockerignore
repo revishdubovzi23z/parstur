@@ -47,8 +47,7 @@ IMDBOCENKI.csv
 kinopoiskocenki.csv
 
 # Docs / dev-only bits. `*.md` catches REVIEW.md, ROADMAP.md,
-# par2_progress.md, etc. README.md will be added in ROADMAP Stage 2;
-# at that point we'll add `!README.md` so it ships inside the image.
+# AGENTS.md, etc. README.md ships inside the image.
 *.md
 !README.md
 
@@ -65,3 +64,12 @@ Thumbs.db
 pyproject.toml
 requirements.in
 requirements-dev.in
+
+# Frontend (ROADMAP Stage 10.1) — Node artifacts. The frontend source is
+# still needed inside the build context for the `frontend-builder` stage to
+# run `npm ci && npm run build`; only the derivative caches are excluded.
+# `frontend/dist` is filled by COPY --from=frontend-builder in the runtime
+# stage, so excluding it here keeps stale local builds out of the context.
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/

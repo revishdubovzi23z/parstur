@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import main
+from runtime import rezka
 
 
 def _resp(*, status=200, headers=None, body=b"", url="https://rezka.ag/foo"):
@@ -26,56 +26,56 @@ def _resp(*, status=200, headers=None, body=b"", url="https://rezka.ag/foo"):
 
 
 def test_dead_on_401() -> None:
-    assert main._rezka_session_dead(_resp(status=401)) is True
+    assert rezka._rezka_session_dead(_resp(status=401)) is True
 
 
 def test_dead_on_403() -> None:
-    assert main._rezka_session_dead(_resp(status=403)) is True
+    assert rezka._rezka_session_dead(_resp(status=403)) is True
 
 
 def test_dead_on_redirect_to_login() -> None:
     r = _resp(status=302, headers={"Location": "https://rezka.ag/login.html"})
-    assert main._rezka_session_dead(r) is True
+    assert rezka._rezka_session_dead(r) is True
 
 
 def test_dead_on_final_url_login() -> None:
     r = _resp(status=200, url="https://rezka.ag/login.html")
-    assert main._rezka_session_dead(r) is True
+    assert rezka._rezka_session_dead(r) is True
 
 
 def test_dead_on_login_popup_html() -> None:
     body = b"<html>" + b" " * 300 + b'<form><input name="login_name" /></form>'
-    assert main._rezka_session_dead(_resp(status=200, body=body)) is True
+    assert rezka._rezka_session_dead(_resp(status=200, body=body)) is True
 
 
 def test_alive_on_200_with_normal_html() -> None:
     body = b"<html>" + b"<div class='b-favorites_content'></div>" + b" " * 500
-    assert main._rezka_session_dead(_resp(status=200, body=body)) is False
+    assert rezka._rezka_session_dead(_resp(status=200, body=body)) is False
 
 
 def test_alive_on_short_body_without_login_markers() -> None:
     # Empty / very short bodies must NOT be flagged dead — that
     # would re-login on every 204 / empty AJAX response.
-    assert main._rezka_session_dead(_resp(status=200, body=b"")) is False
-    assert main._rezka_session_dead(_resp(status=200, body=b"{}")) is False
+    assert rezka._rezka_session_dead(_resp(status=200, body=b"")) is False
+    assert rezka._rezka_session_dead(_resp(status=200, body=b"{}")) is False
 
 
 def test_none_response_treated_as_alive() -> None:
-    assert main._rezka_session_dead(None) is False
+    assert rezka._rezka_session_dead(None) is False
 
 
 # ── _rezka_request retry loop ───────────────────────────────────────
 
 
 def test_no_session_returns_none(monkeypatch) -> None:
-    monkeypatch.setattr(main, "rezka_session", None)
-    out = main._rezka_request("GET", "https://rezka.ag/", cookies={})
+    monkeypatch.setattr(rezka, "rezka_session", None)
+    out = rezka._rezka_request("GET", "https://rezka.ag/", cookies={})
     assert out is None
 
 
 def test_alive_response_passes_through(monkeypatch) -> None:
     fake_session = SimpleNamespace(cookies={"x": "1"})
-    monkeypatch.setattr(main, "rezka_session", fake_session)
+    monkeypatch.setattr(rezka, "rezka_session", fake_session)
 
     calls = []
     happy = _resp(status=200, body=b"<div>ok</div>" + b" " * 400)
@@ -87,7 +87,7 @@ def test_alive_response_passes_through(monkeypatch) -> None:
     import requests
 
     monkeypatch.setattr(requests, "request", fake_request)
-    out = main._rezka_request("GET", "https://rezka.ag/foo", cookies={})
+    out = rezka._rezka_request("GET", "https://rezka.ag/foo", cookies={})
     assert out is happy
     # No re-login means exactly one request.
     assert len(calls) == 1
@@ -95,7 +95,7 @@ def test_alive_response_passes_through(monkeypatch) -> None:
 
 def test_dead_response_triggers_relogin_and_retry(monkeypatch) -> None:
     fake_session = SimpleNamespace(cookies={"old": "1"})
-    monkeypatch.setattr(main, "rezka_session", fake_session)
+    monkeypatch.setattr(rezka, "rezka_session", fake_session)
 
     calls = []
     dead = _resp(status=401)
@@ -110,14 +110,14 @@ def test_dead_response_triggers_relogin_and_retry(monkeypatch) -> None:
     def fake_init():
         relogin_calls.append(1)
         # Pretend the new session has fresh cookies.
-        main.rezka_session = SimpleNamespace(cookies={"new": "2"})
+        rezka.rezka_session = SimpleNamespace(cookies={"new": "2"})
 
     import requests
 
     monkeypatch.setattr(requests, "request", fake_request)
-    monkeypatch.setattr(main, "_init_rezka_session", fake_init)
+    monkeypatch.setattr(rezka, "_init_rezka_session", fake_init)
 
-    out = main._rezka_request("POST", "https://rezka.ag/ajax/favorites/", cookies={"old": "1"})
+    out = rezka._rezka_request("POST", "https://rezka.ag/ajax/favorites/", cookies={"old": "1"})
     assert out is fresh
     # Re-login was triggered exactly once.
     assert len(relogin_calls) == 1
@@ -131,7 +131,7 @@ def test_relogin_failure_returns_dead_response(monkeypatch) -> None:
     dead response rather than raising — callers handle dead
     responses themselves."""
     fake_session = SimpleNamespace(cookies={"old": "1"})
-    monkeypatch.setattr(main, "rezka_session", fake_session)
+    monkeypatch.setattr(rezka, "rezka_session", fake_session)
 
     dead = _resp(status=401)
 
@@ -144,7 +144,7 @@ def test_relogin_failure_returns_dead_response(monkeypatch) -> None:
     import requests
 
     monkeypatch.setattr(requests, "request", fake_request)
-    monkeypatch.setattr(main, "_init_rezka_session", fake_init)
+    monkeypatch.setattr(rezka, "_init_rezka_session", fake_init)
 
-    out = main._rezka_request("GET", "https://rezka.ag/", cookies={})
+    out = rezka._rezka_request("GET", "https://rezka.ag/", cookies={})
     assert out is dead

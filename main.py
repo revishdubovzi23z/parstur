@@ -2,12 +2,9 @@ import asyncio
 import hashlib
 import json
 import os
-import re
 import sys
 import time
-import traceback
 from contextlib import asynccontextmanager
-from datetime import datetime
 
 import uvicorn
 from fastapi import (
@@ -18,6 +15,7 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -26,96 +24,35 @@ from slowapi.util import get_remote_address
 from db import db
 from logging_config import setup_logging
 from routes import admin, auth, collections, feed, items, process, streams
-from script_utils import clear_checkpoint, clear_stop_flag, load_config
-from settings import settings
-
-logger = setup_logging("parsclode.main", settings.log_file_path)
-
-# load_dotenv() - redundant, settings.py handles this
-
-# Принудительно устанавливаем ProactorEventLoop для Windows,
-# так как только он поддерживает запуск подпроцессов в asyncio.
-if sys.platform == "win32":
-    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-
-
-# Менеджер очереди задач
-class TaskQueue:
-    def __init__(self):
-        self.queue = asyncio.Queue()
-        self.worker_task = None
-
-    async def add_task(self, coro_func, status_key, *args, **kwargs):
-        global process_status
-        process_status[status_key] = "queued"
-        logger.info(f"[QUEUE] Task added: {status_key}")
-        await self.queue.put((coro_func, status_key, args, kwargs))
-
-    async def worker(self):
-        logger.info("[WORKER] Started and waiting for tasks...")
-        while True:
-            coro_func, status_key, args, kwargs = await self.queue.get()
-            try:
-                logger.info(f"[WORKER] Executing task: {status_key} ({coro_func.__name__})")
-                await coro_func(*args, **kwargs)
-                logger.info(f"[WORKER] Task finished: {status_key}")
-            except Exception as e:
-                logger.error(f"[WORKER] Error in task {status_key}: {e}", exc_info=True)
-            finally:
-                self.queue.task_done()
-
-    def start(self):
-        logger.info("[QUEUE] Starting worker task...")
-        self.worker_task = asyncio.create_task(self.worker())
-
-    def stop(self):
-        if self.worker_task:
-            logger.info("[QUEUE] Stopping worker task...")
-            self.worker_task.cancel()
-
-
-task_queue = TaskQueue()
-
 from routes.auth import (
     _auth_enabled,
     _check_auth,
     _check_token,
-    _session_tokens,
     _ws_tickets,
 )
+from runtime import rezka as _rezka
+from runtime.processes import (
+    _read_progress,
+    process_status,
+    running_processes,
+    task_queue,
+)
+from runtime.ws import set_main_loop, ws_manager
+from script_utils import load_config
+from settings import settings
 
-# 6.3 — captured during the lifespan startup hook so worker threads
-# (run_in_executor callbacks) can schedule coroutines back onto the
-# main loop with asyncio.run_coroutine_threadsafe(coro, _main_loop).
-# In a worker thread asyncio.get_event_loop() returns a *different*
-# loop (or a new one in 3.12+), so it cannot be used for that.
-_main_loop: asyncio.AbstractEventLoop | None = None
+logger = setup_logging("parsclode.main", settings.log_file_path)
 
-
-def _broadcast_threadsafe(message: dict) -> None:
-    """Schedule ws_manager.broadcast on the main loop from any thread.
-
-    Safe to call from worker threads spawned by `run_in_executor` —
-    grabs `_main_loop` (captured in lifespan startup) and submits the
-    coroutine cross-thread. If the loop hasn't been captured yet
-    (e.g. broadcast attempted before startup completed), silently
-    drops the message rather than raising.
-    """
-    if _main_loop is None or _main_loop.is_closed():
-        return
-    try:
-        asyncio.run_coroutine_threadsafe(ws_manager.broadcast(message), _main_loop)
-    except Exception as e:
-        logger.error(f"[WS] threadsafe broadcast failed: {type(e).__name__}: {e}")
+# Force the ProactorEventLoop on Windows so asyncio can spawn
+# subprocesses (the SelectorEventLoop does not support them).
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 
 # 6.1 — replaces the deprecated @app.on_event("startup"/"shutdown")
 # decorators with a single lifespan async context manager. The body
 # above the `yield` is the startup phase; the body below `yield` is
-# shutdown. The body references names defined later in the module
-# (task_queue, _wal_checkpoint_task, running_processes, _init_rezka_session)
-# — Python resolves these at call time (during ASGI startup), so the
-# forward references are fine.
+# shutdown.
 @asynccontextmanager
 async def lifespan(_app):
     # ── startup ────────────────────────────────────────────────────
@@ -123,16 +60,12 @@ async def lifespan(_app):
     # 6.3 — capture the running loop so threads spawned via
     # run_in_executor can schedule coroutines back on it via
     # asyncio.run_coroutine_threadsafe.
-    global _main_loop
-    _main_loop = asyncio.get_running_loop()
+    set_main_loop(asyncio.get_running_loop())
     # Make sure the DB schema is up-to-date on every boot. Both
     # init_schema (CREATE TABLE IF NOT EXISTS) and check_and_migrate_schema
     # are idempotent; together they cover both fresh databases and
     # installs whose schema predates a recently-added migration
     # (e.g. filter_rules / audit_log added in 0002, tmdb_id in 0003).
-    # Running schema setup inside the FastAPI lifespan instead of at
-    # module import time means any DAO call that hits a new table
-    # will see it on the very first request after upgrade.
     try:
         db.init_schema()
     except Exception as e:
@@ -198,6 +131,7 @@ async def lifespan(_app):
             logger.info(f"[SHUTDOWN] Force terminating: {key}")
             proc.terminate()
     task_queue.stop()
+    set_main_loop(None)
 
 
 limiter = Limiter(key_func=get_remote_address)
@@ -213,209 +147,73 @@ app.include_router(streams.router)
 app.include_router(admin.router)
 app.include_router(items.router)
 
-
-class ConnectionManager:
-    def __init__(self):
-        self.active: list[WebSocket] = []
-
-    async def connect(self, ws: WebSocket):
-        await ws.accept()
-        self.active.append(ws)
-
-    def disconnect(self, ws: WebSocket):
-        if ws in self.active:
-            self.active.remove(ws)
-
-    async def broadcast(self, message: dict):
-        # 6.4 — fan out send_json calls in parallel via asyncio.gather.
-        # Previously this was a sequential `for ws in self.active: await
-        # ws.send_json(...)` loop; a slow/disconnected client would
-        # block every other client behind it (the WS spec doesn't time
-        # out send_json, the kernel buffers do, and a TCP send to a
-        # half-closed socket can sit for ~minutes). Fanning out keeps
-        # broadcast latency at max(slowest client) rather than
-        # sum(all clients). return_exceptions=True so a single failing
-        # client doesn't abort the whole gather.
-        if not self.active:
-            return
-        sockets = list(self.active)
-        results = await asyncio.gather(
-            *(ws.send_json(message) for ws in sockets),
-            return_exceptions=True,
-        )
-        for ws, result in zip(sockets, results, strict=True):
-            if isinstance(result, BaseException):
-                self.disconnect(ws)
-
-
-ws_manager = ConnectionManager()
-
-rezka_session = None
-rezka_session_folders_cache = None
-rezka_session_state = "down"  # down, connecting, up
-
-
-def _init_rezka_session() -> bool:
-    global rezka_session, rezka_session_folders_cache, rezka_session_state
-    rezka_email = settings.rezka_email
-    rezka_password = settings.rezka_password
-    if not rezka_email or not rezka_password:
-        logger.info("[REZKA] No credentials, session skipped")
-        rezka_session_state = "down"
-        return False
-
-    rezka_session_state = "connecting"
-    _broadcast_threadsafe({"type": "rezka_session", "state": "connecting"})
-
-    try:
-        from HdRezkaApi import HdRezkaSession as _Session
-
-        rezka_session = _Session("https://rezka.ag/")
-        rezka_session.login(rezka_email, rezka_password)
-        _refresh_rezka_folders_cache()
-        logger.info(f"[REZKA] Session initialized, cookies: {list(rezka_session.cookies.keys())}")
-        rezka_session_state = "up"
-        _broadcast_threadsafe({"type": "rezka_session", "state": "up"})
-        return True
-    except Exception as e:
-        logger.error(f"[REZKA] Session init failed: {e}")
-        rezka_session = None
-        rezka_session_state = "down"
-        _broadcast_threadsafe({"type": "rezka_session", "state": "down"})
-        return False
-
-
-# 6.7 — re-login detection.
+# ROADMAP Stage 10.7z — the Vite/Vue 3/TS SPA in `frontend/dist` is now
+# THE frontend; the legacy CDN-driven `index.html` at the repo root is
+# gone.
 #
-# Rezka quietly invalidates the cookie when (a) the session expires
-# from inactivity (~weeks) or (b) the same account logs in from
-# another device. Symptoms: the GET / POST returns either 401, 302
-# back to /login, or 200 with the public login-popup HTML. None of
-# these raise a Python exception, so the previous code happily
-# treated a logged-out session as "everything is fine" and silently
-# dropped favorites.
-#
-# `_rezka_session_dead` sniffs a response and decides whether the
-# cookie is still good; `_rezka_request` is a tiny wrapper around
-# requests.get/post that, on detected logout, calls
-# `_init_rezka_session()` once to re-login and retries the original
-# request with the fresh cookies. Subsequent failures fall through
-# to the caller — re-login should be cheap, but spinning on it is
-# never useful.
-_REZKA_LOGIN_MARKERS = (
-    b"b-loginpopup",
-    b"forgot_password",
-    b'name="login_name"',
-    b'id="login_email"',
-)
+# Layout:
+#   * `GET /` is an explicit route (defined further down) that reads
+#     `frontend/dist/index.html` off disk. When the dist directory is
+#     missing (fresh checkout / nobody ran `npm run build`), we return
+#     a 503 with a clear "please build the frontend" page instead of
+#     a bare 404.
+#   * `frontend/dist/assets/` is mounted at `/assets` at the bottom of
+#     this file. We deliberately do NOT mount StaticFiles at `/`:
+#     Starlette routes are evaluated in registration order, and a
+#     root-mount would eat `/manifest.json`, `/sw.js`, `/health`,
+#     `/api/...` etc. before they reached their explicit handlers if
+#     anyone ever reordered things.
+_FRONTEND_DIST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend", "dist")
+if not os.path.isdir(_FRONTEND_DIST):
+    logger.warning(
+        "[FRONTEND] %s missing — `/` will serve a build-instructions page "
+        "until you run `npm run build` in frontend/.",
+        _FRONTEND_DIST,
+    )
 
-
-def _rezka_session_dead(resp) -> bool:
-    """Return True if `resp` looks like rezka has logged us out."""
-    if resp is None:
-        return False
-    # 401/403 are the obvious "auth required" markers.
-    if resp.status_code in (401, 403):
-        return True
-    # rezka.ag uses a 302 to /login.html for some auth-required
-    # endpoints (e.g. /favorites/). Without follow_redirects the
-    # status will be 302; with follow_redirects it'll be 200 but
-    # the URL will end at /login.html — both checked.
-    location = (resp.headers.get("Location") or "").lower()
-    final_url = (getattr(resp, "url", "") or "").lower()
-    if any(needle in location for needle in ("/login", "/auth")):
-        return True
-    if any(needle in final_url for needle in ("/login.html", "/auth")):
-        return True
-    # Content sniff: the public login popup ships these markers, the
-    # logged-in HTML does not. Avoid false positives by checking the
-    # body length is non-trivial first.
-    body = resp.content or b""
-    if len(body) >= 256 and any(m in body for m in _REZKA_LOGIN_MARKERS):
-        # The favorites page itself doesn't ship these markers when
-        # logged in; if we see them on /favorites/ the session is
-        # gone.
-        return True
-    return False
-
-
-def _rezka_request(method: str, url: str, **kwargs):
-    """requests.request(...) with one transparent re-login retry.
-
-    Caller should pass `cookies=rezka_session.cookies` themselves —
-    the helper updates them in-place after a successful re-login.
-    Returns the final response (whether or not retry happened) or
-    None when no rezka_session is configured.
-    """
-    if rezka_session is None:
-        return None
-    import requests as _req
-
-    resp = _req.request(method, url, **kwargs)
-    if not _rezka_session_dead(resp):
-        return resp
-    logger.warning(f"[REZKA] session looks dead (status={resp.status_code}, url={url}); re-login")
-    try:
-        _init_rezka_session()
-    except Exception as e:
-        logger.error(f"[REZKA] re-login failed: {type(e).__name__}: {e}", exc_info=True)
-        return resp
-    if rezka_session is None:
-        # Re-login itself failed (e.g. credentials wrong now).
-        return resp
-    # Refresh the caller's cookie jar reference so the retry has
-    # the new auth cookie.
-    kwargs["cookies"] = rezka_session.cookies
-    return _req.request(method, url, **kwargs)
-
-
-def _refresh_rezka_folders_cache():
-    global rezka_session_folders_cache
-    if not rezka_session:
-        return
-    try:
-        import re as _re
-
-        from bs4 import BeautifulSoup as _BS
-
-        from app_core import normalize_title
-
-        resp = _rezka_request(
-            "GET",
-            "https://rezka.ag/favorites/",
-            headers={"User-Agent": "Mozilla/5.0"},
-            cookies=rezka_session.cookies,
-            timeout=15,
-        )
-        if resp is None:
-            return
-        soup = _BS(resp.content, "html.parser")
-        sidebar = soup.find("div", class_="b-favorites_content__sidebarbar") or soup.find(
-            "div", class_="b-favorites_content__sidebar"
-        )
-        folders = {}
-        if sidebar:
-            for a in sidebar.find_all("a", href=True):
-                href = a.get("href", "")
-                if "javascript" in href:
-                    continue
-                text = a.text.strip()
-                name = _re.sub(r"\s*\(\d+\)", "", text).strip()
-                m = _re.search(r"/favorites/(\d+)/", href)
-                if m:
-                    folders[normalize_title(name)] = m.group(1)
-        rezka_session_folders_cache = folders
-        logger.info(f"[REZKA] Folders cache refreshed: {len(folders)} folders")
-    except Exception as e:
-        logger.error(f"[REZKA] Folders cache refresh failed: {e}", exc_info=True)
-        rezka_session_folders_cache = None
+# Plain-text HTML, intentionally inline (no template engine) so the
+# fallback page works even when the dev hasn't installed Jinja2 or
+# materialised any static assets. Styled with system-stack typography
+# so it's readable without any external CSS.
+_FRONTEND_NOT_BUILT_HTML = """\
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>par2 — frontend not built</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+           Roboto, Oxygen, Ubuntu, sans-serif; max-width: 720px; margin: 4rem auto;
+           padding: 0 1.5rem; color: #1f2937; line-height: 1.5; }
+    h1   { font-size: 1.5rem; margin-bottom: 0.5rem; }
+    code { background: #f3f4f6; padding: 0.15rem 0.4rem;
+           border-radius: 3px; font-family: ui-monospace, SFMono-Regular,
+           Menlo, monospace; font-size: 0.95em; }
+    pre  { background: #f3f4f6; padding: 0.75rem 1rem; border-radius: 4px;
+           overflow-x: auto; }
+    .note { color: #6b7280; font-size: 0.9rem; margin-top: 1.5rem; }
+  </style>
+</head>
+<body>
+  <h1>Frontend bundle is not built yet.</h1>
+  <p>The backend is running fine, but the Vite SPA in
+     <code>frontend/dist</code> hasn't been produced. Build it once:</p>
+  <pre>cd frontend
+npm install
+npm run build</pre>
+  <p>Then refresh this page.</p>
+  <p class="note">If you're developing the frontend, run
+     <code>npm run dev</code> instead and open the Vite dev server URL.</p>
+</body>
+</html>
+"""
 
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket, token: str | None = None, ticket: str | None = None):
     # WebSocket upgrades bypass HTTP middleware, so we must enforce auth here
     # ourselves when it is enabled.
-    # 5.10: Support both ?token=... (legacy) and ?ticket=... (preferred)
+    # 5.10: Support both ?token=... (legacy) and ?ticket=... (preferred).
     # Tickets are one-time use and short-lived.
     is_authed = False
     if not _auth_enabled or (token and _check_token(token)):
@@ -442,7 +240,7 @@ async def websocket_endpoint(ws: WebSocket, token: str | None = None, ticket: st
                 "type": "status",
                 "statuses": dict(process_status),
                 "progress": progress,
-                "rezka_session": rezka_session_state,
+                "rezka_session": _rezka.rezka_session_state,
             }
         )
         while True:
@@ -451,19 +249,6 @@ async def websocket_endpoint(ws: WebSocket, token: str | None = None, ticket: st
         ws_manager.disconnect(ws)
     except Exception:
         ws_manager.disconnect(ws)
-
-
-def _read_progress(key):
-    if not _is_valid_status_key(key):
-        return {"current": 0, "total": 0}
-    p_file = os.path.join(settings.app_data_dir, f"progress_{key}.json")
-    if os.path.exists(p_file):
-        try:
-            with open(p_file) as f:
-                return json.load(f)
-        except Exception:
-            return {"current": 0, "total": 0}
-    return {"current": 0, "total": 0}
 
 
 # 6.5 — liveness + readiness probe.
@@ -513,11 +298,14 @@ async def health():
 
 # Single Content-Security-Policy and a small set of supporting headers.
 # Notes on the policy:
-#   * The frontend is a single index.html that pulls Vue 3, Tailwind Play
-#     and SortableJS straight off public CDNs, so script-src has to allow
-#     those origins and 'unsafe-eval' (Vue runtime templates + Tailwind
-#     play compile JS at runtime) and 'unsafe-inline' (Tailwind injects
-#     <style> tags).
+#   * ROADMAP 10.7z — the frontend is a Vite-built ESM bundle served from
+#     `frontend/dist`, so script-src is just 'self'. No more public CDNs,
+#     no more 'unsafe-eval' (Vue runtime no longer compiles templates in
+#     the browser — SFCs are pre-compiled by `@vitejs/plugin-vue`).
+#   * style-src keeps 'unsafe-inline' for now: Vue's `:style` bindings
+#     emit inline `style="..."` attributes (e.g. SyncPanel's progress
+#     bars), and the Tailwind utility classes that ship inside the
+#     bundle are plain CSS — the inline allowance covers the bindings.
 #   * Posters come from arbitrary external hosts (TMDB, Kinopoisk, Rezka)
 #     so img-src has to allow https: and data:.
 #   * connect-src has to allow ws:/wss: for the /ws endpoint, plus any
@@ -526,8 +314,7 @@ async def health():
 #     browsers; we send both for compatibility.
 _CSP = (
     "default-src 'self'; "
-    "script-src 'self' 'unsafe-inline' 'unsafe-eval' "
-    "https://unpkg.com https://cdn.tailwindcss.com https://cdn.jsdelivr.net; "
+    "script-src 'self'; "
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
     "font-src 'self' https://fonts.gstatic.com; "
     "img-src 'self' data: https:; "
@@ -575,11 +362,17 @@ async def auth_middleware(request: Request, call_next):
         "/health",
         "/",
         "/manifest.json",
-        "/icon.png",
+        "/favicon.png",
+        "/icon-192.png",
+        "/icon-512.png",
         "/sw.js",
     ):
         return await call_next(request)
-    if path.startswith("/api/") or path.startswith("/assets/"):
+    # ROADMAP 10.7z — `/assets/...` is now the SPA's hashed bundle, which
+    # must load BEFORE login (otherwise the user can't see the login
+    # form). Auth-gate only the API surface here; static assets are
+    # public by construction.
+    if path.startswith("/api/"):
         if not _check_auth(request):
             return HTMLResponse(content="Unauthorized", status_code=401)
     return await call_next(request)
@@ -607,7 +400,7 @@ _rezka_retry_task: asyncio.Task | None = None
 async def _rezka_session_retry_loop():
     """Background loop that retries rezka session initialization if it fails."""
     # First attempt
-    success = await asyncio.to_thread(_init_rezka_session)
+    success = await asyncio.to_thread(_rezka._init_rezka_session)
     if success:
         return
 
@@ -615,7 +408,7 @@ async def _rezka_session_retry_loop():
     while True:
         try:
             await asyncio.sleep(wait)
-            success = await asyncio.to_thread(_init_rezka_session)
+            success = await asyncio.to_thread(_rezka._init_rezka_session)
             if success:
                 logger.info("[REZKA] Session recovery successful")
                 break
@@ -647,16 +440,20 @@ async def _wal_checkpoint_loop() -> None:
 
 
 async def _session_gc_loop() -> None:
-    """Periodically removes expired tokens from the in-memory session store."""
+    """Periodically purge expired session rows and in-memory WS tickets.
+
+    The sessions table itself is self-cleaning on every lookup (an
+    expired row is deleted on first sight), but a token that was
+    issued and then never used will sit in the table forever
+    without this loop. The same goes for ws_tickets in memory.
+    """
     while True:
         await asyncio.sleep(SESSION_GC_INTERVAL_SECONDS)
         try:
             now = time.time()
-            expired = [t for t, exp in _session_tokens.items() if now > exp]
-            if expired:
-                for t in expired:
-                    _session_tokens.pop(t, None)
-                logger.info(f"[AUTH] GC reaped {len(expired)} expired sessions")
+            reaped = await asyncio.to_thread(db.session_purge_expired, now=now)
+            if reaped:
+                logger.info(f"[AUTH] GC reaped {reaped} expired sessions")
 
             now = time.time()
             expired_tickets = [t for t, exp in _ws_tickets.items() if now > exp]
@@ -707,13 +504,18 @@ def get_manifest():
 def _sw_version() -> str:
     """Build a cache-bust token for the service worker.
 
-    Hashes (mtime, size) of index.html + sw.js + manifest.json so any
-    deploy-time change to those files yields a new SW body and the
-    browser re-installs the worker (which clears prior caches in the
-    activate handler — see sw.js:24).
+    Hashes (mtime, size) of the SPA entry point + sw.js + manifest.json
+    so any deploy-time change to those files yields a new SW body and
+    the browser re-installs the worker (which clears prior caches in
+    the activate handler — see sw.js).
+
+    ROADMAP 10.7z: the legacy `index.html` at the repo root is gone;
+    the version key now hashes `frontend/dist/index.html`, which Vite
+    rewrites on every build (asset URLs change on every content-hash).
     """
     parts: list[str] = []
-    for fname in ("index.html", "sw.js", "manifest.json"):
+    spa_html = os.path.join(_FRONTEND_DIST, "index.html")
+    for fname in (spa_html, "sw.js", "manifest.json"):
         try:
             st = os.stat(fname)
             parts.append(f"{fname}:{int(st.st_mtime)}:{st.st_size}")
@@ -722,445 +524,42 @@ def _sw_version() -> str:
     return hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()[:12]
 
 
+def _sw_precache_urls() -> list[str]:
+    """ROADMAP 10.7z — list the URLs the SW should precache on install.
+
+    We always include `/` (the SPA shell) plus the static metadata
+    files, then enumerate everything Vite emitted into
+    `frontend/dist/assets/` so the first-paint bundle is fully
+    available offline after the SW activates. Content-hashed filenames
+    mean the list rotates whenever the bundle changes, which combines
+    with `_sw_version()` to invalidate the previous cache cleanly.
+    """
+    urls = ["/", "/manifest.json", "/favicon.png", "/icon-192.png", "/icon-512.png"]
+    assets_dir = os.path.join(_FRONTEND_DIST, "assets")
+    if os.path.isdir(assets_dir):
+        for fname in sorted(os.listdir(assets_dir)):
+            urls.append(f"/assets/{fname}")
+    return urls
+
+
 @app.get("/sw.js")
 def get_sw():
-    # 7.1 — substitute __SW_VERSION__ at request time so each deploy
-    # produces a different sw.js body (different bytes -> browser
-    # reinstalls the worker -> activate handler purges old caches).
+    # 7.1 — substitute __SW_VERSION__ + __SW_PRECACHE__ at request time
+    # so each deploy produces a different sw.js body (different bytes
+    # -> browser reinstalls the worker -> activate handler purges old
+    # caches).
     try:
         with open("sw.js", encoding="utf-8") as f:
             body = f.read()
     except OSError:
         return JSONResponse({"error": "sw.js missing"}, status_code=500)
     body = body.replace("__SW_VERSION__", _sw_version())
+    body = body.replace("__SW_PRECACHE__", json.dumps(_sw_precache_urls()))
     return HTMLResponse(
         content=body,
         media_type="application/javascript",
         headers={"Cache-Control": "no-cache, max-age=0"},
     )
-
-
-@app.get("/icon.png")
-def get_icon():
-    if os.path.exists("icon.png"):
-        return FileResponse("icon.png")
-    return FileResponse("static/icon.png")
-
-
-# Single source of truth for every background-process key the app knows
-# about. running_processes (real Popen objects) and process_status (idle /
-# queued / running / done / error) are both derived from this tuple so the
-# two dicts can never drift out of sync — previously running_processes was
-# missing 'poiskkino' and 'rezka_collections' even though both endpoints
-# wrote to it on start.
-#
-# active_pipeline_* are sentinel slots inside running_processes only; they
-# don't carry a status and aren't a "process key".
-PROCESS_KEYS: tuple[str, ...] = (
-    "sync_video",
-    "sync_other",
-    "fix",
-    "poiskkino",
-    "reprocess",
-    "user",
-    "cleanup",
-    "rezka",
-    "rezka_collections",
-    "full_pipeline",
-    "single_update",
-)
-
-running_processes: dict = {key: None for key in PROCESS_KEYS}
-running_processes["active_pipeline_proc"] = None
-running_processes["active_pipeline_key"] = None
-
-process_status: dict[str, str] = {key: "idle" for key in PROCESS_KEYS}
-
-# Whitelist of valid status keys, used to guard endpoints/IO that build
-# paths from a key (stop_<key>.flag, progress_<key>.json, etc.). Anything
-# outside this set must be rejected to prevent path traversal via
-# /api/stop/{key}.
-VALID_STATUS_KEYS = frozenset(PROCESS_KEYS)
-pipeline_stop_requested = False
-
-
-def _is_valid_status_key(key: str) -> bool:
-    return isinstance(key, str) and key in VALID_STATUS_KEYS
-
-
-async def run_script(script_name, status_key):
-    global process_status, running_processes
-    process_status[status_key] = "running"
-    await ws_manager.broadcast({"type": "status", "key": status_key, "value": "running"})
-
-    progress_file = f"progress_{status_key}.json"
-    if os.path.exists(progress_file):
-        try:
-            os.remove(progress_file)
-        except Exception:
-            pass
-
-    script_path = os.path.abspath(script_name)
-    if not os.path.exists(script_path):
-        logger.error(f"[WORKER] Script not found: {script_path}")
-        process_status[status_key] = "error"
-        return
-
-    env = {
-        **os.environ,
-        "PYTHONIOENCODING": "utf-8",
-        "PYTHONUTF8": "1",
-        "PYTHONUNBUFFERED": "1",
-        "STATUS_KEY": status_key,
-    }
-    try:
-        proc = await asyncio.create_subprocess_exec(sys.executable, script_path, env=env)
-        running_processes[status_key] = proc
-        await proc.wait()
-        process_status[status_key] = "completed" if proc.returncode == 0 else "stopped"
-    except Exception as e:
-        logger.error(f"Ошибка при запуске {script_name}: {e}", exc_info=True)
-        process_status[status_key] = "error"
-    finally:
-        running_processes[status_key] = None
-        clear_stop_flag(status_key)
-        if process_status[status_key] == "completed":
-            clear_checkpoint(status_key)
-        await ws_manager.broadcast(
-            {
-                "type": "status",
-                "key": status_key,
-                "value": process_status[status_key],
-            }
-        )
-
-
-def check_any_running():
-    """Проверяет, запущен ли какой-либо фоновый процесс, чтобы избежать конфликтов в БД."""
-    for key, status in process_status.items():
-        if status in ["running", "queued"]:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Другой процесс ({key}) уже {'запущен' if status == 'running' else 'в очереди'}. Пожалуйста, дождитесь его завершения.",
-            )
-
-
-async def run_pipeline_task():
-    """Последовательный запуск всех этапов синхронизации."""
-    global process_status, pipeline_stop_requested
-    process_status["full_pipeline"] = "running"
-    pipeline_stop_requested = False
-
-    steps = [
-        ("sync_job.py", ["video", "0", "0"], "sync_video", "sync_video_log.txt"),
-        ("reprocess_database.py", [], "reprocess", "reprocess_log.txt"),
-        (
-            "fix_posters.py",
-            ["poiskkino", "fix_poiskkino_log.txt"],
-            "poiskkino",
-            "fix_poiskkino_log.txt",
-        ),
-        ("fix_posters.py", ["tech", "fix_tech_log.txt"], "fix", "fix_tech_log.txt"),
-        ("rezka_sync.py", [], "rezka", "sync_rezka_log.txt"),
-        ("cleanup_duplicates.py", [], "cleanup", "cleanup_log.txt"),
-    ]
-
-    try:
-        for script, args, key, log in steps:
-            if pipeline_stop_requested:
-                logger.info("ПАЙПЛАЙН ОСТАНОВЛЕН ПОЛЬЗОВАТЕЛЕМ")
-                break
-
-            # Запускаем шаг и ждем его завершения
-            await run_script_with_args(script, args, key, log, is_pipeline_step=True)
-
-            # Если шаг был остановлен или упал с ошибкой - прерываем цепочку
-            if process_status[key] in ["stopped", "error"]:
-                logger.warning(
-                    f"Шаг {key} завершился со статусом {process_status[key]}. Прерываю цикл."
-                )
-                break
-
-        if pipeline_stop_requested:
-            process_status["full_pipeline"] = "stopped"
-        else:
-            process_status["full_pipeline"] = "completed"
-
-    except Exception as e:
-        logger.error(f"ОШИБКА В ПАЙПЛАЙНЕ: {e}", exc_info=True)
-        process_status["full_pipeline"] = "error"
-    finally:
-        pipeline_stop_requested = False
-
-
-async def run_script_with_args(
-    script_name, args, status_key, log_file=None, is_pipeline_step=False
-):
-    global process_status, running_processes
-    process_status[status_key] = "running"
-    await ws_manager.broadcast({"type": "status", "key": status_key, "value": "running"})
-
-    start_time = datetime.now()
-    last_progress_broadcast = 0
-
-    # Очищаем старый файл прогресса
-    progress_file = f"progress_{status_key}.json"
-    if os.path.exists(progress_file):
-        try:
-            os.remove(progress_file)
-        except Exception:
-            pass
-
-    # Используем абсолютный путь к скрипту
-    script_path = os.path.abspath(script_name)
-    if not os.path.exists(script_path):
-        logger.error(f"[WORKER] Script not found: {script_path}")
-        process_status[status_key] = "error"
-        return
-
-    env = {
-        **os.environ,
-        "PYTHONIOENCODING": "utf-8",
-        "PYTHONUTF8": "1",
-        "PYTHONUNBUFFERED": "1",
-        "STATUS_KEY": status_key,
-    }
-    status = "completed"
-
-    try:
-        logger.info(f"[WORKER] Starting process: {sys.executable} -u {script_path} {args}")
-
-        # Запускаем через PIPE для надежного чтения вывода в asyncio
-        # Флаг -u отключает буферизацию вывода в самом Python
-        proc = await asyncio.create_subprocess_exec(
-            sys.executable,
-            "-u",
-            script_path,
-            *args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            env=env,
-        )
-
-        logger.info(f"[WORKER] Process started with PID: {proc.pid}")
-        running_processes[status_key] = proc
-        if is_pipeline_step:
-            running_processes["active_pipeline_proc"] = proc
-            running_processes["active_pipeline_key"] = status_key
-
-        # Читаем вывод в реальном времени и пишем в лог
-        if log_file:
-            with open(log_file, "a", encoding="utf-8") as f:
-                if not is_pipeline_step:
-                    f.write(
-                        f"=== [WORKER] Запуск {script_name} ({datetime.now().strftime('%H:%M:%S')}) ===\n"
-                    )
-                    f.flush()
-
-                while True:
-                    chunk = await proc.stdout.read(1024)
-                    if not chunk:
-                        break
-
-                    decoded_chunk = chunk.decode("utf-8", errors="replace")
-                    f.write(decoded_chunk)
-                    f.flush()
-
-                    await ws_manager.broadcast(
-                        {
-                            "type": "log",
-                            "key": status_key,
-                            "data": decoded_chunk,
-                        }
-                    )
-
-                    now = time.monotonic()
-                    if now - last_progress_broadcast > 1.0:
-                        last_progress_broadcast = now
-                        prog = _read_progress(status_key)
-                        await ws_manager.broadcast(
-                            {
-                                "type": "progress",
-                                "key": status_key,
-                                "current": prog.get("current", 0),
-                                "total": prog.get("total", 0),
-                            }
-                        )
-        else:
-            await proc.wait()
-
-        # Ждем завершения на случай если цикл чтения прервался раньше
-        await proc.wait()
-
-        if proc.returncode == 0:
-            status = "completed"
-        elif proc.returncode in [-15, 1, 15]:
-            status = "stopped"
-        else:
-            status = "error"
-
-    except Exception as e:
-        logger.error(f"Ошибка при выполнении {script_name}: {e}", exc_info=True)
-        if log_file:
-            try:
-                with open(log_file, "a", encoding="utf-8") as f:
-                    f.write(f"\n[CRITICAL ERROR] Не удалось запустить процесс: {e}\n")
-                    f.write(traceback.format_exc())
-            except Exception:
-                pass
-        status = "error"
-    finally:
-        running_processes[status_key] = None
-        if is_pipeline_step:
-            running_processes["active_pipeline_proc"] = None
-            running_processes["active_pipeline_key"] = None
-        process_status[status_key] = status
-        clear_stop_flag(status_key)
-        if status == "completed":
-            clear_checkpoint(status_key)
-
-        await ws_manager.broadcast(
-            {
-                "type": "status",
-                "key": status_key,
-                "value": status,
-            }
-        )
-        await ws_manager.broadcast(
-            {
-                "type": "progress",
-                "key": status_key,
-                "current": _read_progress(status_key).get("current", 0),
-                "total": _read_progress(status_key).get("total", 0),
-            }
-        )
-
-        # Записываем историю
-        end_time = datetime.now()
-        duration = (end_time - start_time).total_seconds()
-
-        items_processed = 0
-        total_items = 0
-        if os.path.exists(progress_file):
-            try:
-                with open(progress_file) as f:
-                    data = json.load(f)
-                    items_processed = data.get("current", 0)
-                    total_items = data.get("total", 0)
-            except Exception:
-                pass
-
-        try:
-            db.insert_job_history(
-                status_key,
-                start_time.strftime("%Y-%m-%d %H:%M:%S"),
-                end_time.strftime("%Y-%m-%d %H:%M:%S"),
-                duration,
-                items_processed,
-                total_items,
-                status,
-            )
-        except Exception as e:
-            logger.error(f"Ошибка записи истории: {e}", exc_info=True)
-
-
-def _recover_rezka_url(item_id: int, old_url: str) -> str | None:
-    from HdRezkaApi.search import HdRezkaSearch
-
-    row = (
-        db.get_connection()
-        .cursor()
-        .execute("SELECT title, year FROM items WHERE id = ?", (item_id,))
-        .fetchone()
-    )
-    if not row:
-        return None
-    title = row["title"]
-    year = row["year"]
-    from app_core import clean_title_for_search
-
-    clean = clean_title_for_search(title)
-    if not clean:
-        return None
-    try:
-        results = HdRezkaSearch("https://rezka.ag")(f"{clean} {year}")
-    except Exception:
-        return None
-    old_num = re.search(r"/(\d+)-", old_url)
-    if not old_num:
-        return None
-    old_id = old_num.group(1)
-    for r in results:
-        url = r.get("url", "")
-        if not url or url == old_url:
-            continue
-        new_num = re.search(r"/(\d+)-", url)
-        if new_num and new_num.group(1) == old_id:
-            conn = db.get_connection()
-            conn.execute("UPDATE items SET rezka_url = ? WHERE id = ?", (url, item_id))
-            conn.commit()
-            conn.close()
-            logger.info(f"[REZKA] URL recovered for item {item_id}: {old_url} -> {url}")
-            return url
-    return None
-
-
-def _get_rezka_obj(item_id: int, rezka_url: str):
-    from HdRezkaApi import HdRezkaApi
-
-    cookies = rezka_session.cookies if rezka_session else {"hdmbbs": "1"}
-    try:
-        rezka = HdRezkaApi(rezka_url, cookies=cookies)
-        if rezka.ok:
-            return rezka, rezka_url
-    except Exception:
-        pass
-    new_url = _recover_rezka_url(item_id, rezka_url)
-    if new_url:
-        try:
-            rezka = HdRezkaApi(new_url, cookies=cookies)
-            if rezka.ok:
-                return rezka, new_url
-        except Exception:
-            pass
-    return None, rezka_url
-
-
-@app.get("/", response_class=HTMLResponse)
-def get_index():
-    with open("index.html", encoding="utf-8") as f:
-        return f.read()
-
-
-_LOG_FILES = {
-    "video": "sync_video_log.txt",
-    "other": "sync_other_log.txt",
-    "fix": "fix_tech_log.txt",
-    "fix_poiskkino": "fix_poiskkino_log.txt",
-    "user": "user_sync_log.txt",
-    "reprocess": "reprocess_log.txt",
-    "cleanup": "cleanup_log.txt",
-    "rezka": "sync_rezka_log.txt",
-    "rezka_collections": "rezka_collections_log.txt",
-    "single_update": "single_update_log.txt",
-}
-
-
-# 6.6 — on-demand DB backup download.
-#
-# Generates a fresh consistent snapshot of the SQLite database and
-# streams it back as a file attachment. Behind auth_middleware so
-# only logged-in clients can pull it. The snapshot is written via
-# `Database.backup_to()` (SQLite online backup API) so the live
-# app keeps serving while the copy runs.
-#
-# The backup is staged in `backups/` (auto-created) and named
-# `app_data-<UTC-timestamp>.db`; the same file is served back. The
-# caller can also drive periodic snapshots from cron via
-# `python backup_db.py --rotate N`.
-
-
-# 8.17 — manual rebind of KP/IMDb/Rezka identifiers from the card UI.
 
 
 # 8.5 — filter rules CRUD endpoints.
@@ -1226,29 +625,6 @@ def filter_rules_delete(rule_id: int):
     return {"status": "success"}
 
 
-# 8.7 — TMDB trailers. Returns the highest-confidence YouTube key
-# for the requested item, picking an official trailer when available.
-
-
-# 8.12 — same lookup as /api/stream_m3u but returns the resolved
-# direct URL as JSON so the frontend can render an embedded player
-# (HTML5 <video> / hls.js) instead of triggering an m3u download.
-
-
-# 8.12 — subtitle CORS proxy. Rezka serves VTT/SRT files without
-# Access-Control-Allow-Origin, so the browser refuses to attach them
-# to a <track> element. We re-fetch and stream the body back with
-# permissive CORS so HTML5 captions render. Only forwards http(s)
-# URLs whose host belongs to a small allow-list (rezka mirrors).
-_SUBTITLE_HOST_ALLOWLIST = (
-    ".rezka.ag",
-    ".voidboost.net",
-    ".videocdn.tv",
-    "hdrezka.app",
-    ".rezka.cdnstream.tv",
-)
-
-
 # 8.18 — audit log endpoints + undo.
 @app.get("/api/audit_log")
 def audit_log_list(limit: int = 50, item_id: int | None = None):
@@ -1304,28 +680,37 @@ def get_last_visit():
     return {"last_visit": db.get_last_visit()}
 
 
-def _trigger_restart():
-    """Triggers a server restart using the command defined in settings.
-    Returns True if a command was started, False otherwise.
+# ROADMAP Stage 10.7z — mount the Vite-emitted assets directory at
+# `/assets`. We deliberately mount the asset subdirectory (not the
+# whole dist root) so the mount doesn't intercept `/`, `/manifest.json`,
+# `/sw.js`, etc. The SPA shell itself is served by the explicit
+# `GET /` handler below.
+_FRONTEND_ASSETS = os.path.join(_FRONTEND_DIST, "assets")
+if os.path.isdir(_FRONTEND_ASSETS):
+    app.mount(
+        "/assets",
+        StaticFiles(directory=_FRONTEND_ASSETS),
+        name="spa-assets",
+    )
+    logger.info(f"[FRONTEND] mounted SPA assets from {_FRONTEND_ASSETS} at /assets")
+
+
+@app.get("/", response_class=HTMLResponse)
+def get_spa_shell():
+    """Serve the Vite-built SPA shell.
+
+    When `frontend/dist/index.html` is missing (fresh checkout, nobody
+    ran `npm run build` yet) we return a 503 with an inline
+    instructions page instead of a bare 404 — the bare 404 was
+    confusing for new contributors who'd just cloned the repo and
+    started `uvicorn` without realising the SPA needs a build step.
     """
-    import subprocess
-
-    if settings.restart_command:
-        try:
-            subprocess.Popen(
-                settings.restart_command,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
-            return True
-        except Exception as e:
-            logger.error(f"Failed to trigger restart: {e}")
-            return False
-    return False
-
-
-_reset_tokens: dict = {}
+    spa_html = os.path.join(_FRONTEND_DIST, "index.html")
+    try:
+        with open(spa_html, encoding="utf-8") as f:
+            return HTMLResponse(content=f.read())
+    except FileNotFoundError:
+        return HTMLResponse(content=_FRONTEND_NOT_BUILT_HTML, status_code=503)
 
 
 if __name__ == "__main__":

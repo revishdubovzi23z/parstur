@@ -11,7 +11,7 @@ This document provides essential context for AI coding assistants working on thi
 - `settings.py`: Centralized configuration management using Pydantic Settings. Use `from settings import settings`.
 - `*_client.py`: Clients for external APIs (TMDB, Kinopoisk, PoiskKino).
 - `*_sync.py`: Logic for synchronizing media data and collections in the background.
-- `index.html`: The current (legacy) monolithic frontend. Uses Vue 3 (CDN), Tailwind Play, and SortableJS.
+- `frontend/`: Vite/Vue 3/TS SPA. Builds to `frontend/dist/`, which `main.py` mounts at `/`. The legacy monolithic `index.html` (Vue 3 CDN + Tailwind Play + SortableJS) was retired in ROADMAP Stage 10.7z; do not reintroduce CDN-served Vue / Tailwind / Sortable.
 
 ## Workflow & Hygiene
 - **Formatting**: Always run `ruff format .` before committing.
@@ -26,4 +26,4 @@ This document provides essential context for AI coding assistants working on thi
 4. **Configuration**: Use `settings.py` for all environment-based configuration. Avoid direct `os.getenv` calls in new code.
 
 ## Current Roadmap
-Refer to [ROADMAP.md](ROADMAP.md) for the active development stage and priorities. We have completed Stage 5 (Small bug-fixes and security-pass) and are moving into Stage 6 (Logs Migration).
+Refer to [ROADMAP.md](ROADMAP.md) for the active development stage and priorities. Stages 0–9 are complete. Stage 10 (Vite + Vue 3 + TypeScript frontend migration) is finished: the SPA in `frontend/dist` is now served at `/` and the legacy `index.html` has been removed (Stage 10.7z).

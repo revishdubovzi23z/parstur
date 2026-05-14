@@ -8,6 +8,8 @@ from pydantic import BaseModel
 
 from db import db
 from logging_config import setup_logging
+from runtime import rezka as _rezka
+from runtime.ws import broadcast_threadsafe
 from settings import settings
 
 logger = setup_logging("parsclode.routes.collections", settings.log_file_path)
@@ -25,13 +27,11 @@ class CollectionCreate(BaseModel):
 
 
 def _rezka_folder_action(action: str, params: dict):
-    import main
-
-    if not main.rezka_session:
+    if not _rezka.rezka_session:
         return None
     try:
         params["action"] = action
-        resp = main._rezka_request(
+        resp = _rezka._rezka_request(
             "POST",
             "https://rezka.ag/ajax/favorites/",
             data=params,
@@ -39,7 +39,7 @@ def _rezka_folder_action(action: str, params: dict):
                 "User-Agent": "Mozilla/5.0",
                 "X-Requested-With": "XMLHttpRequest",
             },
-            cookies=main.rezka_session.cookies,
+            cookies=_rezka.rezka_session.cookies,
             timeout=10,
         )
         if resp is not None:
@@ -51,22 +51,18 @@ def _rezka_folder_action(action: str, params: dict):
 
 @router.post("/api/collections")
 def create_collection(data: CollectionCreate):
-    import main
-
     try:
         db.create_collection(data.name)
     except Exception:
         return {"status": "error", "message": "Коллекция существует"}
-    if main.rezka_session:
+    if _rezka.rezka_session:
         _rezka_folder_action("add_cat", {"name": data.name})
     return {"status": "success"}
 
 
 @router.delete("/api/collections/{id}")
 def delete_collection(id: int):
-    import main
-
-    if main.rezka_session:
+    if _rezka.rezka_session:
         row = (
             db.get_connection()
             .cursor()
@@ -77,10 +73,9 @@ def delete_collection(id: int):
             from app_core import normalize_title
 
             coll_norm = normalize_title(row["name"])
-            if main.rezka_session_folders_cache and coll_norm in main.rezka_session_folders_cache:
-                _rezka_folder_action(
-                    "remove_cat", {"cat_id": main.rezka_session_folders_cache[coll_norm]}
-                )
+            cache = _rezka.rezka_session_folders_cache
+            if cache and coll_norm in cache:
+                _rezka_folder_action("remove_cat", {"cat_id": cache[coll_norm]})
     db.delete_collection(id)
     return {"status": "success"}
 
@@ -91,10 +86,8 @@ class CollectionRename(BaseModel):
 
 @router.put("/api/collections/{id}")
 def rename_collection(id: int, data: CollectionRename):
-    import main
-
     cat_id = None
-    if main.rezka_session:
+    if _rezka.rezka_session:
         row = (
             db.get_connection()
             .cursor()
@@ -105,8 +98,9 @@ def rename_collection(id: int, data: CollectionRename):
             from app_core import normalize_title
 
             coll_norm = normalize_title(row["name"])
-            if main.rezka_session_folders_cache and coll_norm in main.rezka_session_folders_cache:
-                cat_id = main.rezka_session_folders_cache[coll_norm]
+            cache = _rezka.rezka_session_folders_cache
+            if cache and coll_norm in cache:
+                cat_id = cache[coll_norm]
     db.rename_collection(id, data.name)
     if cat_id:
         _rezka_folder_action("change_cat_name", {"cat_id": cat_id, "name": data.name})
@@ -224,12 +218,10 @@ class CollectionItemRequest(BaseModel):
 
 
 def _sync_rezka_folder(action, collection_id, item_id):
-    import main
-
     try:
         from app_core import normalize_title
 
-        if not main.rezka_session:
+        if not _rezka.rezka_session:
             return
 
         _c = db.get_connection().cursor()
@@ -256,12 +248,14 @@ def _sync_rezka_folder(action, collection_id, item_id):
 
         coll_norm = normalize_title(_coll["name"])
         cat_id = None
-        if main.rezka_session_folders_cache and coll_norm in main.rezka_session_folders_cache:
-            cat_id = main.rezka_session_folders_cache[coll_norm]
+        cache = _rezka.rezka_session_folders_cache
+        if cache and coll_norm in cache:
+            cat_id = cache[coll_norm]
         else:
-            main._refresh_rezka_folders_cache()
-            if main.rezka_session_folders_cache and coll_norm in main.rezka_session_folders_cache:
-                cat_id = main.rezka_session_folders_cache[coll_norm]
+            _rezka._refresh_rezka_folders_cache()
+            cache = _rezka.rezka_session_folders_cache
+            if cache and coll_norm in cache:
+                cat_id = cache[coll_norm]
 
         if not cat_id:
             return
@@ -270,7 +264,7 @@ def _sync_rezka_folder(action, collection_id, item_id):
         if action == "removed":
             data["del"] = "1"
 
-        main._rezka_request(
+        _rezka._rezka_request(
             "POST",
             "https://rezka.ag/ajax/favorites/",
             data=data,
@@ -278,21 +272,19 @@ def _sync_rezka_folder(action, collection_id, item_id):
                 "User-Agent": "Mozilla/5.0",
                 "X-Requested-With": "XMLHttpRequest",
             },
-            cookies=main.rezka_session.cookies,
+            cookies=_rezka.rezka_session.cookies,
             timeout=10,
         )
-        main._refresh_rezka_folders_cache()
+        _rezka._refresh_rezka_folders_cache()
     except Exception as e:
         logger.error(f"[REZKA SYNC ERROR] {e}", exc_info=True)
 
 
 def _sync_rezka_folder_wrapper(action, collection_id, item_id):
-    import main
-
     try:
         _sync_rezka_folder(action, collection_id, item_id)
     except Exception as e:
-        main._broadcast_threadsafe(
+        broadcast_threadsafe(
             {
                 "type": "rezka_sync_error",
                 "message": f"Ошибка синхронизации с Rezka: {e}",
@@ -305,11 +297,9 @@ def _sync_rezka_folder_wrapper(action, collection_id, item_id):
 
 @router.post("/api/collections/{collection_id}/toggle")
 async def toggle_collection_item(collection_id: int, data: CollectionItemRequest):
-    import main
-
     action = db.toggle_collection_item(collection_id, data.item_id)
 
-    if action in ("added", "removed") and main.rezka_session:
+    if action in ("added", "removed") and _rezka.rezka_session:
         loop = asyncio.get_running_loop()
         loop.run_in_executor(None, _sync_rezka_folder_wrapper, action, collection_id, data.item_id)
 

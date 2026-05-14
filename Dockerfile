@@ -13,7 +13,26 @@
 # (or use the docker-compose.yml in this repo) to avoid losing it
 # when the container is replaced.
 
-# ---- builder ----------------------------------------------------------------
+# ---- frontend builder -------------------------------------------------------
+# ROADMAP Stage 10.7z — produce the Vite/Vue 3/TS bundle in a dedicated
+# stage so the runtime image doesn't drag in Node. The runtime stage
+# copies the emitted `dist/` into `/app/frontend/dist`, which `main.py`
+# mounts at `/`. If this stage is ever skipped (e.g. on a build target
+# that omits the frontend), the mount silently no-ops and `/` will
+# 404 — there is no legacy fallback after the index.html retirement.
+FROM node:20-alpine AS frontend-builder
+
+WORKDIR /frontend
+
+# package*.json copied first so the npm-install layer is cached when only
+# source files change.
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+
+COPY frontend/ ./
+RUN npm run build
+
+# ---- python builder ---------------------------------------------------------
 FROM python:3.12-slim AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -59,6 +78,13 @@ WORKDIR /app
 # Copy source after deps so source-only changes don't bust the
 # pip-install layer cache.
 COPY --chown=par2:par2 . .
+
+# Bring the Vite-built SPA from the frontend-builder stage into the
+# location `main.py` looks for (`frontend/dist`). The `frontend/` directory
+# copied above already contains source files but no `dist/` (it's in
+# `.dockerignore` / `.gitignore`); the COPY below materialises the build
+# output. With this in place the FastAPI app mounts the bundle at `/`.
+COPY --from=frontend-builder --chown=par2:par2 /frontend/dist /app/frontend/dist
 
 # 8000 matches main.py's uvicorn.run(..., port=8000).
 EXPOSE 8000

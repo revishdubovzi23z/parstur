@@ -48,7 +48,15 @@ Antigravity Tracker — это инструмент для тех, кто хоч
     ```bash
     pip install -r requirements.txt
     ```
-3.  Запустите сервер:
+3.  Соберите фронтенд (Vite/Vue 3/TS SPA — обслуживается из `frontend/dist`):
+    ```bash
+    cd frontend
+    npm install
+    npm run build
+    cd ..
+    ```
+    Этот шаг обязательный после первичного клонирования и после каждого `git pull`, который трогает `frontend/`. Если запустить сервер без сборки, `GET /` вернёт 503 с инструкцией.
+4.  Запустите сервер:
     ```bash
     python main.py
     ```

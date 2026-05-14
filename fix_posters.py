@@ -78,8 +78,21 @@ def fix_metadata(api_type="tech"):
             ]
             for tag in tags:
                 search_title = re.sub(f"(?i){tag}", "", search_title)
+            # `needed` collects the metadata columns this item is still
+            # missing so the log line below can show what we are about
+            # to refetch. The list is rebuilt per iteration; earlier
+            # revisions of this loop initialised it outside the loop,
+            # which masked a NameError on the first row where IMDb was
+            # already populated.
+            needed: list[str] = []
+            if not item_data["kp_rating"]:
+                needed.append("Кинопоиск")
             if not item_data["imdb_rating"]:
                 needed.append("IMDb")
+            if not item_data["poster_url"]:
+                needed.append("постер")
+            if not item_data["description"]:
+                needed.append("описание")
             logger.info(f"\n[{idx}/{len(items)}] 🎬 {search_title} ({year})")
             if needed:
                 logger.info(f"  📋 Нужно: {', '.join(needed)}")

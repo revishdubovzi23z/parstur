@@ -3,6 +3,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from db import db
+from runtime.processes import run_script_with_args, task_queue
 
 router = APIRouter()
 
@@ -22,10 +23,29 @@ class RebindRequest(BaseModel):
     rezka_url: str | None = None
 
 
+@router.get("/api/item/{item_id}")
+def get_item(item_id: int):
+    """Return a single item with its releases and collection ids.
+
+    ROADMAP 10.7f — SPA item-card modal needs the same payload shape
+    that the feed embeds per item, but for one item at a time. We
+    bundle the item row, its releases (`db.get_releases`) and
+    `db.get_item_collections` to avoid three separate round-trips.
+    """
+    item = db.get_item(item_id)
+    if item is None:
+        return JSONResponse({"error": "item not found"}, status_code=404)
+    releases = db.get_releases(item_id)
+    collections = db.get_item_collections(item_id)
+    return {
+        "item": item,
+        "releases": releases,
+        "collections": collections,
+    }
+
+
 @router.post("/api/update_item/{item_id}")
 async def update_item(item_id: int):
-    from main import run_script_with_args, task_queue
-
     log_file = "single_update_log.txt"
     with open(log_file, "w", encoding="utf-8") as f:
         f.write(f"=== Обновление карточки ID {item_id} ===\n")

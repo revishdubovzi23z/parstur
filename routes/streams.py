@@ -5,8 +5,23 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from db import db
+from runtime.rezka import _get_rezka_obj
 
 router = APIRouter()
+
+# 5.5 — allowlist of subtitle CDN hostnames that `/api/subtitle_proxy`
+# is allowed to forward to. Restricts the proxy to known subtitle CDNs
+# so an attacker can't use the endpoint to fetch arbitrary URLs.
+# Match is case-insensitive: `host == h` or `host.endswith(h)` (so
+# `subs.com` covers `cdn1.subs.com`).
+_SUBTITLE_HOST_ALLOWLIST = (
+    "rezka.ag",
+    "prx.rezka.ag",
+    "prx-eu.rezka.ag",
+    "rezka.cdnstream.club",
+    "hdrezka.club",
+    "static.rezka.ag",
+)
 
 
 @router.get("/api/online_sources/{item_id}")
@@ -106,9 +121,7 @@ def get_stream_info(item_id: int):
     if not row or not row["rezka_url"]:
         return {"error": "no rezka_url"}
 
-    import main
-
-    rezka, _ = main._get_rezka_obj(item_id, row["rezka_url"])
+    rezka, _ = _get_rezka_obj(item_id, row["rezka_url"])
     if not rezka:
         return {"error": "failed to load page"}
 
@@ -146,8 +159,6 @@ def get_stream(
     episode: str | None = None,
     translator: str | None = None,
 ):
-    import main
-
     row = (
         db.get_connection()
         .cursor()
@@ -157,7 +168,7 @@ def get_stream(
     if not row or not row["rezka_url"]:
         return {"error": "no rezka_url"}
 
-    rezka, _ = main._get_rezka_obj(item_id, row["rezka_url"])
+    rezka, _ = _get_rezka_obj(item_id, row["rezka_url"])
     if not rezka:
         return {"error": "failed to load page"}
 
@@ -202,8 +213,6 @@ def get_stream_m3u(
 ):
     from fastapi.responses import Response as R
 
-    import main
-
     row = (
         db.get_connection()
         .cursor()
@@ -213,7 +222,7 @@ def get_stream_m3u(
     if not row or not row["rezka_url"]:
         return R(content="error: no rezka_url", media_type="text/plain", status_code=404)
 
-    rezka, _ = main._get_rezka_obj(item_id, row["rezka_url"])
+    rezka, _ = _get_rezka_obj(item_id, row["rezka_url"])
     if not rezka:
         return R(
             content="error: failed to load page",
@@ -369,14 +378,12 @@ def get_stream_url(
     translator: str | None = None,
     quality: str | None = None,
 ):
-    import main
-
     with db._conn() as c:
         row = c.execute("SELECT rezka_url, title FROM items WHERE id = ?", (item_id,)).fetchone()
     if not row or not row["rezka_url"]:
         return JSONResponse({"error": "no rezka_url"}, status_code=404)
 
-    rezka, _ = main._get_rezka_obj(item_id, row["rezka_url"])
+    rezka, _ = _get_rezka_obj(item_id, row["rezka_url"])
     if not rezka:
         return JSONResponse({"error": "failed to load page"}, status_code=502)
     try:
@@ -419,12 +426,10 @@ def get_stream_url(
 def subtitle_proxy(url: str):
     from fastapi.responses import Response
 
-    import main
-
     if not url or not url.startswith(("http://", "https://")):
         return JSONResponse({"error": "invalid url"}, status_code=400)
     host = (urlparse(url).hostname or "").lower()
-    if not any(host == h.lstrip(".") or host.endswith(h) for h in main._SUBTITLE_HOST_ALLOWLIST):
+    if not any(host == h.lstrip(".") or host.endswith(h) for h in _SUBTITLE_HOST_ALLOWLIST):
         return JSONResponse({"error": f"host {host} not allowed"}, status_code=403)
     try:
         # Subtitle files live on CDNs (no auth required) — use a plain
