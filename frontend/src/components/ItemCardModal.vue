@@ -101,7 +101,15 @@ const singleUpdateRunning = computed(
 //   IMDB  — imdb.com title page when `imdb_id` is set.
 const rutorUrl = computed(() => {
   const it = items.item
-  if (!it?.title) return null
+  if (!it) return null
+  // Try to find the latest release with a URL (most likely a rutor link)
+  const releases = [...(it.releases || [])].sort((a, b) => {
+    return (b.date_added || '').localeCompare(a.date_added || '')
+  })
+  const latestWithUrl = releases.find((r) => r.url)
+  if (latestWithUrl?.url) return latestWithUrl.url
+
+  if (!it.title) return null
   const query = it.year ? `${it.title} ${it.year}` : it.title
   return `https://rutor.info/search/0/0/000/0/${encodeURIComponent(query)}`
 })
@@ -185,9 +193,9 @@ async function onReprocess(): Promise<void> {
 // ── ✕ closes the modal AND flips the ignore flag so the item drops
 // out of the feed. Matches the legacy "swipe-to-hide" gesture.
 async function onIgnoreAndClose(): Promise<void> {
-  if (!items.isIgnored) {
-    await items.toggleIgnore()
-  }
+  // 10.7h — user feedback: ✕ should just close the modal, not toggle ignore.
+  // The "one-click ignore" is on the feed card. In the modal,
+  // explicit actions are better.
   items.close()
 }
 

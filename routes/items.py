@@ -76,8 +76,10 @@ def ignore_item(item_id: int):
 
 
 @router.post("/api/reset_item/{item_id}")
-def reset_item(item_id: int, data: ResetFieldsRequest):
+async def reset_item(item_id: int, data: ResetFieldsRequest):
     db.reset_item(item_id, data.fields)
+    from runtime.ws import ws_manager
+    await ws_manager.broadcast({"type": "item_updated", "item_id": item_id})
     return {"status": "success"}
 
 

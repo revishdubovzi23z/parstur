@@ -221,7 +221,13 @@ class DbItemsMixin:
             updates.append("checked_tech = 0")
         updates = list(set(updates))
         with self._conn(conn) as c:
-            c.execute(f"UPDATE items SET {', '.join(updates)} WHERE id = ?", (item_id,))
+            sql = f"UPDATE items SET {', '.join(updates)} WHERE id = ?"
+            c.execute(sql, (item_id,))
+            from logging_config import setup_logging
+            from settings import settings
+            l = setup_logging("db.items", settings.log_file_path)
+            l.info(f"[DB] Reset item {item_id}: fields={fields}, sql={sql}")
+
 
     def set_ids(
         self,
@@ -439,8 +445,8 @@ class DbItemsMixin:
                 elif category_id != 0:
                     where_clauses.append("items.category_id = ?")
                     params.append(category_id)
-                if hide_ignored and category_id != -2:
-                    where_clauses.append("items.is_ignored = 0")
+            if hide_ignored and category_id != -2:
+                where_clauses.append("COALESCE(items.is_ignored, 0) = 0")
 
             if search:
                 search_val = f"%{search.lower()}%"
