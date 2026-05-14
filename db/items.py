@@ -228,9 +228,9 @@ class DbItemsMixin:
             c.execute(sql, (item_id,))
             from logging_config import setup_logging
             from settings import settings
-            l = setup_logging("db.items", settings.log_file_path)
-            l.info(f"[DB] Reset item {item_id}: fields={fields}, sql={sql}")
 
+            logger = setup_logging("db.items", settings.log_file_path)
+            logger.info(f"[DB] Reset item {item_id}: fields={fields}, sql={sql}")
 
     def set_ids(
         self,
@@ -255,6 +255,79 @@ class DbItemsMixin:
         params.append(item_id)
         with self._conn(conn) as c:
             c.execute(f"UPDATE items SET {', '.join(updates)} WHERE id = ?", params)
+
+    def kinopub_bind(
+        self,
+        item_id: int,
+        *,
+        kinopub_id: int,
+        kinopub_type: str | None = None,
+        kinopub_url: str | None = None,
+        conn=None,
+    ) -> dict | None:
+        """Attach a kino.pub identifier to an item.
+
+        Returns a dict with `before` and `after` snapshots of the
+        kinopub_* columns, or None when the item does not exist.
+        `checked_kinopub` is forced to 1 so the future sync_kinopub
+        matcher (PR 4) skips already-bound rows during its sweep.
+        """
+        with self._conn(conn) as c:
+            row = c.execute(
+                "SELECT kinopub_id, kinopub_type, kinopub_url, checked_kinopub "
+                "FROM items WHERE id = ?",
+                (item_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            before = {
+                "kinopub_id": row["kinopub_id"],
+                "kinopub_type": row["kinopub_type"],
+                "kinopub_url": row["kinopub_url"],
+            }
+            c.execute(
+                "UPDATE items SET kinopub_id = ?, kinopub_type = ?, "
+                "kinopub_url = ?, checked_kinopub = 1 WHERE id = ?",
+                (int(kinopub_id), kinopub_type, kinopub_url, item_id),
+            )
+            after = {
+                "kinopub_id": int(kinopub_id),
+                "kinopub_type": kinopub_type,
+                "kinopub_url": kinopub_url,
+            }
+            return {"before": before, "after": after}
+
+    def kinopub_unbind(self, item_id: int, conn=None) -> dict | None:
+        """Detach the kino.pub identifier from an item.
+
+        Returns the same `before`/`after` shape as `kinopub_bind`, or
+        None when the item does not exist. `checked_kinopub` is reset
+        to 0 so the next sync run can attempt a fresh match (the
+        operator likely unbound because the previous match was wrong).
+        """
+        with self._conn(conn) as c:
+            row = c.execute(
+                "SELECT kinopub_id, kinopub_type, kinopub_url FROM items WHERE id = ?",
+                (item_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            before = {
+                "kinopub_id": row["kinopub_id"],
+                "kinopub_type": row["kinopub_type"],
+                "kinopub_url": row["kinopub_url"],
+            }
+            c.execute(
+                "UPDATE items SET kinopub_id = NULL, kinopub_type = NULL, "
+                "kinopub_url = NULL, checked_kinopub = 0 WHERE id = ?",
+                (item_id,),
+            )
+            after = {
+                "kinopub_id": None,
+                "kinopub_type": None,
+                "kinopub_url": None,
+            }
+            return {"before": before, "after": after}
 
     def find_items_by_year_category(self, year: int, category_id: int, conn=None) -> list[dict]:
         with self._conn(conn) as c:
