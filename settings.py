@@ -94,6 +94,57 @@ class _ApiKeysSettings(BaseSettings):
     poiskkino_api_key: str | None = Field(default=None)
 
 
+class _KinopubSettings(BaseSettings):
+    """kino.pub integration (OAuth Device Flow).
+
+    The defaults for `kinopub_client_id` / `kinopub_client_secret` are
+    the well-known 'xbmc' credentials embedded in `quarckster/kodi.kino.pub`
+    and several Roku/Forkplayer/Kodi clients on GitHub. They work for
+    personal use; rotate them with your own pair from support@kino.pub
+    if you ship par2 to other operators.
+
+    `kinopub_enabled` is a master switch — when False, the runtime
+    skips Device-Flow polling, API calls, and the UI button. Default
+    is False so a fresh install doesn't try to authenticate before the
+    operator has set anything up.
+    """
+
+    kinopub_enabled: bool = Field(
+        default=False,
+        description="Master switch for kino.pub integration.",
+    )
+    kinopub_client_id: str = Field(
+        default="xbmc",
+        description=(
+            "OAuth client_id. Default is the open-source 'xbmc' identifier "
+            "used by quarckster/kodi.kino.pub."
+        ),
+    )
+    kinopub_client_secret: str = Field(
+        default="cgg3gtifu46urtfp2zp1nqtba0k2ezxh",
+        description=(
+            "OAuth client_secret paired with the 'xbmc' client_id. Override "
+            "via env if you have your own credentials from support@kino.pub."
+        ),
+    )
+    kinopub_api_base_url: str = Field(
+        default="https://api.service-kp.com",
+        description="kino.pub JSON API base URL (no trailing slash).",
+    )
+    kinopub_device_verification_uri: str = Field(
+        default="https://kino.pub/device",
+        description="Where the user enters the user_code in the Device Flow.",
+    )
+    kinopub_refresh_skew_seconds: int = Field(
+        default=300,
+        ge=0,
+        description=(
+            "Refresh the access_token if its remaining lifetime is shorter "
+            "than this many seconds. 300 = refresh 5 minutes early."
+        ),
+    )
+
+
 class _StorageSettings(BaseSettings):
     """Filesystem layout. Container deployments (5.8) override these
     so the SQLite DB and request-cache live on a mounted volume.
@@ -152,6 +203,7 @@ class Settings(
     _RezkaSettings,
     _SyncSettings,
     _ApiKeysSettings,
+    _KinopubSettings,
     _StorageSettings,
 ):
     """Top-level merged settings.
