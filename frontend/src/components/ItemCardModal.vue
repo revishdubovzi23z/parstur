@@ -320,10 +320,27 @@ function onOpenStream(): void {
   player.openStream(it.id, it.title)
 }
 
+// PR 5 — open the kino.pub stream surface. Disabled until kino.pub
+// auth is healthy AND the row is bound — we don't want users to land
+// on a 401/409 from the modal.
+function onOpenKinopubStream(): void {
+  const it = items.item
+  if (!it) return
+  player.openKinopubStream(it.id, it.title)
+}
+
 const canOpenStream = computed(() => {
   const it = items.item
   if (!it) return false
   return Boolean(it.rezka_url || it.kp_id || it.imdb_id)
+})
+
+const canOpenKinopubStream = computed(() => {
+  const it = items.item
+  if (!it) return false
+  // Require both binding and a healthy auth session. The store keeps
+  // `isAuthenticated` truthy after a successful /v1/user fetch.
+  return Boolean(it.kinopub_id) && kinopub.isAuthenticated
 })
 
 function formatReleaseDate(input: string | null | undefined): string {
@@ -589,6 +606,18 @@ function onToggleEditIds(): void {
                 🎬 Трейлер
               </button>
             </div>
+            <!-- PR 5: kino.pub playback. Only shown when the row is
+                 bound + auth is healthy, so the button doesn't sit
+                 there permanently disabled for non-kino.pub users. -->
+            <button
+              v-if="canOpenKinopubStream"
+              type="button"
+              class="rounded-md bg-fuchsia-600 px-3 py-2 text-xs font-medium text-white hover:bg-fuchsia-700"
+              data-testid="item-modal-watch-kinopub"
+              @click="onOpenKinopubStream"
+            >
+              ▶ Смотреть на kino.pub
+            </button>
           </div>
         </section>
 

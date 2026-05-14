@@ -454,4 +454,183 @@ describe('useItemPlayerStore', () => {
       expect(player.isStreamOpen).toBe(true)
     })
   })
+
+  // ── PR 5: kino.pub playback ──────────────────────────────────────
+  describe('openKinopubStream / loadKinopubInfo', () => {
+    const KINOPUB_MOVIE = {
+      id: 1234,
+      title: 'Kino Movie',
+      year: 2024,
+      type: 'movie',
+      url: 'https://kino.pub/item/1234',
+      videos: [
+        {
+          number: 1,
+          title: null,
+          duration: 5400,
+          files: [
+            { url: 'https://cdn.kino.pub/720.mp4', quality: '720p', codec: 'h264' },
+            { url: 'https://cdn.kino.pub/1080.mp4', quality: '1080p', codec: 'h264' },
+            { url: 'https://cdn.kino.pub/2160.mp4', quality: '2160p', codec: 'hevc' },
+          ],
+          audios: [
+            { lang: 'ru', author: 'Дубляж', type: 'translate' },
+          ],
+          subtitles: [
+            { url: 'https://cdn.kino.pub/subs/ru.vtt', lang: 'ru', shift: 0, embed: false },
+          ],
+        },
+      ],
+      seasons: [],
+    }
+
+    const KINOPUB_SERIAL = {
+      id: 5678,
+      title: 'Kino Show',
+      year: 2024,
+      type: 'serial',
+      url: 'https://kino.pub/item/5678',
+      videos: [],
+      seasons: [
+        {
+          number: 1,
+          episodes: [
+            {
+              number: 1,
+              title: 'Pilot',
+              duration: 2700,
+              files: [
+                { url: 'https://cdn.kino.pub/s1e1-1080.mp4', quality: '1080p', codec: 'h264' },
+              ],
+              audios: [],
+              subtitles: [],
+            },
+            {
+              number: 2,
+              title: 'Second',
+              duration: 2700,
+              files: [
+                { url: 'https://cdn.kino.pub/s1e2-1080.mp4', quality: '1080p', codec: 'h264' },
+              ],
+              audios: [],
+              subtitles: [],
+            },
+          ],
+        },
+      ],
+    }
+
+    it('seeds the first video and best quality file for movies', async () => {
+      vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockJson(KINOPUB_MOVIE))
+      authorise()
+      const player = useItemPlayerStore()
+      player.openKinopubStream(1234, 'Kino Movie')
+      expect(player.mode).toBe('stream')
+      expect(player.source).toBe('kinopub')
+      expect(player.itemId).toBe(1234)
+      await flushPromises()
+      expect(player.kinopubInfo?.id).toBe(1234)
+      // Picks 2160p (rank=7) over 1080p (rank=4) over 720p (rank=3).
+      expect(player.kinopubFileIdx).toBe(2)
+      expect(player.streamUrl).toBe('https://cdn.kino.pub/2160.mp4')
+      expect(player.streamQuality).toBe('2160p')
+      expect(player.streamIsHls).toBe(false)
+    })
+
+    it('seeds first season + first episode for serials', async () => {
+      vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockJson(KINOPUB_SERIAL))
+      authorise()
+      const player = useItemPlayerStore()
+      player.openKinopubStream(5678, 'Kino Show')
+      await flushPromises()
+      expect(player.isKinopubSeries).toBe(true)
+      expect(player.kinopubSeasonNumber).toBe(1)
+      expect(player.kinopubEpisodeNumber).toBe(1)
+      expect(player.streamUrl).toBe('https://cdn.kino.pub/s1e1-1080.mp4')
+    })
+
+    it('selectKinopubEpisode swaps the active video', async () => {
+      vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockJson(KINOPUB_SERIAL))
+      authorise()
+      const player = useItemPlayerStore()
+      player.openKinopubStream(5678, 'Kino Show')
+      await flushPromises()
+      player.selectKinopubEpisode(2)
+      expect(player.kinopubEpisodeNumber).toBe(2)
+      expect(player.streamUrl).toBe('https://cdn.kino.pub/s1e2-1080.mp4')
+    })
+
+    it('selectKinopubFile honours the override', async () => {
+      vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockJson(KINOPUB_MOVIE))
+      authorise()
+      const player = useItemPlayerStore()
+      player.openKinopubStream(1234, 'Kino Movie')
+      await flushPromises()
+      player.selectKinopubFile(0)
+      expect(player.streamUrl).toBe('https://cdn.kino.pub/720.mp4')
+      expect(player.streamQuality).toBe('720p')
+    })
+
+    it('streamM3uUrl points at /api/kinopub/m3u/ with episode params', async () => {
+      vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockJson(KINOPUB_SERIAL))
+      authorise()
+      const player = useItemPlayerStore()
+      player.openKinopubStream(5678, 'Kino Show')
+      await flushPromises()
+      const url = player.streamM3uUrl ?? ''
+      expect(url.startsWith('/api/kinopub/m3u/5678?')).toBe(true)
+      expect(url).toContain('season=1')
+      expect(url).toContain('episode=1')
+      expect(url).toContain('quality=1080p')
+    })
+
+    it('detects HLS streams by .m3u8 extension', async () => {
+      vi.mocked(globalThis.fetch).mockResolvedValueOnce(
+        mockJson({
+          ...KINOPUB_MOVIE,
+          videos: [
+            {
+              ...KINOPUB_MOVIE.videos[0],
+              files: [
+                { url: 'https://cdn.kino.pub/master.m3u8?token=x', quality: '1080p', codec: 'h264' },
+              ],
+            },
+          ],
+        }),
+      )
+      authorise()
+      const player = useItemPlayerStore()
+      player.openKinopubStream(1234)
+      await flushPromises()
+      expect(player.streamIsHls).toBe(true)
+    })
+
+    it('surfaces error from a failed stream_info fetch', async () => {
+      vi.mocked(globalThis.fetch).mockResolvedValueOnce(
+        mockJson({ detail: 'item is not bound to a kino.pub id' }, { status: 409 }),
+      )
+      authorise()
+      const player = useItemPlayerStore()
+      player.openKinopubStream(1234)
+      await flushPromises()
+      expect(player.kinopubError).toBe('item is not bound to a kino.pub id')
+      expect(player.streamUrl).toBeNull()
+    })
+
+    it('skips network calls when unauthenticated', async () => {
+      useSessionStore().$patch({ status: 'unauthenticated' })
+      const player = useItemPlayerStore()
+      player.openKinopubStream(1234)
+      await flushPromises()
+      expect(globalThis.fetch).not.toHaveBeenCalled()
+    })
+
+    it('selectKinopubSubtitle updates the active language', () => {
+      const player = useItemPlayerStore()
+      player.selectKinopubSubtitle('ru')
+      expect(player.kinopubSubtitleLang).toBe('ru')
+      player.selectKinopubSubtitle('')
+      expect(player.kinopubSubtitleLang).toBe('')
+    })
+  })
 })

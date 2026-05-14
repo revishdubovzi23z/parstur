@@ -21,6 +21,16 @@ _SUBTITLE_HOST_ALLOWLIST = (
     "rezka.cdnstream.club",
     "hdrezka.club",
     "static.rezka.ag",
+    # kino.pub integration (PR 5): subtitles ship from the same CDN
+    # that serves the streams. `service-kp.com` is the API host (used
+    # for OAuth) and also occasionally serves subtitle fallbacks; the
+    # `cdn.*` and `s*.kp.cdn.consoto.sbs` variants are the actual
+    # storage buckets observed in `/v1/items/{id}` responses.
+    "kino.pub",
+    "cdn.kino.pub",
+    "service-kp.com",
+    "cdn.service-kp.com",
+    "kp.cdn.consoto.sbs",
 )
 
 

@@ -30,6 +30,11 @@
 import { defineStore } from 'pinia'
 
 import { apiFetch, UnauthorizedError } from '../api/client'
+import type {
+  KinopubStreamInfo,
+  KinopubStreamSeason,
+  KinopubStreamVideo,
+} from './kinopub'
 import { useSessionStore } from './session'
 import { useToastStore } from './toast'
 
@@ -95,7 +100,7 @@ export interface Subtitle {
  *  `sources` open their iframe in a new tab. The "kind" is still
  *  tracked separately so PlayerModal can show the correct controls
  *  (translator / season / episode pickers only apply to rezka). */
-export type StreamSource = 'rezka' | string
+export type StreamSource = 'rezka' | 'kinopub' | string
 
 interface PlayerStoreState {
   /** id of the item the player is bound to (or null when closed). */
@@ -135,6 +140,25 @@ interface PlayerStoreState {
   streamLoading: boolean
   streamError: string | null
   subtitles: Record<string, Subtitle>
+
+  // ── kino.pub branch (PR 5) ───────────────────────────────────
+  // Populated lazily by `openKinopubStream()`. We don't reuse the
+  // rezka `info`/`translatorId`/`season`/`episode` fields because
+  // the shapes differ enough that mixing them would force every
+  // consumer to type-guard on `source`.
+  kinopubInfo: KinopubStreamInfo | null
+  /** 0-based index into `kinopubInfo.videos`. Null for serials. */
+  kinopubVideoIdx: number | null
+  /** Season `number` (1-based) for serials. */
+  kinopubSeasonNumber: number | null
+  /** Episode `number` (1-based) for serials. */
+  kinopubEpisodeNumber: number | null
+  /** 0-based index into the active video's `files[]` array. */
+  kinopubFileIdx: number | null
+  /** Lowercase language code (empty = no subtitle track active). */
+  kinopubSubtitleLang: string
+  kinopubLoading: boolean
+  kinopubError: string | null
 }
 
 function emptyState(): PlayerStoreState {
@@ -163,7 +187,71 @@ function emptyState(): PlayerStoreState {
     streamLoading: false,
     streamError: null,
     subtitles: {},
+    kinopubInfo: null,
+    kinopubVideoIdx: null,
+    kinopubSeasonNumber: null,
+    kinopubEpisodeNumber: null,
+    kinopubFileIdx: null,
+    kinopubSubtitleLang: '',
+    kinopubLoading: false,
+    kinopubError: null,
   }
+}
+
+/** PR 5 — Walks `kinopubInfo` for the video matching the current
+ *  selection. Returns null when the picker hasn't been seeded yet
+ *  (e.g. while `loadKinopubInfo()` is in flight). Pure function so
+ *  PlayerModal-level computed getters can call it directly. */
+function _findKinopubVideo(
+  info: KinopubStreamInfo,
+  opts: {
+    videoIdx: number | null
+    season: number | null
+    episode: number | null
+  },
+): KinopubStreamVideo | null {
+  if (opts.videoIdx !== null && Array.isArray(info.videos) && info.videos[opts.videoIdx]) {
+    return info.videos[opts.videoIdx]
+  }
+  if (opts.season !== null && Array.isArray(info.seasons)) {
+    const s = info.seasons.find((x: KinopubStreamSeason) => x.number === opts.season)
+    if (s && Array.isArray(s.episodes)) {
+      if (opts.episode !== null) {
+        return s.episodes.find((e) => e.number === opts.episode) ?? null
+      }
+      return s.episodes[0] ?? null
+    }
+  }
+  return null
+}
+
+/** Quality-rank table mirroring the backend's `_KINOPUB_QUALITY_RANK`
+ *  so the SPA picks the same "best available" entry the m3u endpoint
+ *  would. */
+const _KINOPUB_QUALITY_RANK: Record<string, number> = {
+  '4k': 8,
+  '2160p': 7,
+  '2k': 6,
+  '1440p': 5,
+  '1080p': 4,
+  '720p': 3,
+  '480p': 2,
+  '360p': 1,
+}
+
+function _bestKinopubFileIdx(video: KinopubStreamVideo): number | null {
+  if (!Array.isArray(video.files) || video.files.length === 0) return null
+  let bestIdx = 0
+  let bestRank = -1
+  for (let i = 0; i < video.files.length; i++) {
+    const q = (video.files[i]?.quality ?? '').toLowerCase()
+    const rank = _KINOPUB_QUALITY_RANK[q] ?? 0
+    if (rank > bestRank) {
+      bestIdx = i
+      bestRank = rank
+    }
+  }
+  return bestIdx
 }
 
 /** Build the `/api/stream_m3u/{id}?...` URL for VLC / external
@@ -224,6 +312,18 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
      *  nothing to download yet. */
     streamM3uUrl(state): string | null {
       if (state.itemId === null || !state.streamQuality) return null
+      if (state.source === 'kinopub') {
+        const params = new URLSearchParams()
+        if (state.kinopubSeasonNumber !== null) {
+          params.set('season', String(state.kinopubSeasonNumber))
+        }
+        if (state.kinopubEpisodeNumber !== null) {
+          params.set('episode', String(state.kinopubEpisodeNumber))
+        }
+        if (state.streamQuality) params.set('quality', state.streamQuality)
+        const qs = params.toString()
+        return `/api/kinopub/m3u/${state.itemId}${qs ? `?${qs}` : ''}`
+      }
       return buildM3uUrl(
         state.itemId,
         state.streamQuality,
@@ -231,6 +331,32 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
         state.season,
         state.episode,
       )
+    },
+
+    /** PR 5 — kino.pub helpers. The PlayerModal reads these to render
+     *  the picker; falling out of state when no kinopub stream is
+     *  loaded keeps the rezka surface unaffected. */
+    isKinopubSeries(state): boolean {
+      const t = state.kinopubInfo?.type
+      return t === 'serial' || t === 'multi'
+    },
+    kinopubVideo(state): KinopubStreamVideo | null {
+      if (!state.kinopubInfo) return null
+      return _findKinopubVideo(state.kinopubInfo, {
+        videoIdx: state.kinopubVideoIdx,
+        season: state.kinopubSeasonNumber,
+        episode: state.kinopubEpisodeNumber,
+      })
+    },
+    /** All seasons in the kino.pub payload, with episode counts. */
+    kinopubSeasons(state): { number: number; episodeCount: number }[] {
+      const seasons = state.kinopubInfo?.seasons ?? []
+      return seasons
+        .filter((s): s is KinopubStreamSeason => typeof s?.number === 'number')
+        .map((s) => ({
+          number: s.number as number,
+          episodeCount: Array.isArray(s.episodes) ? s.episodes.length : 0,
+        }))
     },
   },
 
@@ -633,6 +759,158 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
           this.episode,
         )
       }
+    },
+
+    // ── PR 5: kino.pub playback ────────────────────────────────────
+
+    /** Open the stream modal in kino.pub mode. Mirrors `openStream()`
+     *  but skips the rezka info / online-sources fetches — the
+     *  PlayerModal switches its rendering on `source === 'kinopub'`. */
+    openKinopubStream(itemId: number, title?: string | null): void {
+      Object.assign(this, emptyState())
+      this.itemId = itemId
+      this.itemTitle = title ?? null
+      this.mode = 'stream'
+      this.source = 'kinopub'
+      void this.loadKinopubInfo(itemId)
+    },
+
+    /** Fetch `/api/kinopub/stream_info/{id}` and seed the first
+     *  playable selection so PlayerModal can render the `<video>`
+     *  without an extra user click. */
+    async loadKinopubInfo(itemId: number): Promise<void> {
+      const session = useSessionStore()
+      this.kinopubError = null
+      this.kinopubInfo = null
+      this.kinopubVideoIdx = null
+      this.kinopubSeasonNumber = null
+      this.kinopubEpisodeNumber = null
+      this.kinopubFileIdx = null
+      this.kinopubSubtitleLang = ''
+      this.streamUrl = null
+      this.streamQuality = null
+      this.streamIsHls = false
+      if (!session.canCallApi) return
+      this.kinopubLoading = true
+      try {
+        const res = await apiFetch(`/api/kinopub/stream_info/${itemId}`)
+        const data = (await res.json().catch(() => ({}))) as
+          | (KinopubStreamInfo & { detail?: string })
+          | { detail?: string }
+        if (!res.ok) {
+          const detail =
+            'detail' in data && typeof data.detail === 'string'
+              ? data.detail
+              : `HTTP ${res.status}`
+          this.kinopubError = detail
+          return
+        }
+        const info = data as KinopubStreamInfo
+        this.kinopubInfo = info
+        // Auto-seed: movie → videos[0]; serial → first season/episode.
+        if (Array.isArray(info.videos) && info.videos.length > 0) {
+          this.kinopubVideoIdx = 0
+        } else if (Array.isArray(info.seasons) && info.seasons.length > 0) {
+          const firstSeason = info.seasons[0]
+          if (firstSeason && typeof firstSeason.number === 'number') {
+            this.kinopubSeasonNumber = firstSeason.number
+            const firstEp = firstSeason.episodes?.[0]
+            if (firstEp && typeof firstEp.number === 'number') {
+              this.kinopubEpisodeNumber = firstEp.number
+            }
+          }
+        }
+        this._refreshKinopubStream()
+      } catch (err) {
+        if (err instanceof UnauthorizedError) {
+          session.handleUnauthorized(err)
+          this.kinopubError = 'Требуется вход'
+          return
+        }
+        this.kinopubError = err instanceof Error ? err.message : String(err)
+      } finally {
+        this.kinopubLoading = false
+      }
+    },
+
+    /** Re-pick the playable file based on current selection. Called
+     *  internally after a season/episode/quality change so callers
+     *  don't have to remember to update `streamUrl`. */
+    _refreshKinopubStream(): void {
+      const info = this.kinopubInfo
+      if (!info) {
+        this.streamUrl = null
+        this.streamQuality = null
+        this.streamIsHls = false
+        return
+      }
+      const video = _findKinopubVideo(info, {
+        videoIdx: this.kinopubVideoIdx,
+        season: this.kinopubSeasonNumber,
+        episode: this.kinopubEpisodeNumber,
+      })
+      if (!video || !Array.isArray(video.files) || video.files.length === 0) {
+        this.streamUrl = null
+        this.streamQuality = null
+        this.streamIsHls = false
+        this.kinopubFileIdx = null
+        return
+      }
+      // Reset file idx when the previous one is out of range for the
+      // newly-selected video.
+      if (
+        this.kinopubFileIdx === null ||
+        this.kinopubFileIdx >= video.files.length
+      ) {
+        this.kinopubFileIdx = _bestKinopubFileIdx(video) ?? 0
+      }
+      const file = video.files[this.kinopubFileIdx]
+      if (!file) {
+        this.streamUrl = null
+        this.streamQuality = null
+        this.streamIsHls = false
+        return
+      }
+      this.streamUrl = file.url
+      this.streamQuality = file.quality ?? null
+      // kino.pub serves both .m3u8 (HLS) and .mp4. Detect by extension
+      // since the JSON doesn't distinguish.
+      this.streamIsHls = /\.m3u8(\?.*)?$/i.test(file.url)
+    },
+
+    /** Pick a season + auto-seed first episode + refresh stream. */
+    selectKinopubSeason(seasonNumber: number): void {
+      this.kinopubSeasonNumber = seasonNumber
+      this.kinopubEpisodeNumber = null
+      this.kinopubFileIdx = null
+      const season = (this.kinopubInfo?.seasons ?? []).find(
+        (s) => s.number === seasonNumber,
+      )
+      const firstEp = season?.episodes?.[0]
+      if (firstEp && typeof firstEp.number === 'number') {
+        this.kinopubEpisodeNumber = firstEp.number
+      }
+      this._refreshKinopubStream()
+    },
+
+    /** Pick an episode within the current season. */
+    selectKinopubEpisode(episodeNumber: number): void {
+      this.kinopubEpisodeNumber = episodeNumber
+      this.kinopubFileIdx = null
+      this._refreshKinopubStream()
+    },
+
+    /** Pick a specific quality file (0-based index). */
+    selectKinopubFile(fileIdx: number): void {
+      this.kinopubFileIdx = fileIdx
+      this._refreshKinopubStream()
+    },
+
+    /** Change the active `<track>` language. Empty string disables
+     *  subtitles. PlayerModal renders this back as the `default`
+     *  attribute on the matching `<track>` element. */
+    selectKinopubSubtitle(lang: string): void {
+      this.kinopubSubtitleLang = lang
     },
   },
 })
