@@ -207,6 +207,13 @@ def self_update(skip_pull: bool = False):
     try:
         # 1. Git Pull
         if not skip_pull:
+            # Discard local changes to tracked files (like package-lock.json) to prevent conflicts.
+            # Ignored files (.env, *.db) are not affected.
+            try:
+                run_cmd(["git", "checkout", "--", "."], project_root)
+            except Exception as e:
+                logger.warning(f"[UPDATE] git checkout failed: {e}")
+            
             output = run_cmd(["git", "pull"], project_root)
             if "Already up to date" in output and os.path.isdir(os.path.join(frontend_dir, "dist")):
                 # If code is up to date AND dist exists, we might not need to do anything.
