@@ -185,12 +185,13 @@ const authBadge = computed(() => {
         <div class="flex items-center gap-3">
           <button
             type="button"
-            class="text-base font-semibold text-slate-900 hover:text-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-900/20 rounded"
+            class="flex items-center gap-2 text-base font-semibold text-slate-900 hover:text-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-900/20 rounded"
             data-testid="logo-home"
             aria-label="На главную"
             @click="onLogoClick"
           >
-            Antigravity Tracker
+            <img src="/favicon.png" alt="Logo" class="h-6 w-6 object-contain" />
+            <span>Antigravity Tracker</span>
           </button>
         </div>
         <div class="flex items-center gap-3">
