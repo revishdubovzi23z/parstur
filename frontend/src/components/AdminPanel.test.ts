@@ -23,15 +23,14 @@ function setup(): { admin: ReturnType<typeof useAdminStore> } {
   return { admin }
 }
 
-/** Mount AdminPanel with KinopubAuthPanel stubbed out. The kinopub
- * section has its own test file; stubbing it here keeps the
- * AdminPanel suite focused on its own buttons and prevents the
- * kinopub section's auto-fetch on mount from consuming queued
- * `mockResolvedValueOnce` values intended for other endpoints. */
+/** Mount AdminPanel with credential/auth subpanels stubbed out. These
+ * sections have their own test files; stubbing them here keeps the
+ * AdminPanel suite focused on its own buttons and prevents auto-fetch
+ * calls from consuming queued `mockResolvedValueOnce` values. */
 function mountPanel(open = true) {
   return mount(AdminPanel, {
     props: { open },
-    global: { stubs: { KinopubAuthPanel: true } },
+    global: { stubs: { KinopubAuthPanel: true, CredentialSettingsPanel: true } },
   })
 }
 
