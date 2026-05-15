@@ -41,6 +41,5 @@ stop_*.flag
 
 # Frontend (ROADMAP Stage 10.1) — derivative artifacts.
 frontend/node_modules/
-frontend/dist/
 frontend/.vite/
 frontend/*.tsbuildinfo

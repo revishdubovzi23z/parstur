@@ -201,20 +201,23 @@ def self_update():
         )
 
         # 3. Frontend Build (if directory exists)
+        warnings = []
         if os.path.isdir(frontend_dir):
             # Check for npm
             npm_cmd = "npm.cmd" if sys.platform == "win32" else "npm"
             try:
-                run_cmd([npm_cmd, "install"], frontend_dir, 300)
-                run_cmd([npm_cmd, "run", "build"], frontend_dir, 300)
+                run_cmd([npm_cmd, "install"], frontend_dir, 600)
+                run_cmd([npm_cmd, "run", "build"], frontend_dir, 600)
             except Exception as e:
-                logger.warning(f"[UPDATE] Frontend build skipped or failed: {e}")
-                # We don't fail the whole update if only frontend failed,
-                # but we should report it.
+                warn_msg = f"Frontend build skipped or failed: {e}"
+                logger.warning(f"[UPDATE] {warn_msg}")
+                warnings.append(warn_msg)
 
         # 4. Trigger Restart
         restarted = _trigger_restart()
         msg = "Update successful. "
+        if warnings:
+            msg += f"Warnings: {'; '.join(warnings)}. "
         if restarted:
             msg += "Server is restarting..."
         else:
