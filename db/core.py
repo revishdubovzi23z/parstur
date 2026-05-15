@@ -217,8 +217,13 @@ class DbCore:
                     pass
             # Clear last_visit state
             c.execute("DELETE FROM app_state WHERE key = 'last_visit'")
-            # Truncate WAL and reclaim space
-            c.execute("VACUUM")
+        
+        # Run VACUUM on a fresh connection without a transaction
+        v_conn = self.get_connection()
+        try:
+            v_conn.execute("VACUUM")
+        finally:
+            v_conn.close()
 
     def init_schema(self):
         with self._conn() as c:
