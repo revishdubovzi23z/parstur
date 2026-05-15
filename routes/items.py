@@ -37,10 +37,17 @@ def get_item(item_id: int):
         return JSONResponse({"error": "item not found"}, status_code=404)
     releases = db.get_releases(item_id)
     collections = db.get_item_collections(item_id)
+    from settings import settings
+
     return {
         "item": item,
         "releases": releases,
         "collections": collections,
+        "config": {
+            "rezka_enabled": getattr(settings, "rezka_enabled", True),
+            "kinohub_enabled": getattr(settings, "kinohub_enabled", True),
+            "kinopub_enabled": settings.kinopub_enabled,
+        },
     }
 
 

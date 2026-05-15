@@ -30,11 +30,36 @@ const playerError = ref<string | null>(null)
 const hlsTracks = ref<any[]>([])
 const hlsCurrentTrack = ref(-1)
 
+// Native audio tracks (Safari/iOS)
+const nativeTracks = ref<Array<{ id: number; name: string; enabled: boolean }>>([])
+
+const availableTracks = computed(() => {
+  if (hlsTracks.value.length > 0) return hlsTracks.value
+  return nativeTracks.value
+})
+
+const currentTrackId = computed(() => {
+  if (hlsTracks.value.length > 0) return hlsCurrentTrack.value
+  const active = nativeTracks.value.find(t => t.enabled)
+  return active ? active.id : -1
+})
+
 function onAudioTrackChange(e: Event) {
   const idx = parseInt((e.target as HTMLSelectElement).value)
   if (hlsRef.value) {
     hlsRef.value.audioTrack = idx
     hlsCurrentTrack.value = idx
+  } else if (videoRef.value && (videoRef.value as any).audioTracks) {
+    // @ts-ignore
+    const tracks = videoRef.value.audioTracks
+    for (let i = 0; i < tracks.length; i++) {
+      tracks[i].enabled = (i === idx)
+    }
+    // Update local state for reactive UI
+    nativeTracks.value = nativeTracks.value.map(t => ({
+      ...t,
+      enabled: t.id === idx
+    }))
   }
 }
 
@@ -127,6 +152,7 @@ function destroyHls(): void {
   }
   hlsTracks.value = []
   hlsCurrentTrack.value = -1
+  nativeTracks.value = []
   attachedUrl.value = null
   playerError.value = null
 }
@@ -162,11 +188,38 @@ async function attachStream(): Promise<void> {
       hlsTracks.value = hls.audioTracks
       hlsCurrentTrack.value = hls.audioTrack
     })
+    hls.on(Hls.Events.LEVEL_LOADED, () => {
+       // Sometimes tracks appear after level is loaded
+       if (hls.audioTracks.length > 0 && hlsTracks.value.length === 0) {
+         hlsTracks.value = hls.audioTracks
+         hlsCurrentTrack.value = hls.audioTrack
+       }
+    })
     hls.on(Hls.Events.AUDIO_TRACK_SWITCHED, (_, data) => {
       hlsCurrentTrack.value = data.id
     })
   } else {
     video.src = url
+    // For native HLS (Safari), we can try to access audioTracks
+    // but it's often not available until after the first play or metadata load.
+    const pollNativeTracks = () => {
+      // @ts-ignore: non-standard API
+      const tracks = video.audioTracks
+      if (tracks && tracks.length > 0) {
+        const list = []
+        for (let i = 0; i < tracks.length; i++) {
+          list.push({
+            id: i,
+            name: (tracks[i] as any).label || (tracks[i] as any).language || `Дорожка ${i + 1}`,
+            enabled: (tracks[i] as any).enabled
+          })
+        }
+        nativeTracks.value = list
+      } else if (isOpen.value && attachedUrl.value === url) {
+        setTimeout(pollNativeTracks, 1000)
+      }
+    }
+    video.addEventListener('loadedmetadata', pollNativeTracks, { once: true })
   }
 }
 
@@ -421,7 +474,7 @@ const externalPlayers = computed(() => {
           <!-- ── Stream tabs ───────────────────────────────────── -->
           <div class="flex items-center gap-1 border-b border-slate-100 px-1 pb-1">
             <button
-              v-if="player.sourcesPageUrl || player.sources.length > 0"
+              v-if="player.kinohubEnabled && (player.sourcesPageUrl || player.sources.length > 0)"
               type="button"
               class="rounded-md px-3 py-1.5 text-xs font-bold transition-colors"
               :class="player.activeTab === 'kinohub' ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:bg-slate-100'"
@@ -430,6 +483,7 @@ const externalPlayers = computed(() => {
               🌐 Kinohub
             </button>
             <button
+              v-if="player.rezkaEnabled"
               type="button"
               class="rounded-md px-3 py-1.5 text-xs font-bold transition-colors"
               :class="player.activeTab === 'rezka' ? 'bg-emerald-600 text-white' : 'text-slate-500 hover:bg-slate-100'"
@@ -438,6 +492,7 @@ const externalPlayers = computed(() => {
               🎬 Rezka
             </button>
             <button
+              v-if="player.kinopubEnabled"
               type="button"
               class="rounded-md px-3 py-1.5 text-xs font-bold transition-colors"
               :class="player.activeTab === 'kinopub' ? 'bg-fuchsia-600 text-white' : 'text-slate-500 hover:bg-slate-100'"
@@ -681,52 +736,51 @@ const externalPlayers = computed(() => {
 
 
           <!-- ── Shared video element ───────────────────────────────── -->
-          <div v-if="player.activeTab !== 'kinohub'">
-            <p
-              v-if="player.streamLoading"
-              class="text-xs text-slate-500"
-              data-testid="player-stream-resolving"
-            >
-              Резолвим поток…
+          <p
+            v-if="player.activeTab !== 'kinohub' && player.streamLoading"
+            class="text-xs text-slate-500"
+            data-testid="player-stream-resolving"
+          >
+            Резолвим поток…
+          </p>
+          <p
+            v-if="player.activeTab !== 'kinohub' && player.streamError"
+            class="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800"
+            data-testid="player-stream-error"
+          >
+            {{ player.streamError }}
+          </p>
+          <p
+            v-if="player.activeTab !== 'kinohub' && playerError"
+            class="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800"
+            data-testid="player-stream-attach-error"
+          >
+            {{ playerError }}
+          </p>
+
+          <div
+            v-if="player.activeTab !== 'kinohub' && player.streamUrl && !player.streamConfirmed"
+            class="flex flex-col items-center justify-center rounded-xl bg-slate-50 border border-slate-200 p-8 text-center"
+            data-testid="player-confirm-wrap"
+          >
+            <p class="text-sm text-slate-600 mb-4">
+              Поток готов к воспроизведению
             </p>
-            <p
-              v-if="player.streamError"
-              class="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800"
-              data-testid="player-stream-error"
+            <button
+              type="button"
+              class="group relative flex items-center gap-3 rounded-full bg-indigo-600 px-8 py-3.5 text-lg font-bold text-white shadow-lg transition-all hover:bg-indigo-700 hover:shadow-indigo-200 active:scale-95"
+              @click="player.confirmStream()"
+              data-testid="player-confirm-btn"
             >
-              {{ player.streamError }}
-            </p>
-            <p
-              v-if="playerError"
-              class="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800"
-              data-testid="player-stream-attach-error"
-            >
-              {{ playerError }}
-            </p>
-  
-            <div
-              v-if="player.streamUrl && !player.streamConfirmed"
-              class="flex flex-col items-center justify-center rounded-xl bg-slate-50 border border-slate-200 p-8 text-center"
-              data-testid="player-confirm-wrap"
-            >
-              <p class="text-sm text-slate-600 mb-4">
-                Поток готов к воспроизведению
-              </p>
-              <button
-                type="button"
-                class="group relative flex items-center gap-3 rounded-full bg-indigo-600 px-8 py-3.5 text-lg font-bold text-white shadow-lg transition-all hover:bg-indigo-700 hover:shadow-indigo-200 active:scale-95"
-                @click="player.confirmStream()"
-                data-testid="player-confirm-btn"
-              >
-                <span class="text-2xl transition-transform group-hover:scale-110">▶</span>
-                СМОТРЕТЬ
-              </button>
-            </div>
-  
-            <div
-              v-if="player.streamUrl && player.streamConfirmed"
-              data-testid="player-stream-video-wrap"
-            >
+              <span class="text-2xl transition-transform group-hover:scale-110">▶</span>
+              СМОТРЕТЬ
+            </button>
+          </div>
+
+          <div
+            v-if="player.activeTab !== 'kinohub' && player.streamUrl && player.streamConfirmed"
+            data-testid="player-stream-video-wrap"
+          >
             <video
               ref="videoRef"
               controls
@@ -750,15 +804,15 @@ const externalPlayers = computed(() => {
                 Качество: {{ player.activeTab === 'kinopub' ? (player.kinopubVideo?.files?.[player.kinopubFileIdx ?? 0]?.quality ?? '—') : (player.streamQuality ?? '—') }}
               </span>
 
-              <!-- Audio Tracks (HLS.js) -->
-              <div v-if="hlsTracks.length > 1" class="flex items-center gap-1">
+              <!-- Audio Tracks -->
+              <div v-if="availableTracks.length > 1" class="flex items-center gap-1">
                 <span class="text-slate-400 font-bold uppercase text-[9px]">Дорожка:</span>
                 <select
                   class="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
-                  :value="hlsCurrentTrack"
+                  :value="currentTrackId"
                   @change="onAudioTrackChange"
                 >
-                  <option v-for="t in hlsTracks" :key="t.id" :value="t.id">
+                  <option v-for="t in availableTracks" :key="t.id" :value="t.id">
                     {{ t.name || `Дорожка ${t.id + 1}` }}
                   </option>
                 </select>
@@ -806,7 +860,6 @@ const externalPlayers = computed(() => {
                   {{ p.name }}
                 </a>
               </div>
-            </div>
             </div>
           </div>
         </section>

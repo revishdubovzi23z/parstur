@@ -217,7 +217,7 @@ class DbCore:
                     pass
             # Clear last_visit state
             c.execute("DELETE FROM app_state WHERE key = 'last_visit'")
-        
+
         # Run VACUUM on a fresh connection without a transaction
         v_conn = self.get_connection()
         try:

@@ -69,6 +69,10 @@ class _RezkaSettings(BaseSettings):
         ),
         ge=1,
     )
+    rezka_enabled: bool = Field(
+        default=True,
+        description="Master switch for HDRezka integration.",
+    )
 
 
 class _SyncSettings(BaseSettings):
@@ -112,6 +116,10 @@ class _KinopubSettings(BaseSettings):
     kinopub_enabled: bool = Field(
         default=False,
         description="Master switch for kino.pub integration.",
+    )
+    kinohub_enabled: bool = Field(
+        default=True,
+        description="Master switch for Kinohub/Alternative sources integration.",
     )
     _DEFAULT_KINOPUB_CLIENT_ID: ClassVar[str] = "xbmc"
     _DEFAULT_KINOPUB_CLIENT_SECRET: ClassVar[str] = "cgg3gtifu46urtfp2zp1nqtba0k2ezxh"
@@ -160,6 +168,15 @@ class _KinopubSettings(BaseSettings):
         if isinstance(value, str) and value.strip() == "":
             return cls._DEFAULT_KINOPUB_CLIENT_SECRET
         return value
+
+
+class _KinohubSettings(BaseSettings):
+    """Kinohub / Online Sources settings."""
+
+    kinohub_enabled: bool = Field(
+        default=True,
+        description="Master switch for Kinohub (online sources) integration.",
+    )
 
 
 class _StorageSettings(BaseSettings):
@@ -221,6 +238,7 @@ class Settings(
     _SyncSettings,
     _ApiKeysSettings,
     _KinopubSettings,
+    _KinohubSettings,
     _StorageSettings,
 ):
     """Top-level merged settings.

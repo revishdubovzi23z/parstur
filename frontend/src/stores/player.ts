@@ -164,6 +164,10 @@ interface PlayerStoreState {
   kinopubSubtitleLang: string
   kinopubLoading: boolean
   kinopubError: string | null
+  // Master switches from settings.py
+  rezkaEnabled: boolean
+  kinohubEnabled: boolean
+  kinopubEnabled: boolean
 }
 
 function emptyState(): PlayerStoreState {
@@ -203,6 +207,9 @@ function emptyState(): PlayerStoreState {
     rezkaQualities: [],
     activeTab: 'rezka',
     streamConfirmed: false,
+    rezkaEnabled: true,
+    kinohubEnabled: true,
+    kinopubEnabled: true,
   }
 }
 
@@ -386,21 +393,36 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
       this.itemId = itemId
       this.itemTitle = title ?? null
       this.mode = 'stream'
-      this.source = 'rezka'
-      // Kick off both surfaces in parallel — online sources are an
-      // alternative tab inside the same modal (mirrors legacy
-      // `openStream()` flow).
-      void this.loadSources(itemId)
-      void this.loadInfo(itemId, 'rezka')
-      // Auto-switch to Kinopub if no Rezka URL but bound to Kinopub
-      const dbItem = (await (await apiFetch(`/api/item/${itemId}`)).json())
-      if (!dbItem.rezka_url && dbItem.kinopub_id) {
+      
+      const dbRes = await apiFetch(`/api/item/${itemId}`)
+      const dbItem = await dbRes.json()
+      
+      if (dbItem.config) {
+        this.rezkaEnabled = dbItem.config.rezka_enabled !== false
+        this.kinohubEnabled = dbItem.config.kinohub_enabled !== false
+        this.kinopubEnabled = dbItem.config.kinopub_enabled !== false
+      }
+
+      // Default source logic based on availability and master switches
+      if (this.rezkaEnabled && (dbItem.item?.rezka_url || !dbItem.item?.kinopub_id)) {
+        this.activeTab = 'rezka'
+        this.source = 'rezka'
+        void this.loadInfo(itemId, 'rezka')
+      } else if (this.kinopubEnabled && dbItem.item?.kinopub_id) {
         this.activeTab = 'kinopub'
         this.source = 'kinopub'
         void this.loadKinopubInfo(itemId)
-      } else {
+      } else if (this.kinohubEnabled) {
+        this.activeTab = 'kinohub'
+        this.source = null
+      } else if (this.rezkaEnabled) {
+        // Fallback to Rezka even if no URL (it might resolve via search)
         this.activeTab = 'rezka'
+        this.source = 'rezka'
+        void this.loadInfo(itemId, 'rezka')
       }
+
+      void this.loadSources(itemId)
     },
 
     /** Close the modal and drop all state. */

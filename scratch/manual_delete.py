@@ -1,8 +1,9 @@
 import sqlite3
-conn = sqlite3.connect('app_data.db')
+
+conn = sqlite3.connect("app_data.db")
 c = conn.cursor()
 tables_to_clear = [
-    "releases", # delete dependent first
+    "releases",  # delete dependent first
     "collection_items",
     "item_search_names",
     "items",

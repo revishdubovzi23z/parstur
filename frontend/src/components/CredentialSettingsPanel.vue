@@ -14,6 +14,8 @@ type CredentialKey =
   | 'TMDB_API_KEY'
   | 'TMDB_API_TOKEN'
   | 'KINOPUB_ENABLED'
+  | 'REZKA_ENABLED'
+  | 'KINOHUB_ENABLED'
   | 'KINOPUB_CLIENT_ID'
   | 'KINOPUB_CLIENT_SECRET'
 
@@ -41,6 +43,8 @@ const status = reactive<Record<CredentialKey, CredentialEntry>>({
   TMDB_API_KEY: { configured: false, value: '' },
   TMDB_API_TOKEN: { configured: false, value: '' },
   KINOPUB_ENABLED: { configured: false, value: '' },
+  REZKA_ENABLED: { configured: false, value: '' },
+  KINOHUB_ENABLED: { configured: false, value: '' },
   KINOPUB_CLIENT_ID: { configured: false, value: '' },
   KINOPUB_CLIENT_SECRET: { configured: false, value: '' },
 })
@@ -52,6 +56,8 @@ const draft = reactive<Record<CredentialKey, string>>({
   TMDB_API_KEY: '',
   TMDB_API_TOKEN: '',
   KINOPUB_ENABLED: '',
+  REZKA_ENABLED: '',
+  KINOHUB_ENABLED: '',
   KINOPUB_CLIENT_ID: '',
   KINOPUB_CLIENT_SECRET: '',
 })
@@ -248,21 +254,48 @@ onMounted(() => {
       </div>
     </div>
 
+
+
     <div class="mt-4 border-t border-slate-100 pt-4">
       <h4 class="text-xs font-semibold uppercase tracking-wide text-slate-500">
-        Kino.pub
+        Источники (Вкл/Выкл)
       </h4>
-      <div class="mt-3 grid gap-3 sm:grid-cols-2">
+      <div class="mt-3 grid gap-3 sm:grid-cols-3">
         <label class="flex flex-col gap-1 text-xs text-slate-600">
-          <span class="font-semibold">Включить Kino.pub (true/false)</span>
-          <input
+          <span class="font-semibold">HDRezka</span>
+          <select
+            v-model="draft.REZKA_ENABLED"
+            class="rounded-md border border-slate-300 px-2 py-1.5 text-xs"
+            data-testid="credentials-rezka-enabled"
+          >
+            <option value="true">Включено</option>
+            <option value="false">Скрыто</option>
+          </select>
+        </label>
+        <label class="flex flex-col gap-1 text-xs text-slate-600">
+          <span class="font-semibold">Kino.pub</span>
+          <select
             v-model="draft.KINOPUB_ENABLED"
             class="rounded-md border border-slate-300 px-2 py-1.5 text-xs"
             data-testid="credentials-kinopub-enabled"
-            placeholder="true"
-          />
+          >
+            <option value="true">Включено</option>
+            <option value="false">Скрыто</option>
+          </select>
         </label>
-        <div class="hidden sm:block"></div>
+        <label class="flex flex-col gap-1 text-xs text-slate-600">
+          <span class="font-semibold">Kinohub</span>
+          <select
+            v-model="draft.KINOHUB_ENABLED"
+            class="rounded-md border border-slate-300 px-2 py-1.5 text-xs"
+            data-testid="credentials-kinohub-enabled"
+          >
+            <option value="true">Включено</option>
+            <option value="false">Скрыто</option>
+          </select>
+        </label>
+      </div>
+      <div class="mt-3 grid gap-3 sm:grid-cols-2">
         <label class="flex flex-col gap-1 text-xs text-slate-600">
           <span class="font-semibold">Client ID (опционально)</span>
           <input

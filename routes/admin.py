@@ -24,11 +24,13 @@ router = APIRouter()
 ENV_CREDENTIAL_KEYS = (
     "REZKA_EMAIL",
     "REZKA_PASSWORD",
+    "REZKA_ENABLED",
     "KINOPOISK_API_KEY",
     "POISKKINO_API_KEY",
     "TMDB_API_KEY",
     "TMDB_API_TOKEN",
     "KINOPUB_ENABLED",
+    "KINOHUB_ENABLED",
     "KINOPUB_CLIENT_ID",
     "KINOPUB_CLIENT_SECRET",
 )
@@ -171,7 +173,10 @@ def export_data(fmt: str = "json", category_id: int = -1):
 @router.post("/api/restart_server")
 def restart_server():
     if _trigger_restart():
-        return {"status": "success", "message": "Команда на перезапуск отправлена. Сервер перезагружается…"}
+        return {
+            "status": "success",
+            "message": "Команда на перезапуск отправлена. Сервер перезагружается…",
+        }
     return JSONResponse(
         {"status": "error", "message": "Команда перезапуска не настроена или не сработала"},
         status_code=500,

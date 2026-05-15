@@ -28,6 +28,8 @@ _SUBTITLE_HOST_ALLOWLIST = (
     # storage buckets observed in `/v1/items/{id}` responses.
     "kino.pub",
     "cdn.kino.pub",
+    "cdn2site.com",
+    "cdn2cdn.com",
     "service-kp.com",
     "cdn.service-kp.com",
     "kp.cdn.consoto.sbs",
