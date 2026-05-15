@@ -20,7 +20,16 @@ const categories = useCategoriesStore()
 const collections = useCollectionsStore()
 const session = useSessionStore()
 const visits = useVisitStore()
-const showMobileSidebar = ref(false)
+const showMobileSidebar = ref(window.sessionStorage.getItem('f_showMobileSidebar') === 'true')
+
+watch(showMobileSidebar, (val) => {
+  if (val) {
+    window.sessionStorage.setItem('f_showMobileSidebar', 'true')
+  } else {
+    window.sessionStorage.removeItem('f_showMobileSidebar')
+  }
+})
+
 let detachPersistence: (() => void) | null = null
 
 async function refreshAll(): Promise<void> {
