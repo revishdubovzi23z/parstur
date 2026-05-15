@@ -1,4 +1,6 @@
 import re
+import time
+import random
 
 from app_core import normalize_title
 from db import Database
@@ -123,6 +125,8 @@ def _get_folder_items(url, session):
         page += 1
         if page > 50:  # Safety break
             break
+            
+        time.sleep(random.uniform(1.5, 3.0))
             
     return list(all_urls)
 
@@ -410,6 +414,7 @@ def sync_rezka_collections():
 
         for rz_url in new_items_from_rezka:
             logger.info(f"    [new] Parsing Rezka page to create card: {rz_url}")
+            time.sleep(random.uniform(1.5, 3.0))
             parsed = _parse_rezka_page(rz_url, session)
             if not parsed:
                 logger.error("      [-] Failed to parse page")
@@ -453,6 +458,7 @@ def sync_rezka_collections():
             rz_url = info.get("rezka_url")
             if not rz_url:
                 logger.info(f"    [search] Looking for Rezka URL: {info['title']} ({info['year']})")
+                time.sleep(random.uniform(1.5, 3.0))
                 rz_url = _search_rezka_url(info["title"], info["year"], session)
                 if rz_url:
                     db.fill_item_metadata(item_id, conn=conn, rezka_url=rz_url, checked_rezka=1)
