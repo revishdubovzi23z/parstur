@@ -190,7 +190,7 @@ const authBadge = computed(() => {
             aria-label="На главную"
             @click="onLogoClick"
           >
-            <img src="/favicon.png" alt="Logo" class="h-6 w-6 object-contain" />
+            <img src="../assets/logo.png" alt="Logo" class="h-6 w-6 object-contain" />
             <span>Antigravity Tracker</span>
           </button>
         </div>
