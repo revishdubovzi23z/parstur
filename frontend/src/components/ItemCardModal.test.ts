@@ -55,6 +55,7 @@ const DETAIL = {
       title: 'release-1',
       quality: '1080p',
       size: '4 GB',
+      link: 'https://rutor.info/torrent/12345/test-release',
     },
   ],
   collections: [],
@@ -108,7 +109,7 @@ describe('ItemCardModal.vue', () => {
     await flushPromises()
     expect(
       wrapper.find('[data-testid="item-modal-link-rutor"]').attributes('href'),
-    ).toContain('rutor.info')
+    ).toBe('https://rutor.info/torrent/12345/test-release')
     expect(
       wrapper.find('[data-testid="item-modal-link-kp"]').attributes('href'),
     ).toContain('kinopoisk.ru/film/111')
@@ -124,6 +125,7 @@ describe('ItemCardModal.vue', () => {
     const detail = {
       ...DETAIL,
       item: baseItem({ kp_id: null, imdb_id: null, rezka_url: null }),
+      releases: [],
     }
     vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockJson(detail))
     authorise()
@@ -144,6 +146,9 @@ describe('ItemCardModal.vue', () => {
     expect(wrapper.find('[data-testid="item-modal-link-rutor"]').exists()).toBe(
       true,
     )
+    expect(
+      wrapper.find('[data-testid="item-modal-link-rutor"]').attributes('href'),
+    ).toContain('/search/')
   })
 
   it('shows the edit-IDs panel only after the user clicks the toggle', async () => {

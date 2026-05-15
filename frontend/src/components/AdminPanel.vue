@@ -15,6 +15,7 @@
 import { computed, ref, watch } from 'vue'
 
 import CollectionsIO from './CollectionsIO.vue'
+import CredentialSettingsPanel from './CredentialSettingsPanel.vue'
 import KinopubAuthPanel from './KinopubAuthPanel.vue'
 import { useAdminStore } from '../stores/admin'
 
@@ -290,6 +291,8 @@ async function onRebuildFts(): Promise<void> {
         <CollectionsIO />
 
         <KinopubAuthPanel :visible="open" />
+
+        <CredentialSettingsPanel :visible="open" />
 
         <section class="rounded-lg border border-slate-200 p-4">
           <h3 class="text-sm font-semibold text-slate-900">

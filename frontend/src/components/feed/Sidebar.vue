@@ -52,9 +52,6 @@ const submitting = ref(false)
 
 const selectedCategoryId = computed(() => feed.filters.categoryId)
 const selectedCollectionId = computed(() => collections.selectedId)
-const selectedCategory = computed(() =>
-  categories.items.find((cat) => cat.id === selectedCategoryId.value),
-)
 const selectedCategoryValue = computed({
   get: () => String(selectedCategoryId.value),
   set: (value: string) => {
@@ -229,18 +226,6 @@ const categoryLabel = (id: number, name: string): string => {
             </option>
           </select>
         </label>
-        <div
-          v-if="selectedCategory"
-          class="mt-2 flex items-center justify-between gap-2 px-1 text-xs text-slate-500"
-          data-testid="sidebar-category-selected"
-        >
-          <span class="truncate">
-            Выбрано: {{ categoryLabel(selectedCategory.id, selectedCategory.name) }}
-          </span>
-          <span class="shrink-0 font-semibold text-slate-700">
-            {{ selectedCategory.count }}
-          </span>
-        </div>
         <p
           v-if="!categories.items.length && !categories.loading"
           class="px-1 py-1.5 text-xs text-slate-400"

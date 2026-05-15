@@ -35,9 +35,16 @@ def client(monkeypatch, tmp_path) -> TestClient:
             (1, 1, "Test", 2020, "111", "tt001", "https://rezka/x"),
         )
         c.execute(
-            "INSERT INTO releases (id, item_id, rutor_id, torrent_title, date_added) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (10, 1, "rt-1", "Test.2020.1080p", "2024-01-15 10:00:00"),
+            "INSERT INTO releases (id, item_id, rutor_id, torrent_title, link, date_added) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                10,
+                1,
+                "rt-1",
+                "Test.2020.1080p",
+                "https://rutor.info/torrent/10/test",
+                "2024-01-15 10:00:00",
+            ),
         )
         c.execute(
             "INSERT INTO releases (id, item_id, rutor_id, torrent_title, date_added) "
@@ -59,6 +66,7 @@ def test_get_item_returns_full_payload(client: TestClient) -> None:
     # Sorted by date_added DESC — newest first.
     assert body["releases"][0]["rutor_id"] == "rt-2"
     assert body["releases"][1]["rutor_id"] == "rt-1"
+    assert body["releases"][1]["link"] == "https://rutor.info/torrent/10/test"
     assert isinstance(body["collections"], list)
 
 

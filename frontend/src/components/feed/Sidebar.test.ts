@@ -54,8 +54,11 @@ describe('Sidebar.vue', () => {
     const wrapper = mount(Sidebar)
     const select = wrapper.find('[data-testid="sidebar-category-select"]')
     expect(select.exists()).toBe(true)
-    expect(wrapper.find('[data-testid="sidebar-category-selected"]').text()).toContain(
-      'Все видео',
+    expect(
+      wrapper.find('[data-testid="sidebar-category-selected"]').exists(),
+    ).toBe(false)
+    expect(wrapper.find('[data-testid="sidebar-category-select"]').text()).toContain(
+      'Все видео — 100',
     )
     expect(
       wrapper.find('[data-testid="sidebar-category-option-5"]').text(),

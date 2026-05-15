@@ -5,10 +5,13 @@ import logging
 import os
 import secrets
 from datetime import datetime
+from pathlib import Path
 
 from fastapi import APIRouter, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel
 
+import settings as settings_module
 from db import db
 from runtime.admin import _reset_tokens, _trigger_restart
 from settings import settings
@@ -16,6 +19,75 @@ from settings import settings
 logger = logging.getLogger("parsclode.routes.admin")
 
 router = APIRouter()
+
+
+ENV_CREDENTIAL_KEYS = (
+    "REZKA_EMAIL",
+    "REZKA_PASSWORD",
+    "KINOPOISK_API_KEY",
+    "POISKKINO_API_KEY",
+    "TMDB_API_KEY",
+    "TMDB_API_TOKEN",
+)
+
+SENSITIVE_CREDENTIAL_KEYS = frozenset(
+    {
+        "REZKA_PASSWORD",
+        "KINOPOISK_API_KEY",
+        "POISKKINO_API_KEY",
+        "TMDB_API_KEY",
+        "TMDB_API_TOKEN",
+    }
+)
+
+
+class CredentialsUpdate(BaseModel):
+    values: dict[str, str | None]
+
+
+def _env_path() -> Path:
+    return Path(__file__).resolve().parent.parent / ".env"
+
+
+def _has_value(value: str | None) -> bool:
+    return bool(value and value.strip())
+
+
+def _credential_value(key: str) -> str:
+    value = getattr(settings_module.settings, key.lower())
+    return "" if value is None else str(value)
+
+
+def _credential_status() -> dict[str, dict[str, bool | str]]:
+    return {
+        key: {
+            "configured": _has_value(_credential_value(key)),
+            "value": "" if key in SENSITIVE_CREDENTIAL_KEYS else _credential_value(key),
+        }
+        for key in ENV_CREDENTIAL_KEYS
+    }
+
+
+def _reload_runtime_settings() -> None:
+    fresh = settings_module.reload_settings()
+    globals()["settings"] = fresh
+    try:
+        from runtime import rezka as runtime_rezka
+
+        runtime_rezka.settings = fresh
+    except Exception as exc:
+        logger.warning("[SETTINGS] Rezka runtime settings reload skipped: %s", exc)
+
+
+def _write_env_values(values: dict[str, str]) -> None:
+    from dotenv import set_key
+
+    env_path = _env_path()
+    if not env_path.exists():
+        env_path.write_text("", encoding="utf-8")
+    for key, value in values.items():
+        set_key(str(env_path), key, value)
+        os.environ[key] = value
 
 
 @router.get("/api/backup/download")
@@ -40,6 +112,33 @@ async def backup_download():
         media_type="application/octet-stream",
         filename=os.path.basename(dest),
     )
+
+
+@router.get("/api/settings/credentials")
+def get_credentials_settings():
+    return {"credentials": _credential_status()}
+
+
+@router.put("/api/settings/credentials")
+def update_credentials_settings(payload: CredentialsUpdate):
+    updates: dict[str, str] = {}
+    for key, value in payload.values.items():
+        normalized_key = key.upper()
+        if normalized_key not in ENV_CREDENTIAL_KEYS:
+            return JSONResponse(
+                {"error": f"Unsupported credential key: {key}"},
+                status_code=400,
+            )
+        updates[normalized_key] = "" if value is None else value.strip()
+
+    if updates:
+        _write_env_values(updates)
+        _reload_runtime_settings()
+
+    return {
+        "status": "success",
+        "credentials": _credential_status(),
+    }
 
 
 @router.get("/api/export")

@@ -102,15 +102,14 @@ const singleUpdateRunning = computed(
 )
 
 // External-source links. Mirrors the legacy `index.html` chips:
-//   RUTOR — search-by-title link (we don't store a per-item rutor URL),
+//   RUTOR — latest direct release link when stored, otherwise title search,
 //   КП    — kinopoisk.ru film page when `kp_id` is set,
 //   REZKA — direct rezka_url passthrough,
 //   IMDB  — imdb.com title page when `imdb_id` is set.
 const rutorUrl = computed(() => {
   const it = items.item
   if (!it) return null
-  // Try to find the latest release with a URL (most likely a rutor link)
-  const releases = [...(it.releases || [])].sort((a, b) => {
+  const releases = [...items.releases].sort((a, b) => {
     return (b.date_added || '').localeCompare(a.date_added || '')
   })
   const latestWithUrl = releases.find((r) => r.link)
