@@ -62,6 +62,7 @@ PROCESS_KEYS: tuple[str, ...] = (
     "cleanup",
     "rezka",
     "rezka_collections",
+    "kinopub",
     "full_pipeline",
     "single_update",
 )
@@ -91,6 +92,7 @@ _LOG_FILES = {
     "cleanup": "cleanup_log.txt",
     "rezka": "sync_rezka_log.txt",
     "rezka_collections": "rezka_collections_log.txt",
+    "kinopub": "sync_kinopub_log.txt",
     "single_update": "single_update_log.txt",
 }
 

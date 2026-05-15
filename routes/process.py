@@ -94,6 +94,31 @@ async def start_sync_rezka():
     return {"status": "started"}
 
 
+@router.post("/api/start_sync_kinopub")
+async def start_sync_kinopub():
+    """Spawn the kino.pub background matcher (PR 4).
+
+    Same flight-control pattern as `/api/start_sync_rezka` so the
+    existing `task_queue` mutual exclusion (one heavy sync at a time)
+    keeps the operator from accidentally double-running it. The
+    matcher itself respects `stop_kinopub.flag` mid-sweep and emits
+    `progress_kinopub.json` for the UI poller.
+    """
+    check_any_running()
+    log_file = "sync_kinopub_log.txt"
+    with open(log_file, "w", encoding="utf-8") as f:
+        f.write(f"=== Запуск синхронизации kino.pub ({datetime.now().strftime('%H:%M:%S')}) ===\n")
+    await task_queue.add_task(
+        run_script_with_args,
+        "kinopub",
+        "sync_kinopub.py",
+        [],
+        "kinopub",
+        log_file,
+    )
+    return {"status": "started"}
+
+
 @router.post("/api/start_cleanup")
 async def start_cleanup():
     # cleanup_duplicates rewrites items/releases/collection_items and may

@@ -55,10 +55,10 @@ describe('useLogsStore — refresh()', () => {
     authDisabled()
     vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockJson({ log: '' }))
     const logs = useLogsStore()
-    logs.selectedType = 'rezka'
+    logs.selectedType = 'kinopub'
     await logs.refresh()
     expect(vi.mocked(globalThis.fetch).mock.calls[0][0]).toBe(
-      '/api/sync_log?log_type=rezka',
+      '/api/sync_log?log_type=kinopub',
     )
   })
 
@@ -116,8 +116,8 @@ describe('useLogsStore — autoFollow', () => {
 
   it('switches to the running process if user has not pinned a tab', () => {
     const logs = useLogsStore()
-    logs.autoFollow(['sync_video'])
-    expect(logs.selectedType).toBe(PROCESS_TO_LOG.sync_video)
+    logs.autoFollow(['kinopub'])
+    expect(logs.selectedType).toBe(PROCESS_TO_LOG.kinopub)
   })
 
   it('does NOT switch when the user has pinned a tab manually', () => {
@@ -261,6 +261,7 @@ describe('LOG_TYPE_FILENAMES', () => {
         'cleanup',
         'fix',
         'fix_poiskkino',
+        'kinopub',
         'other',
         'reprocess',
         'rezka',

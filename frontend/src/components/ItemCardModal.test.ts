@@ -55,6 +55,7 @@ const DETAIL = {
       title: 'release-1',
       quality: '1080p',
       size: '4 GB',
+      link: 'https://rutor.info/torrent/12345/test-release',
     },
   ],
   collections: [],
@@ -108,7 +109,7 @@ describe('ItemCardModal.vue', () => {
     await flushPromises()
     expect(
       wrapper.find('[data-testid="item-modal-link-rutor"]').attributes('href'),
-    ).toContain('rutor.info')
+    ).toBe('https://rutor.info/torrent/12345/test-release')
     expect(
       wrapper.find('[data-testid="item-modal-link-kp"]').attributes('href'),
     ).toContain('kinopoisk.ru/film/111')
@@ -124,6 +125,7 @@ describe('ItemCardModal.vue', () => {
     const detail = {
       ...DETAIL,
       item: baseItem({ kp_id: null, imdb_id: null, rezka_url: null }),
+      releases: [],
     }
     vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockJson(detail))
     authorise()
@@ -144,6 +146,9 @@ describe('ItemCardModal.vue', () => {
     expect(wrapper.find('[data-testid="item-modal-link-rutor"]').exists()).toBe(
       true,
     )
+    expect(
+      wrapper.find('[data-testid="item-modal-link-rutor"]').attributes('href'),
+    ).toContain('/search/')
   })
 
   it('shows the edit-IDs panel only after the user clicks the toggle', async () => {
@@ -298,11 +303,14 @@ describe('ItemCardModal.vue', () => {
     ).toBe(false)
   })
 
-  it('clicking the ✕ button toggles ignore and closes the modal', async () => {
-    vi.mocked(globalThis.fetch)
-      .mockResolvedValueOnce(mockJson(DETAIL))
-      .mockResolvedValueOnce(mockJson({ status: 'success' }))
-      .mockResolvedValueOnce(mockJson(DETAIL))
+  it('clicking the ✕ button closes the modal without toggling ignore', async () => {
+    // Stage 10.7h regression guard — the ✕ button used to flip the
+    // ignore flag as well, but user feedback was that "close" should
+    // mean only "close". The explicit ignore toggle now lives on the
+    // feed card. We assert here that the close click does NOT hit
+    // /api/ignore/{id}; the matching positive test for the feed card
+    // is in FeedItemCard.test.ts.
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockJson(DETAIL))
     authorise()
     const items = useItemsStore()
     const wrapper = mount(ItemCardModal)
@@ -315,7 +323,7 @@ describe('ItemCardModal.vue', () => {
     const calls = vi
       .mocked(globalThis.fetch)
       .mock.calls.map(([u]) => String(u))
-    expect(calls.some((u) => u === '/api/ignore/42')).toBe(true)
+    expect(calls.some((u) => u === '/api/ignore/42')).toBe(false)
   })
 
   it('does not double-toggle ignore when the item is already ignored', async () => {
@@ -363,5 +371,85 @@ describe('ItemCardModal.vue', () => {
     expect(
       wrapper.find('[data-testid="item-modal-toggle-ignore"]').exists(),
     ).toBe(true)
+  })
+
+  // ── PR 6: Android intent:// deep-link ───────────────────────────
+  describe('kino.pub Android deep-link', () => {
+    it('hides the Android button when no kinopub_id is bound', async () => {
+      vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockJson(DETAIL))
+      authorise()
+      const items = useItemsStore()
+      const wrapper = mount(ItemCardModal)
+      await items.open(42, baseItem())
+      await flushPromises()
+      expect(
+        wrapper
+          .find('[data-testid="item-modal-watch-kinopub-android"]')
+          .exists(),
+      ).toBe(false)
+    })
+
+    it('renders the intent:// URL with the canonical https fallback', async () => {
+      const detail = {
+        ...DETAIL,
+        item: baseItem({
+          kinopub_id: 7777,
+          kinopub_url: 'https://kino.pub/item/7777',
+          kinopub_type: 'movie',
+        }),
+      }
+      vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockJson(detail))
+      authorise()
+      const items = useItemsStore()
+      const wrapper = mount(ItemCardModal)
+      await items.open(
+        42,
+        baseItem({
+          kinopub_id: 7777,
+          kinopub_url: 'https://kino.pub/item/7777',
+          kinopub_type: 'movie',
+        }),
+      )
+      await flushPromises()
+      const href = wrapper
+        .find('[data-testid="item-modal-watch-kinopub-android"]')
+        .attributes('href')
+      expect(href).toBeDefined()
+      // Authority + path must mirror the canonical kino.pub URL so
+      // the Android app's https:// intent-filter picks it up.
+      expect(href).toContain('intent://kino.pub/item/7777#Intent;')
+      expect(href).toContain('scheme=https;')
+      expect(href).toContain('package=com.kinopub;')
+      // The fallback URL is URL-encoded so `:` and `/` survive
+      // ParserURI roundtripping on the browser side.
+      expect(href).toContain(
+        `S.browser_fallback_url=${encodeURIComponent(
+          'https://kino.pub/item/7777',
+        )}`,
+      )
+      expect(href?.endsWith(';end')).toBe(true)
+    })
+
+    it('falls back to the canonical /item/<id> path when kinopub_url is empty', async () => {
+      const detail = {
+        ...DETAIL,
+        item: baseItem({ kinopub_id: 4242, kinopub_url: null }),
+      }
+      vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockJson(detail))
+      authorise()
+      const items = useItemsStore()
+      const wrapper = mount(ItemCardModal)
+      await items.open(42, baseItem({ kinopub_id: 4242, kinopub_url: null }))
+      await flushPromises()
+      const href = wrapper
+        .find('[data-testid="item-modal-watch-kinopub-android"]')
+        .attributes('href')
+      expect(href).toContain('intent://kino.pub/item/4242#')
+      expect(href).toContain(
+        `S.browser_fallback_url=${encodeURIComponent(
+          'https://kino.pub/item/4242',
+        )}`,
+      )
+    })
   })
 })

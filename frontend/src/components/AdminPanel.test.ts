@@ -23,6 +23,17 @@ function setup(): { admin: ReturnType<typeof useAdminStore> } {
   return { admin }
 }
 
+/** Mount AdminPanel with credential/auth subpanels stubbed out. These
+ * sections have their own test files; stubbing them here keeps the
+ * AdminPanel suite focused on its own buttons and prevents auto-fetch
+ * calls from consuming queued `mockResolvedValueOnce` values. */
+function mountPanel(open = true) {
+  return mount(AdminPanel, {
+    props: { open },
+    global: { stubs: { KinopubAuthPanel: true, CredentialSettingsPanel: true } },
+  })
+}
+
 describe('AdminPanel.vue', () => {
   beforeEach(() => {
     vi.spyOn(globalThis, 'fetch')
@@ -34,13 +45,13 @@ describe('AdminPanel.vue', () => {
 
   it('renders nothing when open=false', () => {
     setup()
-    const wrapper = mount(AdminPanel, { props: { open: false } })
+    const wrapper = mountPanel(false)
     expect(wrapper.find('[data-testid="admin-panel"]').exists()).toBe(false)
   })
 
   it('emits close when backdrop or × is clicked', async () => {
     setup()
-    const wrapper = mount(AdminPanel, { props: { open: true } })
+    const wrapper = mountPanel()
 
     await wrapper.find('[data-testid="admin-panel-backdrop"]').trigger('click')
     expect(wrapper.emitted('close')).toHaveLength(1)
@@ -54,7 +65,7 @@ describe('AdminPanel.vue', () => {
       mockJson({ status: 'updated', message: 'ok' }),
     )
     const { admin } = setup()
-    const wrapper = mount(AdminPanel, { props: { open: true } })
+    const wrapper = mountPanel()
 
     await wrapper.find('[data-testid="admin-self-update"]').trigger('click')
     await flushPromises()
@@ -71,7 +82,7 @@ describe('AdminPanel.vue', () => {
       mockJson({ status: 'up_to_date' }),
     )
     setup()
-    const wrapper = mount(AdminPanel, { props: { open: true } })
+    const wrapper = mountPanel()
 
     await wrapper.find('[data-testid="admin-self-update"]').trigger('click')
     await flushPromises()
@@ -86,7 +97,7 @@ describe('AdminPanel.vue', () => {
       .mockResolvedValueOnce(mockJson({ status: 'success' }))
 
     setup()
-    const wrapper = mount(AdminPanel, { props: { open: true } })
+    const wrapper = mountPanel()
     await wrapper.find('[data-testid="admin-db-reset"]').trigger('click')
     await flushPromises()
 
@@ -97,7 +108,7 @@ describe('AdminPanel.vue', () => {
   it('aborts reset on the first confirmation reject', async () => {
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
     setup()
-    const wrapper = mount(AdminPanel, { props: { open: true } })
+    const wrapper = mountPanel()
     await wrapper.find('[data-testid="admin-db-reset"]').trigger('click')
     await flushPromises()
 
@@ -111,7 +122,7 @@ describe('AdminPanel.vue', () => {
       mockJson({ status: 'success', message: 'imported' }),
     )
     setup()
-    const wrapper = mount(AdminPanel, { props: { open: true } })
+    const wrapper = mountPanel()
 
     const file = new File([new Uint8Array([1, 2])], 'a.db', {
       type: 'application/x-sqlite3',
@@ -135,7 +146,7 @@ describe('AdminPanel.vue', () => {
   it('does not call importDatabase when the user cancels confirm', async () => {
     vi.spyOn(window, 'confirm').mockReturnValue(false)
     setup()
-    const wrapper = mount(AdminPanel, { props: { open: true } })
+    const wrapper = mountPanel()
     const file = new File([new Uint8Array([1])], 'a.db')
     const input = wrapper.find(
       '[data-testid="admin-db-import-input"]',
@@ -150,7 +161,7 @@ describe('AdminPanel.vue', () => {
 
   it('clears the result banner when the modal is closed', async () => {
     const { admin } = setup()
-    const wrapper = mount(AdminPanel, { props: { open: true } })
+    const wrapper = mountPanel()
     admin.lastResult = { tone: 'info', message: 'still here', willRestart: false }
     await wrapper.setProps({ open: false })
     expect(admin.lastResult).toBeNull()
@@ -161,7 +172,7 @@ describe('AdminPanel.vue', () => {
     const spy = vi
       .spyOn(admin, 'downloadBackup')
       .mockResolvedValue({ tone: 'success', message: 'ok', willRestart: false })
-    const wrapper = mount(AdminPanel, { props: { open: true } })
+    const wrapper = mountPanel()
     await wrapper.find('[data-testid="admin-backup-download"]').trigger('click')
     await flushPromises()
     expect(spy).toHaveBeenCalledTimes(1)

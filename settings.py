@@ -32,9 +32,9 @@ Adding a new setting:
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import ClassVar, Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -92,6 +92,74 @@ class _ApiKeysSettings(BaseSettings):
     tmdb_api_key: str | None = Field(default=None)
     tmdb_api_token: str | None = Field(default=None)
     poiskkino_api_key: str | None = Field(default=None)
+
+
+class _KinopubSettings(BaseSettings):
+    """kino.pub integration (OAuth Device Flow).
+
+    The defaults for `kinopub_client_id` / `kinopub_client_secret` are
+    the well-known 'xbmc' credentials embedded in `quarckster/kodi.kino.pub`
+    and several Roku/Forkplayer/Kodi clients on GitHub. They work for
+    personal use; rotate them with your own pair from support@kino.pub
+    if you ship par2 to other operators.
+
+    `kinopub_enabled` is a master switch — when False, the runtime
+    skips Device-Flow polling, API calls, and the UI button. Default
+    is False so a fresh install doesn't try to authenticate before the
+    operator has set anything up.
+    """
+
+    kinopub_enabled: bool = Field(
+        default=False,
+        description="Master switch for kino.pub integration.",
+    )
+    _DEFAULT_KINOPUB_CLIENT_ID: ClassVar[str] = "xbmc"
+    _DEFAULT_KINOPUB_CLIENT_SECRET: ClassVar[str] = "cgg3gtifu46urtfp2zp1nqtba0k2ezxh"
+
+    kinopub_client_id: str = Field(
+        default=_DEFAULT_KINOPUB_CLIENT_ID,
+        description=(
+            "OAuth client_id. Default is the open-source 'xbmc' identifier "
+            "used by quarckster/kodi.kino.pub."
+        ),
+    )
+    kinopub_client_secret: str = Field(
+        default=_DEFAULT_KINOPUB_CLIENT_SECRET,
+        description=(
+            "OAuth client_secret paired with the 'xbmc' client_id. Override "
+            "via env if you have your own credentials from support@kino.pub."
+        ),
+    )
+    kinopub_api_base_url: str = Field(
+        default="https://api.service-kp.com",
+        description="kino.pub JSON API base URL (no trailing slash).",
+    )
+    kinopub_device_verification_uri: str = Field(
+        default="https://kino.pub/device",
+        description="Where the user enters the user_code in the Device Flow.",
+    )
+    kinopub_refresh_skew_seconds: int = Field(
+        default=300,
+        ge=0,
+        description=(
+            "Refresh the access_token if its remaining lifetime is shorter "
+            "than this many seconds. 300 = refresh 5 minutes early."
+        ),
+    )
+
+    @field_validator("kinopub_client_id", mode="before")
+    @classmethod
+    def _default_blank_kinopub_client_id(cls, value: object) -> object:
+        if isinstance(value, str) and value.strip() == "":
+            return cls._DEFAULT_KINOPUB_CLIENT_ID
+        return value
+
+    @field_validator("kinopub_client_secret", mode="before")
+    @classmethod
+    def _default_blank_kinopub_client_secret(cls, value: object) -> object:
+        if isinstance(value, str) and value.strip() == "":
+            return cls._DEFAULT_KINOPUB_CLIENT_SECRET
+        return value
 
 
 class _StorageSettings(BaseSettings):
@@ -152,6 +220,7 @@ class Settings(
     _RezkaSettings,
     _SyncSettings,
     _ApiKeysSettings,
+    _KinopubSettings,
     _StorageSettings,
 ):
     """Top-level merged settings.
