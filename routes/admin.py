@@ -168,8 +168,18 @@ def export_data(fmt: str = "json", category_id: int = -1):
     )
 
 
+@router.post("/api/restart_server")
+def restart_server():
+    if _trigger_restart():
+        return {"status": "success", "message": "Команда на перезапуск отправлена. Сервер перезагружается…"}
+    return JSONResponse(
+        {"status": "error", "message": "Команда перезапуска не настроена или не сработала"},
+        status_code=500,
+    )
+
+
 @router.post("/api/self_update")
-def self_update():
+def self_update(skip_pull: bool = False):
     import subprocess
     import sys
 
@@ -191,11 +201,12 @@ def self_update():
 
     try:
         # 1. Git Pull
-        output = run_cmd(["git", "pull"], project_root)
-        if "Already up to date" in output and os.path.isdir(os.path.join(frontend_dir, "dist")):
-            # If code is up to date AND dist exists, we might not need to do anything.
-            # But to be safe, let's at least check dependencies if the user clicked.
-            pass
+        if not skip_pull:
+            output = run_cmd(["git", "pull"], project_root)
+            if "Already up to date" in output and os.path.isdir(os.path.join(frontend_dir, "dist")):
+                # If code is up to date AND dist exists, we might not need to do anything.
+                # But to be safe, let's at least check dependencies if the user clicked.
+                pass
 
         # 2. Pip Install
         # Use sys.executable to ensure we use the same python/venv

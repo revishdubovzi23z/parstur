@@ -54,6 +54,10 @@ interface AdminStoreState {
   rebuildFtsBusy: boolean
   /** Clear media data while keeping auth (`/api/database_clear`). */
   clearDatabaseBusy: boolean
+  /** Full rebuild skip git pull (`/api/self_update?skip_pull=true`). */
+  rebuildBusy: boolean
+  /** Just restart (`/api/restart_server`). */
+  restartBusy: boolean
   /** Most recent action outcome, rendered in the panel. */
   lastResult: AdminActionResult | null
 }
@@ -73,6 +77,8 @@ export const useAdminStore = defineStore('admin', {
     itemsExportBusy: false,
     rebuildFtsBusy: false,
     clearDatabaseBusy: false,
+    rebuildBusy: false,
+    restartBusy: false,
     lastResult: null,
   }),
 
@@ -603,6 +609,107 @@ export const useAdminStore = defineStore('admin', {
         return result
       } finally {
         this.clearDatabaseBusy = false
+      }
+    },
+
+    /**
+     * POST /api/self_update?skip_pull=true — Rebuilds (pip, npm) and restarts
+     * without touching git.
+     */
+    async rebuildServer(): Promise<AdminActionResult> {
+      const session = useSessionStore()
+      if (!session.canCallApi) {
+        return {
+          tone: 'error',
+          message: 'Сессия не авторизована',
+          willRestart: false,
+        }
+      }
+      this.rebuildBusy = true
+      this.lastResult = null
+      try {
+        const res = await apiFetch('/api/self_update?skip_pull=true', {
+          method: 'POST',
+        })
+        if (!res.ok) {
+          const result: AdminActionResult = {
+            tone: 'error',
+            message: `HTTP ${res.status}`,
+            willRestart: false,
+          }
+          this.lastResult = result
+          return result
+        }
+        const data: { status?: string; message?: string } = await res.json()
+        const result: AdminActionResult = {
+          tone: 'success',
+          message: data.message ?? 'Пересборка начата. Сервер перезапустится…',
+          willRestart: true,
+        }
+        this.lastResult = result
+        return result
+      } catch (err) {
+        if (err instanceof UnauthorizedError) {
+          session.handleUnauthorized(err)
+        }
+        const result: AdminActionResult = {
+          tone: 'error',
+          message: `Сбой запроса: ${describe(err)}`,
+          willRestart: false,
+        }
+        this.lastResult = result
+        return result
+      } finally {
+        this.rebuildBusy = false
+      }
+    },
+
+    /**
+     * POST /api/restart_server — Triggers RESTART_COMMAND.
+     */
+    async restartServer(): Promise<AdminActionResult> {
+      const session = useSessionStore()
+      if (!session.canCallApi) {
+        return {
+          tone: 'error',
+          message: 'Сессия не авторизована',
+          willRestart: false,
+        }
+      }
+      this.restartBusy = true
+      this.lastResult = null
+      try {
+        const res = await apiFetch('/api/restart_server', { method: 'POST' })
+        if (!res.ok) {
+          const result: AdminActionResult = {
+            tone: 'error',
+            message: `HTTP ${res.status}`,
+            willRestart: false,
+          }
+          this.lastResult = result
+          return result
+        }
+        const data: { status?: string; message?: string } = await res.json()
+        const result: AdminActionResult = {
+          tone: 'success',
+          message: data.message ?? 'Команда отправлена. Сервер перезагружается…',
+          willRestart: true,
+        }
+        this.lastResult = result
+        return result
+      } catch (err) {
+        if (err instanceof UnauthorizedError) {
+          session.handleUnauthorized(err)
+        }
+        const result: AdminActionResult = {
+          tone: 'error',
+          message: `Сбой запроса: ${describe(err)}`,
+          willRestart: false,
+        }
+        this.lastResult = result
+        return result
+      } finally {
+        this.restartBusy = false
       }
     },
   },
