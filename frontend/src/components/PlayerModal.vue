@@ -238,6 +238,27 @@ function onCopyStreamUrl(): void {
     // or just assume success.
   })
 }
+const externalPlayers = computed(() => {
+  const url = player.streamUrl
+  if (!url) return []
+  return [
+    {
+      name: 'VLC',
+      icon: '🧡',
+      url: `vlc://${url.replace(/^https?:\/\//, '')}`,
+    },
+    {
+      name: 'Infuse',
+      icon: '🔥',
+      url: `infuse://x-callback-url/play?url=${encodeURIComponent(url)}`,
+    },
+    {
+      name: 'nPlayer',
+      icon: '🔵',
+      url: `nplayer-${url}`,
+    },
+  ]
+})
 </script>
 
 <template>
@@ -731,6 +752,24 @@ function onCopyStreamUrl(): void {
               >
                 📋 Копировать URL
               </button>
+            </div>
+
+            <!-- Mobile External Players -->
+            <div v-if="externalPlayers.length > 0" class="mt-4 pt-3 border-t border-slate-100">
+              <p class="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">
+                Открыть во внешнем плеере (Mobile)
+              </p>
+              <div class="flex flex-wrap gap-2">
+                <a
+                  v-for="p in externalPlayers"
+                  :key="p.name"
+                  :href="p.url"
+                  class="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:border-indigo-300 hover:bg-indigo-50 transition-colors shadow-sm"
+                >
+                  <span>{{ p.icon }}</span>
+                  {{ p.name }}
+                </a>
+              </div>
             </div>
           </div>
         </section>
