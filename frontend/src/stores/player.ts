@@ -144,6 +144,7 @@ interface PlayerStoreState {
   rezkaQualities: string[]
   /** Active tab in the stream surface. */
   activeTab: 'kinohub' | 'rezka' | 'kinopub'
+  streamConfirmed: boolean
 
   // ── kino.pub branch (PR 5) ───────────────────────────────────
   // Populated lazily by `openKinopubStream()`. We don't reuse the
@@ -201,6 +202,7 @@ function emptyState(): PlayerStoreState {
     kinopubError: null,
     rezkaQualities: [],
     activeTab: 'rezka',
+    streamConfirmed: false,
   }
 }
 
@@ -695,6 +697,7 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
     async selectRezkaQuality(quality: string): Promise<void> {
       if (!this.itemId || !this.source) return
       this.streamQuality = quality
+      this.streamConfirmed = false
       await this.loadStream(
         this.itemId,
         this.source,
@@ -725,6 +728,10 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
           )
         }
       }
+    },
+
+    confirmStream(): void {
+      this.streamConfirmed = true
     },
 
     /** `POST /api/mark_season_seen/{id}` — clears the "новый сезон"
@@ -777,6 +784,7 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
       this.episode = null
       this.streamUrl = null
       this.streamQuality = null
+      this.streamConfirmed = false
       if (this.isSeries && this.info?.series_info) {
         const si = this.info.series_info[translatorId]
         const firstSeason = Object.keys(si?.seasons ?? {})[0] ?? null
@@ -803,6 +811,7 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
       this.episode = null
       this.streamUrl = null
       this.streamQuality = null
+      this.streamConfirmed = false
       if (this.info?.series_info && this.translatorId) {
         const si = this.info.series_info[this.translatorId]
         const firstEp = Object.keys(si?.episodes?.[season] ?? {})[0] ?? null
@@ -822,6 +831,7 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
     /** Pick an episode + reload stream. */
     async selectEpisode(episode: string): Promise<void> {
       this.episode = episode
+      this.streamConfirmed = false
       this.streamUrl = null
       this.streamQuality = null
       if (this.itemId !== null && this.source) {
@@ -955,6 +965,7 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
     /** Pick a season + auto-seed first episode + refresh stream. */
     selectKinopubSeason(seasonNumber: number): void {
       this.kinopubSeasonNumber = seasonNumber
+      this.streamConfirmed = false
       this.kinopubEpisodeNumber = null
       this.kinopubFileIdx = null
       const season = (this.kinopubInfo?.seasons ?? []).find(
@@ -970,6 +981,7 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
     /** Pick an episode within the current season. */
     selectKinopubEpisode(episodeNumber: number): void {
       this.kinopubEpisodeNumber = episodeNumber
+      this.streamConfirmed = false
       this.kinopubFileIdx = null
       this._refreshKinopubStream()
     },
@@ -977,6 +989,7 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
     /** Pick a specific quality file (0-based index). */
     selectKinopubFile(fileIdx: number): void {
       this.kinopubFileIdx = fileIdx
+      this.streamConfirmed = false
       this._refreshKinopubStream()
     },
 

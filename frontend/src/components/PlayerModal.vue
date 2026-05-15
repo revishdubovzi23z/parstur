@@ -150,9 +150,9 @@ async function attachStream(): Promise<void> {
 }
 
 watch(
-  () => player.streamUrl,
-  () => {
-    if (!isOpen.value) return
+  () => player.streamUrl && player.streamConfirmed,
+  (confirmed) => {
+    if (!isOpen.value || !confirmed) return
     void attachStream()
   },
 )
@@ -662,7 +662,26 @@ function onCopyStreamUrl(): void {
           </p>
 
           <div
-            v-if="player.streamUrl"
+            v-if="player.streamUrl && !player.streamConfirmed"
+            class="flex flex-col items-center justify-center rounded-xl bg-slate-50 border border-slate-200 p-8 text-center"
+            data-testid="player-confirm-wrap"
+          >
+            <p class="text-sm text-slate-600 mb-4">
+              Поток готов к воспроизведению
+            </p>
+            <button
+              type="button"
+              class="group relative flex items-center gap-3 rounded-full bg-indigo-600 px-8 py-3.5 text-lg font-bold text-white shadow-lg transition-all hover:bg-indigo-700 hover:shadow-indigo-200 active:scale-95"
+              @click="player.confirmStream()"
+              data-testid="player-confirm-btn"
+            >
+              <span class="text-2xl transition-transform group-hover:scale-110">▶</span>
+              СМОТРЕТЬ
+            </button>
+          </div>
+
+          <div
+            v-if="player.streamUrl && player.streamConfirmed"
             data-testid="player-stream-video-wrap"
           >
             <video
