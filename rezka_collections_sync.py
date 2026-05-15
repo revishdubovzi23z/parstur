@@ -33,7 +33,12 @@ def _login():
     from HdRezkaApi import HdRezkaSession
 
     session = HdRezkaSession(REZKA_ORIGIN)
-    session.login(REZKA_EMAIL, REZKA_PASSWORD)
+    try:
+        session.login(REZKA_EMAIL, REZKA_PASSWORD)
+    except Exception as e:
+        logger.error(f"[-] Failed to login to Rezka. IP may be temporarily blocked by Cloudflare/DDoS-Guard: {e}")
+        return None
+        
     logger.info("  [+] Rezka login OK")
     return session
 
@@ -341,6 +346,10 @@ def sync_rezka_collections():
     logger.info("=== REZKA COLLECTIONS BIDIRECTIONAL SYNC ===")
 
     session = _login()
+    if not session:
+        logger.error("=== SYNC ABORTED: LOGIN FAILED ===")
+        return
+        
     folders = _get_folders(session)
 
     if not folders:
