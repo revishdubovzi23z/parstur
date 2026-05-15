@@ -337,7 +337,7 @@ def _extract_string(val: Any) -> str | None:
     Preference: hls -> http -> title -> name -> first value."""
     if not val:
         return None
-    if isinstance(val, (str, int, float)):
+    if isinstance(val, str | int | float):
         return str(val)
     if isinstance(val, dict):
         return (

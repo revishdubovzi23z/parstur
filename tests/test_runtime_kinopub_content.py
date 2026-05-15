@@ -113,7 +113,7 @@ def test_search_maps_minimal_entry() -> None:
             "title": "Inception",
             "year": 2010,
             "type": "movie",
-            "url": "https://kino.pub/item/12345",
+            "url": "https://kino.pub/item/view/12345",
             "poster": None,
         }
     ]
@@ -203,7 +203,7 @@ def test_get_stream_info_maps_movie_body() -> None:
     assert out["title"] == "Inception"
     assert out["year"] == 2010
     assert out["type"] == "movie"
-    assert out["url"] == "https://kino.pub/item/555"
+    assert out["url"] == "https://kino.pub/item/view/555"
     assert out["seasons"] == []
     assert len(out["videos"]) == 1
     video = out["videos"][0]
@@ -213,7 +213,9 @@ def test_get_stream_info_maps_movie_body() -> None:
     assert qualities == ["720p", "1080p"]
     assert video["audios"][0]["lang"] == "ru"
     assert video["audios"][0]["type"] == "AVO"
-    assert video["audios"][1]["lang"] == "en"
+    # _extract_string prefers the human-readable `title` over `code`
+    # when a language dict carries both — surface "English" not "en".
+    assert video["audios"][1]["lang"] == "English"
     # The bad subtitle entry (no url) was dropped.
     assert len(video["subtitles"]) == 1
     assert video["subtitles"][0]["url"].endswith("ru.vtt")
@@ -286,4 +288,4 @@ def test_get_stream_info_ignores_non_dict_entries() -> None:
 
 
 def test_build_item_url_is_stable() -> None:
-    assert rk._build_item_url(42) == "https://kino.pub/item/42"
+    assert rk._build_item_url(42) == "https://kino.pub/item/view/42"
