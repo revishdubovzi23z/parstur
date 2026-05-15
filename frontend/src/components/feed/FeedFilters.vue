@@ -148,7 +148,7 @@ onBeforeUnmount(() => {
 
 <template>
   <form
-    class="rounded-xl border border-slate-200 bg-white p-3"
+    class="rounded-2xl border border-slate-200/60 bg-white/50 backdrop-blur-sm p-4 shadow-sm"
     data-testid="feed-filters"
     @submit.prevent="apply"
   >
@@ -161,7 +161,7 @@ onBeforeUnmount(() => {
           v-model="form.search"
           type="search"
           placeholder="Название, оригинал, актёр…"
-          class="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900/10"
+          class="mt-1 w-full rounded-xl border border-slate-200/80 bg-white/80 px-3 py-2 text-[13px] shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all"
           data-testid="feed-filters-search"
         />
       </label>
@@ -175,7 +175,7 @@ onBeforeUnmount(() => {
           min="1900"
           max="2100"
           placeholder="1990"
-          class="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900/10"
+          class="mt-1 w-full rounded-xl border border-slate-200/80 bg-white/80 px-3 py-2 text-[13px] shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all"
           data-testid="feed-filters-min-year"
         />
       </label>
@@ -189,7 +189,7 @@ onBeforeUnmount(() => {
           min="1900"
           max="2100"
           placeholder="2030"
-          class="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900/10"
+          class="mt-1 w-full rounded-xl border border-slate-200/80 bg-white/80 px-3 py-2 text-[13px] shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all"
           data-testid="feed-filters-max-year"
         />
       </label>
@@ -208,7 +208,7 @@ onBeforeUnmount(() => {
         </button>
         <button
           type="button"
-          class="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+          class="rounded-xl border border-slate-200/80 bg-white px-4 py-2 text-[13px] font-semibold text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors shadow-sm"
           data-testid="feed-filters-reset"
           @click="reset"
         >
@@ -278,20 +278,20 @@ onBeforeUnmount(() => {
           />
         </div>
       </fieldset>
-      <label class="flex items-center gap-2 text-sm text-slate-700">
+      <label class="flex items-center gap-2 text-[13px] font-medium text-slate-700 bg-white/60 px-3 py-1.5 rounded-lg border border-slate-200/60 hover:bg-white transition-colors cursor-pointer">
         <input
           v-model="form.hideRated"
           type="checkbox"
-          class="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-900"
+          class="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
           data-testid="feed-filters-hide-rated"
         />
         Скрыть просмотренные
       </label>
-      <label class="flex items-center gap-2 text-sm text-slate-700">
+      <label class="flex items-center gap-2 text-[13px] font-medium text-slate-700 bg-white/60 px-3 py-1.5 rounded-lg border border-slate-200/60 hover:bg-white transition-colors cursor-pointer">
         <input
           v-model="form.hideCollected"
           type="checkbox"
-          class="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-900"
+          class="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
           data-testid="feed-filters-hide-collected"
         />
         Скрыть в коллекциях
@@ -304,14 +304,14 @@ onBeforeUnmount(() => {
           <input
             v-model="form.minDate"
             type="date"
-            class="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm shadow-sm focus:border-slate-900 focus:outline-none"
+            class="rounded-xl border border-slate-200/80 bg-white/80 px-2 py-1.5 text-[13px] shadow-sm focus:border-indigo-500 focus:outline-none transition-all"
             data-testid="feed-filters-min-date"
           />
           <span class="text-xs text-slate-400">—</span>
           <input
             v-model="form.maxDate"
             type="date"
-            class="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm shadow-sm focus:border-slate-900 focus:outline-none"
+            class="rounded-xl border border-slate-200/80 bg-white/80 px-2 py-1.5 text-[13px] shadow-sm focus:border-indigo-500 focus:outline-none transition-all"
             data-testid="feed-filters-max-date"
           />
         </div>

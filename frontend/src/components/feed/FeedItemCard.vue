@@ -72,7 +72,7 @@ function onHoverReset(): void {
 
 <template>
   <article
-    class="group bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden flex flex-col"
+    class="group bg-white rounded-2xl shadow-sm hover:shadow-xl hover:-translate-y-1 border border-slate-200/60 overflow-hidden flex flex-col transition-all duration-300"
     data-testid="feed-item-card"
     :data-item-id="item.id"
   >
@@ -82,7 +82,7 @@ function onHoverReset(): void {
         :src="item.poster_url"
         :alt="titleLabel"
         loading="lazy"
-        class="w-full h-full object-cover"
+        class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
         data-testid="feed-item-poster"
       />
       <div
@@ -114,7 +114,7 @@ function onHoverReset(): void {
         class="absolute top-2 right-2 z-20"
         data-testid="feed-item-new-badge"
       >
-        <span class="bg-orange-500 text-white text-[8px] font-black px-1.5 py-0.5 rounded-full shadow-lg animate-pulse">
+        <span class="bg-gradient-to-r from-orange-400 to-rose-500 text-white text-[9px] tracking-wider font-black px-2 py-0.5 rounded-full shadow-md animate-pulse">
           NEW
         </span>
       </div>
@@ -123,7 +123,7 @@ function onHoverReset(): void {
            hover (and on focus-within so keyboard users can reach
            them) so they don't clutter the grid layout. -->
       <div
-        class="absolute bottom-2 left-2 z-10 flex flex-col gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+        class="absolute bottom-2 left-2 z-10 flex flex-col gap-1.5 opacity-0 translate-y-2 transition-all duration-300 group-hover:opacity-100 group-hover:translate-y-0 group-focus-within:opacity-100 group-focus-within:translate-y-0"
         data-testid="feed-item-hover-actions"
       >
         <button
@@ -161,10 +161,10 @@ function onHoverReset(): void {
       </div>
       <button
         type="button"
-        class="absolute bottom-2 right-2 z-10 flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-semibold shadow"
+        class="absolute bottom-2 right-2 z-10 flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-xs font-semibold shadow-md backdrop-blur-sm transition-all"
         :class="
           isBookmarked
-            ? 'bg-indigo-600 text-white'
+            ? 'bg-indigo-600 text-white shadow-indigo-600/30'
             : 'bg-white/90 text-slate-700 hover:bg-white'
         "
         data-testid="feed-item-bookmark-toggle"
@@ -242,10 +242,10 @@ function onHoverReset(): void {
         </p>
       </div>
     </div>
-    <div class="p-3 flex flex-col gap-1">
+    <div class="p-4 flex flex-col gap-1 bg-white relative z-10">
       <button
         type="button"
-        class="text-left text-sm font-semibold text-slate-900 leading-tight line-clamp-2 hover:text-indigo-600 focus:outline-none focus:text-indigo-600"
+        class="text-left text-[15px] font-bold text-slate-800 leading-snug tracking-tight line-clamp-2 hover:text-indigo-600 focus:outline-none focus:text-indigo-600 transition-colors"
         data-testid="feed-item-title"
         :title="titleLabel"
         @click="onOpen"
