@@ -43,8 +43,8 @@ class _FakeClient:
     def __init__(
         self,
         *,
-        search_response: Optional[list[dict]] = None,
-        item_response: Optional[dict] = None,
+        search_response: list[dict] | None = None,
+        item_response: dict | None = None,
     ) -> None:
         self.search_response = search_response or []
         self.item_response = item_response or {}
@@ -55,8 +55,8 @@ class _FakeClient:
         self,
         query: str,
         *,
-        type_: Optional[str] = None,
-        year: Optional[int] = None,
+        type_: str | None = None,
+        year: int | None = None,
         limit: int = 25,
     ) -> list[dict]:
         self.search_calls.append({"query": query, "type_": type_, "year": year, "limit": limit})

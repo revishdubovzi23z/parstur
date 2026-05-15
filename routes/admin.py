@@ -24,10 +24,15 @@ router = APIRouter()
 ENV_CREDENTIAL_KEYS = (
     "REZKA_EMAIL",
     "REZKA_PASSWORD",
+    "REZKA_ENABLED",
     "KINOPOISK_API_KEY",
     "POISKKINO_API_KEY",
     "TMDB_API_KEY",
     "TMDB_API_TOKEN",
+    "KINOPUB_ENABLED",
+    "KINOHUB_ENABLED",
+    "KINOPUB_CLIENT_ID",
+    "KINOPUB_CLIENT_SECRET",
 )
 
 SENSITIVE_CREDENTIAL_KEYS = frozenset(
@@ -165,8 +170,21 @@ def export_data(fmt: str = "json", category_id: int = -1):
     )
 
 
+@router.post("/api/restart_server")
+def restart_server():
+    if _trigger_restart():
+        return {
+            "status": "success",
+            "message": "Команда на перезапуск отправлена. Сервер перезагружается…",
+        }
+    return JSONResponse(
+        {"status": "error", "message": "Команда перезапуска не настроена или не сработала"},
+        status_code=500,
+    )
+
+
 @router.post("/api/self_update")
-def self_update():
+def self_update(skip_pull: bool = False):
     import subprocess
     import sys
 
@@ -188,11 +206,19 @@ def self_update():
 
     try:
         # 1. Git Pull
-        output = run_cmd(["git", "pull"], project_root)
-        if "Already up to date" in output and os.path.isdir(os.path.join(frontend_dir, "dist")):
-            # If code is up to date AND dist exists, we might not need to do anything.
-            # But to be safe, let's at least check dependencies if the user clicked.
-            pass
+        if not skip_pull:
+            # Discard local changes to tracked files (like package-lock.json) to prevent conflicts.
+            # Ignored files (.env, *.db) are not affected.
+            try:
+                run_cmd(["git", "checkout", "--", "."], project_root)
+            except Exception as e:
+                logger.warning(f"[UPDATE] git checkout failed: {e}")
+            
+            output = run_cmd(["git", "pull"], project_root)
+            if "Already up to date" in output and os.path.isdir(os.path.join(frontend_dir, "dist")):
+                # If code is up to date AND dist exists, we might not need to do anything.
+                # But to be safe, let's at least check dependencies if the user clicked.
+                pass
 
         # 2. Pip Install
         # Use sys.executable to ensure we use the same python/venv
@@ -201,20 +227,23 @@ def self_update():
         )
 
         # 3. Frontend Build (if directory exists)
+        warnings = []
         if os.path.isdir(frontend_dir):
             # Check for npm
             npm_cmd = "npm.cmd" if sys.platform == "win32" else "npm"
             try:
-                run_cmd([npm_cmd, "install"], frontend_dir, 300)
-                run_cmd([npm_cmd, "run", "build"], frontend_dir, 300)
+                run_cmd([npm_cmd, "install", "--legacy-peer-deps"], frontend_dir, 600)
+                run_cmd([npm_cmd, "run", "build"], frontend_dir, 600)
             except Exception as e:
-                logger.warning(f"[UPDATE] Frontend build skipped or failed: {e}")
-                # We don't fail the whole update if only frontend failed,
-                # but we should report it.
+                warn_msg = f"Frontend build skipped or failed: {e}"
+                logger.warning(f"[UPDATE] {warn_msg}")
+                warnings.append(warn_msg)
 
         # 4. Trigger Restart
         restarted = _trigger_restart()
         msg = "Update successful. "
+        if warnings:
+            msg += f"Warnings: {'; '.join(warnings)}. "
         if restarted:
             msg += "Server is restarting..."
         else:
@@ -224,6 +253,16 @@ def self_update():
 
     except Exception as e:
         logger.error(f"[UPDATE] Update failed: {e}")
+        return {"status": "error", "message": str(e)[:500]}
+
+
+@router.post("/api/database_clear")
+def database_clear():
+    try:
+        db.clear_media_data()
+        return {"status": "success", "message": "Медиа-данные успешно очищены"}
+    except Exception as e:
+        logger.error(f"[CLEAR] Failed to clear media data: {e}")
         return {"status": "error", "message": str(e)[:500]}
 
 

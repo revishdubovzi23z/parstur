@@ -140,6 +140,11 @@ interface PlayerStoreState {
   streamLoading: boolean
   streamError: string | null
   subtitles: Record<string, Subtitle>
+  /** Available qualities for the current Rezka selection. */
+  rezkaQualities: string[]
+  /** Active tab in the stream surface. */
+  activeTab: 'kinohub' | 'rezka' | 'kinopub'
+  streamConfirmed: boolean
 
   // ── kino.pub branch (PR 5) ───────────────────────────────────
   // Populated lazily by `openKinopubStream()`. We don't reuse the
@@ -159,6 +164,10 @@ interface PlayerStoreState {
   kinopubSubtitleLang: string
   kinopubLoading: boolean
   kinopubError: string | null
+  // Master switches from settings.py
+  rezkaEnabled: boolean
+  kinohubEnabled: boolean
+  kinopubEnabled: boolean
 }
 
 function emptyState(): PlayerStoreState {
@@ -195,6 +204,12 @@ function emptyState(): PlayerStoreState {
     kinopubSubtitleLang: '',
     kinopubLoading: false,
     kinopubError: null,
+    rezkaQualities: [],
+    activeTab: 'rezka',
+    streamConfirmed: false,
+    rezkaEnabled: true,
+    kinohubEnabled: true,
+    kinopubEnabled: true,
   }
 }
 
@@ -373,17 +388,41 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
 
     /** Open the stream surface for the given item. Initial source is
      *  'rezka'; the caller can switch via `selectSource()`. */
-    openStream(itemId: number, title?: string | null): void {
+    async openStream(itemId: number, title?: string | null): Promise<void> {
       Object.assign(this, emptyState())
       this.itemId = itemId
       this.itemTitle = title ?? null
       this.mode = 'stream'
-      this.source = 'rezka'
-      // Kick off both surfaces in parallel — online sources are an
-      // alternative tab inside the same modal (mirrors legacy
-      // `openStream()` flow).
+      
+      const dbRes = await apiFetch(`/api/item/${itemId}`)
+      const dbItem = await dbRes.json()
+      
+      if (dbItem.config) {
+        this.rezkaEnabled = dbItem.config.rezka_enabled !== false
+        this.kinohubEnabled = dbItem.config.kinohub_enabled !== false
+        this.kinopubEnabled = dbItem.config.kinopub_enabled !== false
+      }
+
+      // Default source logic based on availability and master switches
+      if (this.rezkaEnabled && (dbItem.item?.rezka_url || !dbItem.item?.kinopub_id)) {
+        this.activeTab = 'rezka'
+        this.source = 'rezka'
+        void this.loadInfo(itemId, 'rezka')
+      } else if (this.kinopubEnabled && dbItem.item?.kinopub_id) {
+        this.activeTab = 'kinopub'
+        this.source = 'kinopub'
+        void this.loadKinopubInfo(itemId)
+      } else if (this.kinohubEnabled) {
+        this.activeTab = 'kinohub'
+        this.source = null
+      } else if (this.rezkaEnabled) {
+        // Fallback to Rezka even if no URL (it might resolve via search)
+        this.activeTab = 'rezka'
+        this.source = 'rezka'
+        void this.loadInfo(itemId, 'rezka')
+      }
+
       void this.loadSources(itemId)
-      void this.loadInfo(itemId, 'rezka')
     },
 
     /** Close the modal and drop all state. */
@@ -543,7 +582,18 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
           this.season = null
           this.episode = null
         }
+        // Auto-load the first stream for Rezka
+        if (this.source === 'rezka' && this.translatorId) {
+          void this.loadStream(
+            itemId,
+            'rezka',
+            this.translatorId,
+            this.season,
+            this.episode,
+          )
+        }
       } catch (err) {
+        console.error('[Player] loadInfo failed:', err)
         if (err instanceof UnauthorizedError) {
           session.handleUnauthorized(err)
           this.infoError = 'Требуется вход'
@@ -583,6 +633,10 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
       this.season = season ?? null
       this.episode = episode ?? null
       this.streamLoading = true
+      
+      // Load all qualities and subtitles in parallel with resolving the URL
+      void this._loadRezkaStreamDetails(itemId, translator, season, episode)
+
       try {
         const params = new URLSearchParams()
         if (translator) params.set('translator', translator)
@@ -598,6 +652,10 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
         const data = (await res.json().catch(() => ({}))) as StreamUrlResponse & {
           error?: string
         }
+        
+        // Safeguard: don't overwrite if the user switched sources while we were fetching
+        if (this.source !== source) return
+
         if (!res.ok || data.error) {
           this.streamError = data.error ?? `HTTP ${res.status}`
           return
@@ -605,12 +663,8 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
         this.streamUrl = data.url
         this.streamQuality = data.quality
         this.streamIsHls = Boolean(data.is_hls)
-        // Best-effort subtitle fetch — `stream_url` returns a single
-        // resolved URL but no subtitle metadata. The legacy
-        // `/api/stream/{id}` endpoint returns the full Rezka payload
-        // including subtitles; we tolerate failure silently.
-        await this._loadSubtitles(itemId, source, translator, season, episode)
       } catch (err) {
+        console.error('[Player] loadStream failed:', err)
         if (err instanceof UnauthorizedError) {
           session.handleUnauthorized(err)
           this.streamError = 'Требуется вход'
@@ -622,12 +676,9 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
       }
     },
 
-    /** Best-effort subtitle fetch via the legacy `/api/stream/{id}`
-     *  payload. Stays inside the store so PlayerModal doesn't have
-     *  to know about the second endpoint. */
-    async _loadSubtitles(
+    /** Fetch all qualities and subtitles for the current Rezka selection. */
+    async _loadRezkaStreamDetails(
       itemId: number,
-      source: StreamSource,
       translator: string | null,
       season?: string | null,
       episode?: string | null,
@@ -637,20 +688,72 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
         if (translator) params.set('translator', translator)
         if (season) params.set('season', season)
         if (episode) params.set('episode', episode)
-        if (source && source !== 'rezka') params.set('source', source)
         const qs = params.toString()
         const path = `/api/stream/${itemId}${qs ? `?${qs}` : ''}`
         const res = await apiFetch(path)
         if (!res.ok) return
         const data = (await res.json().catch(() => ({}))) as {
+          videos?: Record<string, string>
           subtitles?: Record<string, Subtitle>
           error?: string
         }
         if (data.error) return
         this.subtitles = data.subtitles ?? {}
+        this.rezkaQualities = data.videos ? Object.keys(data.videos) : []
+        // Sort qualities by rank
+        const rank = (q: string) => ({
+          '4K': 7,
+          '2K': 6,
+          '1080p': 5,
+          '1080p Ultra': 4,
+          '720p': 3,
+          '480p': 2,
+          '360p': 1,
+        }[q] || 0)
+        this.rezkaQualities.sort((a, b) => rank(b) - rank(a))
       } catch {
-        /* subtitle fetch failures are non-fatal */
+        /* non-fatal */
       }
+    },
+
+    async selectRezkaQuality(quality: string): Promise<void> {
+      if (!this.itemId || !this.source) return
+      this.streamQuality = quality
+      this.streamConfirmed = false
+      await this.loadStream(
+        this.itemId,
+        this.source,
+        this.translatorId,
+        this.season,
+        this.episode,
+      )
+    },
+
+    setActiveTab(tab: 'kinohub' | 'rezka' | 'kinopub'): void {
+      this.activeTab = tab
+      if (tab === 'kinopub') {
+        this.source = 'kinopub'
+        if (!this.kinopubInfo && this.itemId) {
+          void this.loadKinopubInfo(this.itemId)
+        } else {
+          this._refreshKinopubStream()
+        }
+      } else if (tab === 'rezka') {
+        this.source = 'rezka'
+        if (this.itemId && this.translatorId) {
+          void this.loadStream(
+            this.itemId,
+            'rezka',
+            this.translatorId,
+            this.season,
+            this.episode,
+          )
+        }
+      }
+    },
+
+    confirmStream(): void {
+      this.streamConfirmed = true
     },
 
     /** `POST /api/mark_season_seen/{id}` — clears the "новый сезон"
@@ -703,6 +806,7 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
       this.episode = null
       this.streamUrl = null
       this.streamQuality = null
+      this.streamConfirmed = false
       if (this.isSeries && this.info?.series_info) {
         const si = this.info.series_info[translatorId]
         const firstSeason = Object.keys(si?.seasons ?? {})[0] ?? null
@@ -729,6 +833,7 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
       this.episode = null
       this.streamUrl = null
       this.streamQuality = null
+      this.streamConfirmed = false
       if (this.info?.series_info && this.translatorId) {
         const si = this.info.series_info[this.translatorId]
         const firstEp = Object.keys(si?.episodes?.[season] ?? {})[0] ?? null
@@ -748,6 +853,7 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
     /** Pick an episode + reload stream. */
     async selectEpisode(episode: string): Promise<void> {
       this.episode = episode
+      this.streamConfirmed = false
       this.streamUrl = null
       this.streamQuality = null
       if (this.itemId !== null && this.source) {
@@ -881,6 +987,7 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
     /** Pick a season + auto-seed first episode + refresh stream. */
     selectKinopubSeason(seasonNumber: number): void {
       this.kinopubSeasonNumber = seasonNumber
+      this.streamConfirmed = false
       this.kinopubEpisodeNumber = null
       this.kinopubFileIdx = null
       const season = (this.kinopubInfo?.seasons ?? []).find(
@@ -896,6 +1003,7 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
     /** Pick an episode within the current season. */
     selectKinopubEpisode(episodeNumber: number): void {
       this.kinopubEpisodeNumber = episodeNumber
+      this.streamConfirmed = false
       this.kinopubFileIdx = null
       this._refreshKinopubStream()
     },
@@ -903,6 +1011,7 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
     /** Pick a specific quality file (0-based index). */
     selectKinopubFile(fileIdx: number): void {
       this.kinopubFileIdx = fileIdx
+      this.streamConfirmed = false
       this._refreshKinopubStream()
     },
 

@@ -150,7 +150,7 @@ def _seed_item(
 ) -> int:
     with db._conn() as c:
         cur = c.execute(
-            "INSERT INTO items (title, year, category_id, checked_kinopub) " "VALUES (?, ?, ?, ?)",
+            "INSERT INTO items (title, year, category_id, checked_kinopub) VALUES (?, ?, ?, ?)",
             (title, year, category_id, checked),
         )
         return int(cur.lastrowid)
@@ -179,8 +179,7 @@ def test_run_binds_matching_item(tmp_db, fake_client) -> None:
     ]
     with tmp_db._conn() as c:
         row = c.execute(
-            "SELECT kinopub_id, kinopub_type, kinopub_url, checked_kinopub "
-            "FROM items WHERE id = ?",
+            "SELECT kinopub_id, kinopub_type, kinopub_url, checked_kinopub FROM items WHERE id = ?",
             (item_id,),
         ).fetchone()
     assert row["kinopub_id"] == 4242

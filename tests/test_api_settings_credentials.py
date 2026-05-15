@@ -29,7 +29,7 @@ def _client(monkeypatch, tmp_path: Path) -> TestClient:
 def test_credentials_status_masks_sensitive_values(monkeypatch, tmp_path: Path) -> None:
     env_path = tmp_path / ".env"
     env_path.write_text(
-        "REZKA_EMAIL=user@example.com\n" "REZKA_PASSWORD=secret\n" "TMDB_API_TOKEN=token\n",
+        "REZKA_EMAIL=user@example.com\nREZKA_PASSWORD=secret\nTMDB_API_TOKEN=token\n",
         encoding="utf-8",
     )
     client = _client(monkeypatch, tmp_path)

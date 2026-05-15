@@ -66,11 +66,11 @@ class _FakeClient:
     def __init__(
         self,
         *,
-        device_code_response: Optional[DeviceCode] = None,
-        device_token_response: Optional[TokenPair] = None,
-        device_token_error: Optional[Exception] = None,
-        refresh_response: Optional[TokenPair] = None,
-        refresh_error: Optional[Exception] = None,
+        device_code_response: DeviceCode | None = None,
+        device_token_response: TokenPair | None = None,
+        device_token_error: Exception | None = None,
+        refresh_response: TokenPair | None = None,
+        refresh_error: Exception | None = None,
     ) -> None:
         self.device_code_response = device_code_response
         self.device_token_response = device_token_response

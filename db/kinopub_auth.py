@@ -16,7 +16,6 @@ and triggers a re-auth instead of 401-ing on the next refresh.
 from __future__ import annotations
 
 import hashlib
-from typing import Optional
 
 
 def _hash_secret(client_secret: str) -> str:
@@ -24,7 +23,7 @@ def _hash_secret(client_secret: str) -> str:
 
 
 class DbKinopubAuthMixin:
-    def kinopub_auth_get(self, conn=None) -> Optional[dict]:
+    def kinopub_auth_get(self, conn=None) -> dict | None:
         """Return the current row as a dict, or None if not authenticated."""
         with self._conn(conn) as c:
             row = c.execute(

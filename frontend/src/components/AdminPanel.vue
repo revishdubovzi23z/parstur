@@ -37,7 +37,10 @@ const anyBusy = computed(
     admin.exportBusy ||
     admin.backupBusy ||
     admin.itemsExportBusy ||
-    admin.rebuildFtsBusy,
+    admin.rebuildFtsBusy ||
+    admin.clearDatabaseBusy ||
+    admin.rebuildBusy ||
+    admin.restartBusy,
 )
 
 // Items-export (`/api/export`) controls. Backend defaults to all
@@ -130,6 +133,33 @@ async function onRebuildFts(): Promise<void> {
   }
   await admin.rebuildFts()
 }
+ 
+async function onClearDatabase(): Promise<void> {
+  if (
+    !window.confirm(
+      'Очистить все медиа-данные (фильмы, папки, историю)? Авторизация и настройки сохранятся.',
+    )
+  ) {
+    return
+  }
+  await admin.clearDatabase()
+}
+ 
+async function onRestart(): Promise<void> {
+  const result = await admin.restartServer()
+  if (result.willRestart) emit('restart-triggered')
+}
+ 
+async function onRebuild(): Promise<void> {
+  if (
+    !window.confirm(
+      'Пересобрать зависимости и фронтенд? Это может занять несколько минут.',
+    )
+  )
+    return
+  const result = await admin.rebuildServer()
+  if (result.willRestart) emit('restart-triggered')
+}
 </script>
 
 <template>
@@ -181,15 +211,35 @@ async function onRebuildFts(): Promise<void> {
             Запускает <code>git pull</code> на сервере. После апдейта
             бэкенд попытается перезапуститься автоматически.
           </p>
-          <button
-            type="button"
-            class="mt-3 inline-flex items-center justify-center rounded-md bg-teal-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-teal-700 disabled:opacity-50"
-            data-testid="admin-self-update"
-            :disabled="anyBusy"
-            @click="onSelfUpdate"
-          >
-            {{ admin.selfUpdateBusy ? 'Обновление…' : '⬆ Обновить' }}
-          </button>
+          <div class="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              class="inline-flex items-center justify-center rounded-md bg-teal-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-teal-700 disabled:opacity-50"
+              data-testid="admin-self-update"
+              :disabled="anyBusy"
+              @click="onSelfUpdate"
+            >
+              {{ admin.selfUpdateBusy ? 'Обновление…' : '⬆ Обновить' }}
+            </button>
+            <button
+              type="button"
+              class="inline-flex items-center justify-center rounded-md bg-teal-50 px-3 py-1.5 text-xs font-semibold text-teal-800 border border-teal-200 hover:bg-teal-100 disabled:opacity-50"
+              data-testid="admin-rebuild"
+              :disabled="anyBusy"
+              @click="onRebuild"
+            >
+              {{ admin.rebuildBusy ? 'Сборка…' : '🛠 Собрать' }}
+            </button>
+            <button
+              type="button"
+              class="inline-flex items-center justify-center rounded-md bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-slate-200 disabled:opacity-50"
+              data-testid="admin-restart"
+              :disabled="anyBusy"
+              @click="onRestart"
+            >
+              {{ admin.restartBusy ? 'Запуск…' : '🔄 Перезапуск' }}
+            </button>
+          </div>
         </section>
 
         <section class="rounded-lg border border-slate-200 p-4">
@@ -217,6 +267,15 @@ async function onRebuildFts(): Promise<void> {
               @click="onImportClick"
             >
               {{ admin.importBusy ? 'Импорт…' : '⬆ Импорт' }}
+            </button>
+            <button
+              type="button"
+              class="inline-flex items-center justify-center rounded-md bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 border border-amber-200 hover:bg-amber-100 disabled:opacity-50"
+              data-testid="admin-db-clear"
+              :disabled="anyBusy"
+              @click="onClearDatabase"
+            >
+              {{ admin.clearDatabaseBusy ? 'Очистка…' : '🧹 Очистить медиа' }}
             </button>
             <input
               ref="importInput"

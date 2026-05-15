@@ -31,7 +31,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 import requests
 
@@ -121,13 +121,13 @@ class KinopubClient:
 
     def __init__(
         self,
-        access_token: Optional[str] = None,
+        access_token: str | None = None,
         *,
-        api_base_url: Optional[str] = None,
-        client_id: Optional[str] = None,
-        client_secret: Optional[str] = None,
+        api_base_url: str | None = None,
+        client_id: str | None = None,
+        client_secret: str | None = None,
         timeout: int = DEFAULT_TIMEOUT,
-        session: Optional[requests.Session] = None,
+        session: requests.Session | None = None,
     ) -> None:
         self._access_token = access_token
         self._api_base = (api_base_url or settings.kinopub_api_base_url).rstrip("/")
@@ -143,8 +143,8 @@ class KinopubClient:
         method: str,
         path: str,
         *,
-        params: Optional[Mapping[str, Any]] = None,
-        data: Optional[Mapping[str, Any]] = None,
+        params: Mapping[str, Any] | None = None,
+        data: Mapping[str, Any] | None = None,
         auth_required: bool = True,
     ) -> dict:
         url = f"{self._api_base}{path}"
@@ -264,8 +264,8 @@ class KinopubClient:
         self,
         query: str,
         *,
-        type_: Optional[str] = None,
-        year: Optional[int] = None,
+        type_: str | None = None,
+        year: int | None = None,
         limit: int = 25,
     ) -> list[dict]:
         """`GET /v1/items?q=<query>` with optional type/year filters.

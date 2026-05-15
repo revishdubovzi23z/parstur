@@ -29,7 +29,7 @@ import json
 import os
 import re
 import time
-from typing import Any, Optional
+from typing import Any
 
 from db import Database
 from kinopub_client import KinopubAPIError, KinopubAuthError, KinopubClient
@@ -124,7 +124,7 @@ def score_candidate(
     *,
     item: dict,
     candidate: dict,
-    type_hint: Optional[str],
+    type_hint: str | None,
 ) -> int:
     """Return the matcher score for one kino.pub search result against
     one par2 item. Pure function — every parameter is data."""
@@ -170,12 +170,12 @@ def best_candidate(
     *,
     item: dict,
     raw_results: list[dict],
-    type_hint: Optional[str],
-) -> Optional[tuple[dict, int]]:
+    type_hint: str | None,
+) -> tuple[dict, int] | None:
     """Pick the highest-scoring kino.pub search result for the given
     par2 item. Returns ``None`` when no candidate clears
     ``SCORE_MIN_ACCEPT``."""
-    best: Optional[tuple[dict, int]] = None
+    best: tuple[dict, int] | None = None
     for cand in raw_results:
         if not isinstance(cand, dict) or cand.get("id") is None:
             continue
@@ -209,7 +209,7 @@ def report_progress(current: int, total: int) -> None:
 # Public entry point.
 
 
-def _load_eligible_items(db: Database, *, resume_from_id: Optional[int]) -> list[dict]:
+def _load_eligible_items(db: Database, *, resume_from_id: int | None) -> list[dict]:
     """Read every un-checked item the matcher should consider. Filters
     out games/software and rows that are already bound or hard-ignored."""
     placeholders = ",".join("?" for _ in ELIGIBLE_CATEGORY_IDS)
@@ -235,7 +235,7 @@ def _load_eligible_items(db: Database, *, resume_from_id: Optional[int]) -> list
 
 
 def _make_client_factory(
-    factory: Optional[Any],
+    factory: Any | None,
 ) -> KinopubClient:
     """Return a `KinopubClient` either from a factory (for tests) or
     via the lazy-refresh path used in production."""
@@ -249,8 +249,8 @@ def _make_client_factory(
 
 def run(
     *,
-    db: Optional[Database] = None,
-    client_factory: Optional[Any] = None,
+    db: Database | None = None,
+    client_factory: Any | None = None,
     delay_ms: int = DEFAULT_DELAY_MS,
     recheck: bool = False,
 ) -> dict[str, int]:
@@ -273,7 +273,7 @@ def run(
             conn.close()
         clear_checkpoint(STATUS_KEY)
 
-    resume_from_id: Optional[int] = None
+    resume_from_id: int | None = None
     checkpoint = load_checkpoint(STATUS_KEY)
     if isinstance(checkpoint, dict):
         last_id = checkpoint.get("last_id")
@@ -288,7 +288,7 @@ def run(
     if total == 0:
         return {"processed": 0, "bound": 0, "skipped": 0}
 
-    client: Optional[KinopubClient] = None
+    client: KinopubClient | None = None
     try:
         client = _make_client_factory(client_factory)
     except (KinopubAuthError, RuntimeKinopubAuthError) as e:

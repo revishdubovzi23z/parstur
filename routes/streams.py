@@ -28,6 +28,8 @@ _SUBTITLE_HOST_ALLOWLIST = (
     # storage buckets observed in `/v1/items/{id}` responses.
     "kino.pub",
     "cdn.kino.pub",
+    "cdn2site.com",
+    "cdn2cdn.com",
     "service-kp.com",
     "cdn.service-kp.com",
     "kp.cdn.consoto.sbs",
@@ -256,8 +258,8 @@ def get_stream_m3u(
                 key=lambda q: {
                     "4K": 7,
                     "2K": 6,
-                    "1080p Ultra": 5,
-                    "1080p": 4,
+                    "1080p": 5,
+                    "1080p Ultra": 4,
                     "720p": 3,
                     "480p": 2,
                     "360p": 1,
@@ -411,8 +413,8 @@ def get_stream_url(
                 key=lambda q: {
                     "4K": 7,
                     "2K": 6,
-                    "1080p Ultra": 5,
-                    "1080p": 4,
+                    "1080p": 5,
+                    "1080p Ultra": 4,
                     "720p": 3,
                     "480p": 2,
                     "360p": 1,

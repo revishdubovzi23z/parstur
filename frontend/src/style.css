@@ -4,7 +4,7 @@
 
 @layer base {
   body {
-    @apply min-h-screen bg-slate-50 text-slate-900 antialiased;
+    @apply min-h-screen bg-gradient-to-br from-zinc-50 via-slate-50 to-slate-100 text-slate-900 antialiased tracking-tight;
     font-family:
       'Inter',
       ui-sans-serif,
@@ -16,5 +16,15 @@
       'Helvetica Neue',
       Arial,
       sans-serif;
+  }
+}
+
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;  /* IE and Edge */
+    scrollbar-width: none;  /* Firefox */
   }
 }

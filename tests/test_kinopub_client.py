@@ -33,7 +33,7 @@ class _FakeResponse:
     def __init__(
         self,
         status: int,
-        body: Optional[dict] = None,
+        body: dict | None = None,
         *,
         text: str = "",
     ) -> None:

@@ -27,6 +27,42 @@ const videoRef = ref<HTMLVideoElement | null>(null)
 const attachedUrl = ref<string | null>(null)
 const playerError = ref<string | null>(null)
 
+const hlsTracks = ref<any[]>([])
+const hlsCurrentTrack = ref(-1)
+
+// Native audio tracks (Safari/iOS)
+const nativeTracks = ref<Array<{ id: number; name: string; enabled: boolean }>>([])
+
+const availableTracks = computed(() => {
+  if (hlsTracks.value.length > 0) return hlsTracks.value
+  return nativeTracks.value
+})
+
+const currentTrackId = computed(() => {
+  if (hlsTracks.value.length > 0) return hlsCurrentTrack.value
+  const active = nativeTracks.value.find(t => t.enabled)
+  return active ? active.id : -1
+})
+
+function onAudioTrackChange(e: Event) {
+  const idx = parseInt((e.target as HTMLSelectElement).value)
+  if (hlsRef.value) {
+    hlsRef.value.audioTrack = idx
+    hlsCurrentTrack.value = idx
+  } else if (videoRef.value && (videoRef.value as any).audioTracks) {
+    // @ts-ignore
+    const tracks = videoRef.value.audioTracks
+    for (let i = 0; i < tracks.length; i++) {
+      tracks[i].enabled = (i === idx)
+    }
+    // Update local state for reactive UI
+    nativeTracks.value = nativeTracks.value.map(t => ({
+      ...t,
+      enabled: t.id === idx
+    }))
+  }
+}
+
 const isOpen = computed(() => player.isOpen)
 const mode = computed(() => player.mode)
 
@@ -114,6 +150,9 @@ function destroyHls(): void {
     }
     hlsRef.value = null
   }
+  hlsTracks.value = []
+  hlsCurrentTrack.value = -1
+  nativeTracks.value = []
   attachedUrl.value = null
   playerError.value = null
 }
@@ -144,15 +183,50 @@ async function attachStream(): Promise<void> {
     hls.loadSource(url)
     hls.attachMedia(video)
     hlsRef.value = hls
+
+    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      hlsTracks.value = hls.audioTracks
+      hlsCurrentTrack.value = hls.audioTrack
+    })
+    hls.on(Hls.Events.LEVEL_LOADED, () => {
+       // Sometimes tracks appear after level is loaded
+       if (hls.audioTracks.length > 0 && hlsTracks.value.length === 0) {
+         hlsTracks.value = hls.audioTracks
+         hlsCurrentTrack.value = hls.audioTrack
+       }
+    })
+    hls.on(Hls.Events.AUDIO_TRACK_SWITCHED, (_, data) => {
+      hlsCurrentTrack.value = data.id
+    })
   } else {
     video.src = url
+    // For native HLS (Safari), we can try to access audioTracks
+    // but it's often not available until after the first play or metadata load.
+    const pollNativeTracks = () => {
+      // @ts-ignore: non-standard API
+      const tracks = video.audioTracks
+      if (tracks && tracks.length > 0) {
+        const list = []
+        for (let i = 0; i < tracks.length; i++) {
+          list.push({
+            id: i,
+            name: (tracks[i] as any).label || (tracks[i] as any).language || `Дорожка ${i + 1}`,
+            enabled: (tracks[i] as any).enabled
+          })
+        }
+        nativeTracks.value = list
+      } else if (isOpen.value && attachedUrl.value === url) {
+        setTimeout(pollNativeTracks, 1000)
+      }
+    }
+    video.addEventListener('loadedmetadata', pollNativeTracks, { once: true })
   }
 }
 
 watch(
-  () => player.streamUrl,
-  () => {
-    if (!isOpen.value) return
+  () => player.streamUrl && player.streamConfirmed,
+  (confirmed) => {
+    if (!isOpen.value || !confirmed) return
     void attachStream()
   },
 )
@@ -183,6 +257,11 @@ function onClose(): void {
 async function onTranslatorChange(event: Event): Promise<void> {
   const value = (event.target as HTMLSelectElement).value
   if (value) await player.selectTranslator(value)
+}
+
+async function onQualityChange(event: Event): Promise<void> {
+  const value = (event.target as HTMLSelectElement).value
+  if (value) await player.selectRezkaQuality(value)
 }
 
 async function onSeasonChange(event: Event): Promise<void> {
@@ -225,6 +304,35 @@ function onKinopubSubtitleChange(event: Event): void {
   const value = (event.target as HTMLSelectElement).value
   player.selectKinopubSubtitle(value)
 }
+
+function onCopyStreamUrl(): void {
+  if (!player.streamUrl) return
+  navigator.clipboard.writeText(player.streamUrl).then(() => {
+    // We don't have a toast store here directly but we can use alert for now
+    // or just assume success.
+  })
+}
+const externalPlayers = computed(() => {
+  const url = player.streamUrl
+  if (!url) return []
+  return [
+    {
+      name: 'VLC',
+      icon: '🧡',
+      url: `vlc://${url.replace(/^https?:\/\//, '')}`,
+    },
+    {
+      name: 'Infuse',
+      icon: '🔥',
+      url: `infuse://x-callback-url/play?url=${encodeURIComponent(url)}`,
+    },
+    {
+      name: 'nPlayer',
+      icon: '🔵',
+      url: `nplayer-${url}`,
+    },
+  ]
+})
 </script>
 
 <template>
@@ -363,302 +471,287 @@ function onKinopubSubtitleChange(event: Event): void {
             {{ player.infoError }}
           </p>
 
-          <!-- Онлайн-источники. Легаси (`index.html`) показывал это
-               блоком СРАЗУ под заголовком с тремя ярлыками:
-                 «Rezka»     — сам встроенный резка-плеер ниже,
-                 «Kinohub (все плееры)» — внешний aggregator-link (sourcesPageUrl),
-                 «Плееры: Alloha, Collaps, Turbo …» — отдельные
-                 iframe-источники из kinobox API. -->
-          <section
-            v-if="player.source !== 'kinopub'"
-            class="rounded-md border border-slate-200 bg-slate-50 p-3"
-            data-testid="player-stream-online"
-          >
-            <p class="text-[11px] font-medium uppercase tracking-wide text-slate-500">
-              Онлайн
-            </p>
-            <ul class="mt-2 space-y-1.5 text-sm">
-              <li
-                class="flex items-center gap-2 font-semibold text-emerald-700"
-                data-testid="player-stream-online-rezka"
-              >
-                <span>▶ Rezka</span>
-                <span class="text-[10px] font-normal text-slate-400">
-                  (встроенный плеер ниже)
-                </span>
-              </li>
-              <li v-if="player.sourcesPageUrl">
+          <!-- ── Stream tabs ───────────────────────────────────── -->
+          <div class="flex items-center gap-1 border-b border-slate-100 px-1 pb-1">
+            <button
+              v-if="player.kinohubEnabled && (player.sourcesPageUrl || player.sources.length > 0)"
+              type="button"
+              class="rounded-md px-3 py-1.5 text-xs font-bold transition-colors"
+              :class="player.activeTab === 'kinohub' ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:bg-slate-100'"
+              @click="player.setActiveTab('kinohub')"
+            >
+              🌐 Kinohub
+            </button>
+            <button
+              v-if="player.rezkaEnabled"
+              type="button"
+              class="rounded-md px-3 py-1.5 text-xs font-bold transition-colors"
+              :class="player.activeTab === 'rezka' ? 'bg-emerald-600 text-white' : 'text-slate-500 hover:bg-slate-100'"
+              @click="player.setActiveTab('rezka')"
+            >
+              🎬 Rezka
+            </button>
+            <button
+              v-if="player.kinopubEnabled"
+              type="button"
+              class="rounded-md px-3 py-1.5 text-xs font-bold transition-colors"
+              :class="player.activeTab === 'kinopub' ? 'bg-fuchsia-600 text-white' : 'text-slate-500 hover:bg-slate-100'"
+              @click="player.setActiveTab('kinopub')"
+            >
+              💎 Kino.pub
+            </button>
+          </div>
+
+          <!-- ── Stream sections ───────────────────────────────────── -->
+          <div class="grid grid-cols-1">
+            <!-- 1. Kinohub & Alternative Players -->
+            <section
+              v-if="player.activeTab === 'kinohub' && (player.sourcesPageUrl || player.sources.length > 0)"
+              class="rounded-xl border border-indigo-100 bg-indigo-50/30 p-4"
+              data-testid="player-section-kinohub"
+            >
+              <h3 class="flex items-center gap-2 text-sm font-bold text-indigo-800">
+                <span class="text-lg">🌐</span> 1. Kinohub и другие
+              </h3>
+              <div class="mt-3 space-y-3">
                 <a
+                  v-if="player.sourcesPageUrl"
                   :href="player.sourcesPageUrl"
                   target="_blank"
                   rel="noopener"
-                  class="flex items-center gap-2 font-medium text-indigo-700 hover:text-indigo-900"
+                  class="flex items-center gap-2 font-semibold text-indigo-700 hover:text-indigo-900"
                   data-testid="player-stream-page-url"
                 >
                   ▶ Kinohub (все плееры)
                 </a>
-              </li>
-              <li v-if="player.sources.length > 0">
-                <p class="text-[11px] font-medium text-slate-500">Плееры:</p>
-                <div class="mt-1 flex flex-wrap gap-2">
-                  <a
-                    v-for="src in player.sources"
-                    :key="src.type"
-                    :href="src.iframeUrl"
-                    target="_blank"
-                    rel="noopener"
-                    class="rounded-md bg-violet-600 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-violet-700"
-                    :data-testid="`player-stream-source-${src.type}`"
-                  >
-                    {{ src.type }}
-                  </a>
+                <div v-if="player.sources.length > 0">
+                  <p class="text-[11px] font-medium text-slate-500 uppercase tracking-wider">
+                    Плееры:
+                  </p>
+                  <div class="mt-1.5 flex flex-wrap gap-2">
+                    <a
+                      v-for="src in player.sources"
+                      :key="src.type"
+                      :href="src.iframeUrl"
+                      target="_blank"
+                      rel="noopener"
+                      class="rounded-md bg-violet-600 px-3 py-1 text-[11px] font-semibold text-white hover:bg-violet-700 shadow-sm"
+                      :data-testid="`player-stream-source-${src.type}`"
+                    >
+                      {{ src.type }}
+                    </a>
+                  </div>
                 </div>
-              </li>
-              <li
-                v-else-if="!player.sourcesLoading && !player.sourcesError"
-                class="text-[11px] italic text-slate-400"
-                data-testid="player-stream-sources-empty"
-              >
-                Альтернативные плееры не найдены.
-              </li>
-              <li
-                v-if="player.sourcesLoading"
-                class="text-[11px] italic text-slate-400"
-                data-testid="player-stream-sources-loading"
-              >
-                Загружаем альтернативы…
-              </li>
-            </ul>
-          </section>
-          <p
-            v-if="player.sourcesError"
-            class="text-[11px] text-amber-600"
-            data-testid="player-stream-sources-error"
-          >
-            {{ player.sourcesError }}
-          </p>
+              </div>
+            </section>
 
-          <!-- Rezka controls — only when stream_info loaded -->
-          <template v-if="player.source !== 'kinopub' && player.info">
-            <label
-              v-if="translatorEntries.length > 0"
-              class="block"
-              data-testid="player-stream-translator-wrap"
+            <!-- 2. REZKA -->
+            <section
+              v-if="player.activeTab === 'rezka'"
+              class="rounded-xl border border-emerald-100 bg-emerald-50/30 p-4"
+              data-testid="player-section-rezka"
             >
-              <span class="block text-xs font-medium text-slate-500">Озвучка</span>
-              <select
-                class="mt-1 w-full rounded-md border border-slate-300 px-2 py-1 text-sm focus:border-indigo-500 focus:outline-none"
-                :value="player.translatorId ?? ''"
-                data-testid="player-stream-translator"
-                @change="onTranslatorChange"
-              >
-                <option
-                  v-for="t in translatorEntries"
-                  :key="t.id"
-                  :value="t.id"
-                >
-                  {{ t.name }}{{ t.premium ? ' ★' : '' }}
-                </option>
-              </select>
-            </label>
-            <p
-              v-else
-              class="text-[11px] italic text-slate-400"
-              data-testid="player-stream-no-translators"
-            >
-              Переводчики не найдены.
-            </p>
+              <h3 class="flex items-center gap-2 text-sm font-bold text-emerald-800">
+                <span class="text-lg">🎬</span> 2. REZKA
+              </h3>
+              
+              <div class="mt-3 space-y-4">
+                <p class="text-[11px] font-medium text-emerald-600 uppercase flex items-center gap-1.5">
+                  <span class="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                  Встроенный плеер активен
+                </p>
 
-            <template v-if="player.isSeries">
-              <label
-                v-if="seasonEntries.length > 0"
-                class="block"
-                data-testid="player-stream-season-wrap"
-              >
-                <span class="block text-xs font-medium text-slate-500">Сезон</span>
-                <select
-                  class="mt-1 w-full rounded-md border border-slate-300 px-2 py-1 text-sm focus:border-indigo-500 focus:outline-none"
-                  :value="player.season ?? ''"
-                  data-testid="player-stream-season"
-                  @change="onSeasonChange"
-                >
-                  <option
-                    v-for="s in seasonEntries"
-                    :key="s.id"
-                    :value="s.id"
+                <!-- Rezka controls -->
+                <div v-if="player.info" class="space-y-3">
+                  <label
+                    v-if="translatorEntries.length > 0"
+                    class="block"
                   >
-                    {{ s.name }}
-                  </option>
-                </select>
-              </label>
-              <label
-                v-if="episodeEntries.length > 0"
-                class="block"
-                data-testid="player-stream-episode-wrap"
-              >
-                <span class="block text-xs font-medium text-slate-500">Серия</span>
-                <select
-                  class="mt-1 w-full rounded-md border border-slate-300 px-2 py-1 text-sm focus:border-indigo-500 focus:outline-none"
-                  :value="player.episode ?? ''"
-                  data-testid="player-stream-episode"
-                  @change="onEpisodeChange"
-                >
-                  <option
-                    v-for="ep in episodeEntries"
-                    :key="ep.id"
-                    :value="ep.id"
-                  >
-                    {{ ep.name }}
-                  </option>
-                </select>
-              </label>
-              <button
-                type="button"
-                class="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700"
-                data-testid="player-stream-mark-seen"
-                @click="onMarkSeasonSeen"
-              >
-                ✓ Я посмотрел сезон
-              </button>
-            </template>
-
-          </template>
-
-          <!-- ── kino.pub controls (PR 5) ───────────────────────────── -->
-          <template v-if="player.source === 'kinopub'">
-            <p
-              v-if="player.kinopubLoading"
-              class="text-xs text-slate-500"
-              data-testid="player-kinopub-loading"
-            >
-              Загружаем kino.pub…
-            </p>
-            <p
-              v-if="player.kinopubError"
-              class="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800"
-              data-testid="player-kinopub-error"
-            >
-              {{ player.kinopubError }}
-            </p>
-
-            <template v-if="player.kinopubInfo">
-              <template v-if="player.isKinopubSeries">
-                <label
-                  v-if="player.kinopubSeasons.length > 0"
-                  class="block"
-                  data-testid="player-kinopub-season-wrap"
-                >
-                  <span class="block text-xs font-medium text-slate-500">Сезон</span>
-                  <select
-                    class="mt-1 w-full rounded-md border border-slate-300 px-2 py-1 text-sm focus:border-indigo-500 focus:outline-none"
-                    :value="player.kinopubSeasonNumber ?? ''"
-                    data-testid="player-kinopub-season"
-                    @change="onKinopubSeasonChange"
-                  >
-                    <option
-                      v-for="s in player.kinopubSeasons"
-                      :key="s.number"
-                      :value="s.number"
+                    <span class="block text-xs font-semibold text-slate-500 uppercase mb-1">Озвучка</span>
+                    <select
+                      class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm shadow-sm focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
+                      :value="player.translatorId ?? ''"
+                      @change="onTranslatorChange"
                     >
-                      Сезон {{ s.number }} ({{ s.episodeCount }})
-                    </option>
-                  </select>
-                </label>
-                <label
-                  v-if="(player.kinopubInfo?.seasons?.find((s) => s.number === player.kinopubSeasonNumber)?.episodes?.length ?? 0) > 0"
-                  class="block"
-                  data-testid="player-kinopub-episode-wrap"
-                >
-                  <span class="block text-xs font-medium text-slate-500">Серия</span>
-                  <select
-                    class="mt-1 w-full rounded-md border border-slate-300 px-2 py-1 text-sm focus:border-indigo-500 focus:outline-none"
-                    :value="player.kinopubEpisodeNumber ?? ''"
-                    data-testid="player-kinopub-episode"
-                    @change="onKinopubEpisodeChange"
+                      <option
+                        v-for="t in translatorEntries"
+                        :key="t.id"
+                        :value="t.id"
+                      >
+                        {{ t.name }}{{ t.premium ? ' ★' : '' }}
+                      </option>
+                    </select>
+                  </label>
+ 
+                  <label
+                    v-if="player.rezkaQualities.length > 0"
+                    class="block"
                   >
-                    <option
-                      v-for="ep in player.kinopubInfo?.seasons?.find((s) => s.number === player.kinopubSeasonNumber)?.episodes ?? []"
-                      :key="ep.number ?? -1"
-                      :value="ep.number ?? -1"
+                    <span class="block text-xs font-semibold text-slate-500 uppercase mb-1">Качество</span>
+                    <select
+                      class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm shadow-sm focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
+                      :value="player.streamQuality ?? ''"
+                      @change="onQualityChange"
                     >
-                      Серия {{ ep.number }}{{ ep.title ? ` — ${ep.title}` : '' }}
-                    </option>
-                  </select>
-                </label>
-              </template>
+                      <option
+                        v-for="q in player.rezkaQualities"
+                        :key="q"
+                        :value="q"
+                      >
+                        {{ q }}
+                      </option>
+                    </select>
+                  </label>
 
-              <label
-                v-if="kinopubFileEntries.length > 0"
-                class="block"
-                data-testid="player-kinopub-quality-wrap"
-              >
-                <span class="block text-xs font-medium text-slate-500">Качество</span>
-                <select
-                  class="mt-1 w-full rounded-md border border-slate-300 px-2 py-1 text-sm focus:border-indigo-500 focus:outline-none"
-                  :value="player.kinopubFileIdx ?? 0"
-                  data-testid="player-kinopub-quality"
-                  @change="onKinopubFileChange"
-                >
-                  <option
-                    v-for="f in kinopubFileEntries"
-                    :key="f.idx"
-                    :value="f.idx"
+                  <div v-if="player.isSeries" class="grid grid-cols-2 gap-3">
+                    <label v-if="seasonEntries.length > 0" class="block">
+                      <span class="block text-xs font-semibold text-slate-500 uppercase mb-1">Сезон</span>
+                      <select
+                        class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm shadow-sm focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
+                        :value="player.season ?? ''"
+                        @change="onSeasonChange"
+                      >
+                        <option v-for="s in seasonEntries" :key="s.id" :value="s.id">
+                          {{ s.name }}
+                        </option>
+                      </select>
+                    </label>
+                    <label v-if="episodeEntries.length > 0" class="block">
+                      <span class="block text-xs font-semibold text-slate-500 uppercase mb-1">Серия</span>
+                      <select
+                        class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm shadow-sm focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
+                        :value="player.episode ?? ''"
+                        @change="onEpisodeChange"
+                      >
+                        <option v-for="ep in episodeEntries" :key="ep.id" :value="ep.id">
+                          {{ ep.name }}
+                        </option>
+                      </select>
+                    </label>
+                  </div>
+                  
+                  <button
+                    v-if="player.isSeries"
+                    type="button"
+                    class="w-full rounded-lg bg-emerald-600 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-700 shadow-md transition-colors"
+                    @click="onMarkSeasonSeen"
                   >
-                    {{ f.label }}
-                  </option>
-                </select>
-              </label>
+                    ✓ Отметить сезон как просмотренный
+                  </button>
+                </div>
+              </div>
 
-              <p
-                v-if="kinopubAudioEntries.length > 0"
-                class="text-[11px] text-slate-500"
-                data-testid="player-kinopub-audio-info"
-              >
-                Дорожки: {{ kinopubAudioEntries.map((a) => a.label).join(', ') }}
-              </p>
+            </section>
 
-              <label
-                v-if="subtitleEntries.length > 0"
-                class="block"
-                data-testid="player-kinopub-subtitle-wrap"
-              >
-                <span class="block text-xs font-medium text-slate-500">Субтитры</span>
-                <select
-                  class="mt-1 w-full rounded-md border border-slate-300 px-2 py-1 text-sm focus:border-indigo-500 focus:outline-none"
-                  :value="player.kinopubSubtitleLang"
-                  data-testid="player-kinopub-subtitle"
-                  @change="onKinopubSubtitleChange"
-                >
-                  <option value="">Отключены</option>
-                  <option
-                    v-for="s in subtitleEntries"
-                    :key="s.lang"
-                    :value="s.lang"
+            <!-- 3. KINOPUB -->
+            <section
+              v-if="player.activeTab === 'kinopub'"
+              class="rounded-xl border border-fuchsia-100 bg-fuchsia-50/30 p-4"
+              data-testid="player-section-kinopub"
+            >
+              <h3 class="flex items-center gap-2 text-sm font-bold text-fuchsia-800">
+                <span class="text-lg">💎</span> 3. КИНОПАБ
+              </h3>
+
+              <div class="mt-3 space-y-4">
+                 <p class="text-[11px] font-medium text-fuchsia-600 uppercase flex items-center gap-1.5">
+                  <span class="h-1.5 w-1.5 rounded-full bg-fuchsia-500 animate-pulse"></span>
+                  Kino.pub активен
+                </p>
+
+                <div v-if="player.kinopubInfo" class="space-y-3">
+                  <div v-if="player.isKinopubSeries" class="grid grid-cols-2 gap-3">
+                    <label v-if="player.kinopubSeasons.length > 0" class="block">
+                      <span class="block text-xs font-semibold text-slate-500 uppercase mb-1">Сезон</span>
+                      <select
+                        class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm shadow-sm focus:border-fuchsia-500 focus:ring-1 focus:ring-fuchsia-500"
+                        :value="player.kinopubSeasonNumber ?? ''"
+                        @change="onKinopubSeasonChange"
+                      >
+                        <option v-for="s in player.kinopubSeasons" :key="s.number" :value="s.number">
+                          Сезон {{ s.number }} ({{ s.episodeCount }})
+                        </option>
+                      </select>
+                    </label>
+                    <label
+                      v-if="(player.kinopubInfo?.seasons?.find((s) => s.number === player.kinopubSeasonNumber)?.episodes?.length ?? 0) > 0"
+                      class="block"
+                    >
+                      <span class="block text-xs font-semibold text-slate-500 uppercase mb-1">Серия</span>
+                      <select
+                        class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm shadow-sm focus:border-fuchsia-500 focus:ring-1 focus:ring-fuchsia-500"
+                        :value="player.kinopubEpisodeNumber ?? ''"
+                        @change="onKinopubEpisodeChange"
+                      >
+                        <option
+                          v-for="ep in player.kinopubInfo?.seasons?.find((s) => s.number === player.kinopubSeasonNumber)?.episodes ?? []"
+                          :key="ep.number ?? -1"
+                          :value="ep.number ?? -1"
+                        >
+                          №{{ ep.number }}{{ ep.title ? `: ${ep.title}` : '' }}
+                        </option>
+                      </select>
+                    </label>
+                  </div>
+
+                  <label v-if="kinopubFileEntries.length > 0" class="block">
+                    <span class="block text-xs font-semibold text-slate-500 uppercase mb-1">Качество</span>
+                    <select
+                      class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm shadow-sm focus:border-fuchsia-500 focus:ring-1 focus:ring-fuchsia-500"
+                      :value="player.kinopubFileIdx ?? 0"
+                      @change="onKinopubFileChange"
+                    >
+                      <option v-for="f in kinopubFileEntries" :key="f.idx" :value="f.idx">
+                        {{ f.label }}
+                      </option>
+                    </select>
+                  </label>
+
+                  <p
+                    v-if="kinopubAudioEntries.length > 0"
+                    class="text-[11px] text-slate-500 bg-white/50 rounded px-2 py-1 border border-slate-100"
                   >
-                    {{ s.title }}
-                  </option>
-                </select>
-              </label>
-            </template>
-          </template>
+                    <span class="font-semibold uppercase text-[9px] text-slate-400 block mb-0.5">Дорожки</span>
+                    {{ kinopubAudioEntries.map((a) => a.label).join(', ') }}
+                  </p>
+
+                  <label v-if="subtitleEntries.length > 0" class="block">
+
+                    <span class="block text-xs font-semibold text-slate-500 uppercase mb-1">Субтитры</span>
+                    <select
+                      class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm shadow-sm focus:border-fuchsia-500 focus:ring-1 focus:ring-fuchsia-500"
+                      :value="player.kinopubSubtitleLang"
+                      @change="onKinopubSubtitleChange"
+                    >
+                      <option value="">Отключены</option>
+                      <option v-for="s in subtitleEntries" :key="s.lang" :value="s.lang">
+                        {{ s.title }}
+                      </option>
+                    </select>
+                  </label>
+                </div>
+              </div>
+            </section>
+          </div>
+
 
           <!-- ── Shared video element ───────────────────────────────── -->
           <p
-            v-if="player.streamLoading"
+            v-if="player.activeTab !== 'kinohub' && player.streamLoading"
             class="text-xs text-slate-500"
             data-testid="player-stream-resolving"
           >
             Резолвим поток…
           </p>
           <p
-            v-if="player.streamError"
+            v-if="player.activeTab !== 'kinohub' && player.streamError"
             class="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800"
             data-testid="player-stream-error"
           >
             {{ player.streamError }}
           </p>
           <p
-            v-if="playerError"
+            v-if="player.activeTab !== 'kinohub' && playerError"
             class="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800"
             data-testid="player-stream-attach-error"
           >
@@ -666,7 +759,26 @@ function onKinopubSubtitleChange(event: Event): void {
           </p>
 
           <div
-            v-if="player.streamUrl"
+            v-if="player.activeTab !== 'kinohub' && player.streamUrl && !player.streamConfirmed"
+            class="flex flex-col items-center justify-center rounded-xl bg-slate-50 border border-slate-200 p-8 text-center"
+            data-testid="player-confirm-wrap"
+          >
+            <p class="text-sm text-slate-600 mb-4">
+              Поток готов к воспроизведению
+            </p>
+            <button
+              type="button"
+              class="group relative flex items-center gap-3 rounded-full bg-indigo-600 px-8 py-3.5 text-lg font-bold text-white shadow-lg transition-all hover:bg-indigo-700 hover:shadow-indigo-200 active:scale-95"
+              @click="player.confirmStream()"
+              data-testid="player-confirm-btn"
+            >
+              <span class="text-2xl transition-transform group-hover:scale-110">▶</span>
+              СМОТРЕТЬ
+            </button>
+          </div>
+
+          <div
+            v-if="player.activeTab !== 'kinohub' && player.streamUrl && player.streamConfirmed"
             data-testid="player-stream-video-wrap"
           >
             <video
@@ -684,30 +796,70 @@ function onKinopubSubtitleChange(event: Event): void {
                 :label="sub.title"
                 :srclang="sub.lang"
                 :src="sub.src"
-                :default="player.source === 'kinopub' ? sub.lang === player.kinopubSubtitleLang : idx === 0"
+                :default="player.activeTab === 'kinopub' ? sub.lang === player.kinopubSubtitleLang : idx === 0"
               />
             </video>
             <div class="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
               <span class="rounded bg-slate-100 px-2 py-0.5 text-slate-600">
-                Качество: {{ player.streamQuality ?? '—' }}
+                Качество: {{ player.activeTab === 'kinopub' ? (player.kinopubVideo?.files?.[player.kinopubFileIdx ?? 0]?.quality ?? '—') : (player.streamQuality ?? '—') }}
               </span>
-              <a
+
+              <!-- Audio Tracks -->
+              <div v-if="availableTracks.length > 1" class="flex items-center gap-1">
+                <span class="text-slate-400 font-bold uppercase text-[9px]">Дорожка:</span>
+                <select
+                  class="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                  :value="currentTrackId"
+                  @change="onAudioTrackChange"
+                >
+                  <option v-for="t in availableTracks" :key="t.id" :value="t.id">
+                    {{ t.name || `Дорожка ${t.id + 1}` }}
+                  </option>
+                </select>
+              </div>
+               <a
                 v-if="player.streamM3uUrl"
                 :href="player.streamM3uUrl"
-                class="rounded-md bg-orange-500 px-2.5 py-1 font-medium text-white hover:bg-orange-600"
+                class="rounded-md bg-orange-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-600 shadow-sm flex items-center gap-1"
                 data-testid="player-stream-m3u"
+                title="Скачать плейлист для VLC/PotPlayer/etc"
               >
-                VLC (M3U)
+                <span>📺</span> VLC / Плейлист
               </a>
               <a
                 :href="player.streamUrl"
                 target="_blank"
                 rel="noopener"
-                class="rounded-md bg-slate-200 px-2.5 py-1 font-medium text-slate-700 hover:bg-slate-300"
+                class="rounded-md bg-slate-800 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-900 shadow-sm flex items-center gap-1"
                 data-testid="player-stream-direct-url"
               >
-                В браузере
+                <span>🔗</span> Прямая ссылка
               </a>
+              <button
+                type="button"
+                class="rounded-md bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-200 border border-slate-200"
+                @click="onCopyStreamUrl"
+              >
+                📋 Копировать URL
+              </button>
+            </div>
+
+            <!-- Mobile External Players -->
+            <div v-if="externalPlayers.length > 0" class="mt-4 pt-3 border-t border-slate-100">
+              <p class="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">
+                Открыть во внешнем плеере (Mobile)
+              </p>
+              <div class="flex flex-wrap gap-2">
+                <a
+                  v-for="p in externalPlayers"
+                  :key="p.name"
+                  :href="p.url"
+                  class="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:border-indigo-300 hover:bg-indigo-50 transition-colors shadow-sm"
+                >
+                  <span>{{ p.icon }}</span>
+                  {{ p.name }}
+                </a>
+              </div>
             </div>
           </div>
         </section>

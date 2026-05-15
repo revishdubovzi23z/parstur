@@ -28,7 +28,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 from db import db
 from kinopub_client import (
@@ -134,7 +134,7 @@ def get_status() -> dict:
     }
 
 
-def start_device_flow(client: Optional[KinopubClient] = None) -> DeviceCode:
+def start_device_flow(client: KinopubClient | None = None) -> DeviceCode:
     """Kick off the Device Flow. The returned `DeviceCode` carries the
     `user_code` to show the operator, the verification URL to send them
     to, and the `device_code` to feed to `poll_device_flow`."""
@@ -144,13 +144,12 @@ def start_device_flow(client: Optional[KinopubClient] = None) -> DeviceCode:
     with _pending_lock:
         _pending[dc.device_code] = _PendingDeviceCode(code=dc, started_at=time.time())
     logger.info(
-        "[KINOPUB] device flow started "
-        f"(user_code={dc.user_code!r}, expires_in={dc.expires_in}s)"
+        f"[KINOPUB] device flow started (user_code={dc.user_code!r}, expires_in={dc.expires_in}s)"
     )
     return dc
 
 
-def poll_device_flow(device_code: str, client: Optional[KinopubClient] = None) -> str:
+def poll_device_flow(device_code: str, client: KinopubClient | None = None) -> str:
     """Poll for confirmation. Returns one of:
 
     * "pending" — user hasn't entered the user_code yet
@@ -190,7 +189,7 @@ def poll_device_flow(device_code: str, client: Optional[KinopubClient] = None) -
     with _pending_lock:
         _pending.pop(device_code, None)
     logger.info(
-        "[KINOPUB] device flow confirmed; " f"access_token valid for {int(tokens.expires_in)}s"
+        f"[KINOPUB] device flow confirmed; access_token valid for {int(tokens.expires_in)}s"
     )
     return "confirmed"
 
@@ -201,7 +200,7 @@ def logout() -> None:
     logger.info("[KINOPUB] logged out (kinopub_auth row cleared)")
 
 
-def current_token(client: Optional[KinopubClient] = None) -> Optional[str]:
+def current_token(client: KinopubClient | None = None) -> str | None:
     """Return a valid access_token, refreshing if needed.
 
     Returns None if not authenticated or refresh fails. The caller
@@ -285,10 +284,10 @@ def _authenticated_client() -> KinopubClient:
 def search(
     query: str,
     *,
-    year: Optional[int] = None,
-    type_: Optional[str] = None,
+    year: int | None = None,
+    type_: str | None = None,
     limit: int = 25,
-    client: Optional[KinopubClient] = None,
+    client: KinopubClient | None = None,
 ) -> list[dict]:
     """`GET /v1/items?q=<query>` filtered by year/type.
 
@@ -328,32 +327,45 @@ def search(
 
 
 def _build_item_url(kinopub_id: int) -> str:
-    """Stable public URL for a kino.pub item. Used by the UI to render
+    """Stable public URL for a kino.pub item player page. Used by the UI to render
     'Open on kino.pub' chips without round-tripping the API again."""
-    return f"https://kino.pub/item/{int(kinopub_id)}"
+    return f"https://kino.pub/item/view/{int(kinopub_id)}"
+
+
+def _extract_string(val: Any) -> str | None:
+    """Pick the most useful string from a value that might be a dict.
+    Preference: hls -> http -> title -> name -> first value."""
+    if not val:
+        return None
+    if isinstance(val, (str, int, float)):
+        return str(val)
+    if isinstance(val, dict):
+        return (
+            val.get("hls")
+            or val.get("http")
+            or val.get("title")
+            or val.get("name")
+            or val.get("code")
+            or next((str(v) for v in val.values() if v), None)
+        )
+    return str(val)
 
 
 def _map_video(video: dict) -> dict:
     """Normalise one `videos[]` entry from `/v1/items/{id}` into the
-    shape the SPA player will consume.
-
-    The kino.pub response has historically grown a number of shapes
-    (`files`, `streams`, embedded HLS-only entries with `url`/`format`,
-    …). We only surface the simple `{quality, url, codec}` triples
-    here; PlayerModal will display them as quality-picker entries.
-    """
+    shape the SPA player will consume."""
     files: list[dict] = []
     for f in video.get("files", []) or []:
         if not isinstance(f, dict):
             continue
-        url = f.get("url") or f.get("file")
+        url = _extract_string(f.get("url") or f.get("file"))
         if not url:
             continue
         files.append(
             {
-                "url": str(url),
-                "quality": str(f.get("quality") or "").strip() or None,
-                "codec": str(f.get("codec") or "").strip() or None,
+                "url": url,
+                "quality": _extract_string(f.get("quality")),
+                "codec": _extract_string(f.get("codec")),
             }
         )
 
@@ -361,16 +373,11 @@ def _map_video(video: dict) -> dict:
     for a in video.get("audios", []) or []:
         if not isinstance(a, dict):
             continue
-        lang_obj = a.get("lang")
-        if isinstance(lang_obj, dict):
-            lang = lang_obj.get("code") or lang_obj.get("title")
-        else:
-            lang = lang_obj
         audios.append(
             {
-                "lang": str(lang) if lang else None,
-                "type": str(a.get("type") or "").strip() or None,
-                "author": str(a.get("author") or "").strip() or None,
+                "lang": _extract_string(a.get("lang")),
+                "type": _extract_string(a.get("type")),
+                "author": _extract_string(a.get("author")),
             }
         )
 
@@ -378,13 +385,13 @@ def _map_video(video: dict) -> dict:
     for s in video.get("subtitles", []) or []:
         if not isinstance(s, dict):
             continue
-        url = s.get("url") or s.get("file")
+        url = _extract_string(s.get("url") or s.get("file"))
         if not url:
             continue
         subtitles.append(
             {
-                "url": str(url),
-                "lang": str(s.get("lang") or "").strip() or None,
+                "url": url,
+                "lang": _extract_string(s.get("lang")),
                 "shift": int(s.get("shift") or 0),
                 "embed": bool(s.get("embed", False)),
             }
@@ -403,7 +410,7 @@ def _map_video(video: dict) -> dict:
 def get_stream_info(
     kinopub_id: int,
     *,
-    client: Optional[KinopubClient] = None,
+    client: KinopubClient | None = None,
 ) -> dict:
     """`GET /v1/items/{id}` mapped into a SPA-friendly shape.
 

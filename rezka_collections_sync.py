@@ -1,4 +1,6 @@
+import random
 import re
+import time
 
 from app_core import normalize_title
 from db import Database
@@ -31,7 +33,14 @@ def _login():
     from HdRezkaApi import HdRezkaSession
 
     session = HdRezkaSession(REZKA_ORIGIN)
-    session.login(REZKA_EMAIL, REZKA_PASSWORD)
+    try:
+        session.login(REZKA_EMAIL, REZKA_PASSWORD)
+    except Exception as e:
+        logger.error(
+            f"[-] Failed to login to Rezka. IP may be temporarily blocked by Cloudflare/DDoS-Guard: {e}"
+        )
+        return None
+
     logger.info("  [+] Rezka login OK")
     return session
 
@@ -73,10 +82,11 @@ def _get_folder_items(url, session):
     import requests
     from bs4 import BeautifulSoup
 
-    all_urls = []
-    page = 0
+    all_urls = set()
+    page = 1
     while True:
-        page_url = url if page == 0 else f"{url}page/{page}/"
+        page_url = url if page == 1 else f"{url}page/{page}/"
+        logger.info(f"    [fetch] Loading favorites page {page}: {page_url}")
         r = requests.get(
             page_url,
             headers=REZKA_PAGE_HEADERS,
@@ -84,20 +94,48 @@ def _get_folder_items(url, session):
             timeout=20,
         )
         if r.status_code != 200:
+            logger.warning(f"      [!] Page {page} returned status {r.status_code}")
             break
         soup = BeautifulSoup(r.content, "html.parser")
         items = soup.select(".b-content__inline_item")
         if not items:
+            logger.info(f"      [!] No items found on page {page}")
             break
+
+        found_on_page = 0
         for item in items:
             link = item.find("a", href=re.compile(r"rezka\.ag"))
             if link:
-                all_urls.append(link["href"])
-        pagination = soup.find("a", class_=re.compile(r"pag.*next"))
+                all_urls.add(link["href"])
+                found_on_page += 1
+
+        logger.info(f"      [+] Found {found_on_page} items on page {page}")
+
+        # Rezka favorite pagination: look for next page URL specifically first
+        next_url_part = f"/page/{page + 1}/"
+        pagination = soup.find("a", href=re.compile(next_url_part))
+
+        if not pagination:
+            pagination = soup.select_one("a.next, a.paginator-next, span.next")
+
+        if not pagination:
+            # Fallback: look for <a> containing "Следующая" text
+            pagination = soup.find("a", string=re.compile(r"Следующая|Вперед", re.I))
+
+        if not pagination:
+            # Fallback regex search for any 'next' in class
+            pagination = soup.find("a", class_=re.compile(r"next|pag", re.I))
+
         if not pagination:
             break
+
         page += 1
-    return all_urls
+        if page > 50:  # Safety break
+            break
+
+        time.sleep(random.uniform(3.0, 7.0))
+
+    return list(all_urls)
 
 
 def _add_to_rezka_folder(post_id, cat_id, session):
@@ -310,6 +348,10 @@ def sync_rezka_collections():
     logger.info("=== REZKA COLLECTIONS BIDIRECTIONAL SYNC ===")
 
     session = _login()
+    if not session:
+        logger.error("=== SYNC ABORTED: LOGIN FAILED ===")
+        return
+
     folders = _get_folders(session)
 
     if not folders:
@@ -383,6 +425,7 @@ def sync_rezka_collections():
 
         for rz_url in new_items_from_rezka:
             logger.info(f"    [new] Parsing Rezka page to create card: {rz_url}")
+            time.sleep(random.uniform(4.0, 8.0))
             parsed = _parse_rezka_page(rz_url, session)
             if not parsed:
                 logger.error("      [-] Failed to parse page")
@@ -426,6 +469,7 @@ def sync_rezka_collections():
             rz_url = info.get("rezka_url")
             if not rz_url:
                 logger.info(f"    [search] Looking for Rezka URL: {info['title']} ({info['year']})")
+                time.sleep(random.uniform(4.0, 8.0))
                 rz_url = _search_rezka_url(info["title"], info["year"], session)
                 if rz_url:
                     db.fill_item_metadata(item_id, conn=conn, rezka_url=rz_url, checked_rezka=1)

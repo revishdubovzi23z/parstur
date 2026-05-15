@@ -6,7 +6,7 @@
 // create / rename / delete buttons. Selecting a category or
 // collection patches the feed filters and triggers a refetch.
 
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useCategoriesStore } from '../../stores/categories'
 import { useCollectionsStore } from '../../stores/collections'
 import { useFeedStore } from '../../stores/feed'
@@ -47,7 +47,13 @@ async function toggleNewOnly(): Promise<void> {
 
 const newCollectionName = ref('')
 const showAddForm = ref(false)
-const collectionsExpanded = ref(true)
+const collectionsExpanded = ref(
+  localStorage.getItem('par2_sidebar_collections_expanded') !== 'false',
+)
+
+watch(collectionsExpanded, (val) => {
+  localStorage.setItem('par2_sidebar_collections_expanded', String(val))
+})
 const submitting = ref(false)
 
 const selectedCategoryId = computed(() => feed.filters.categoryId)
@@ -183,7 +189,7 @@ const categoryLabel = (id: number, name: string): string => {
     data-testid="sidebar"
   >
     <section
-      class="flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50 px-3 py-2"
+      class="flex items-center justify-between rounded-2xl border border-slate-200/60 bg-white/50 backdrop-blur-sm px-4 py-3 shadow-sm"
       data-testid="sidebar-new-only"
     >
       <span class="text-xs font-semibold uppercase tracking-wide text-slate-600">
@@ -207,12 +213,12 @@ const categoryLabel = (id: number, name: string): string => {
       <h2 class="px-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
         Категории
       </h2>
-      <div class="mt-2 rounded-xl border border-slate-200 bg-white p-2 shadow-sm">
+      <div class="mt-2 rounded-2xl border border-slate-200/60 bg-white/50 backdrop-blur-sm p-3 shadow-sm">
         <label class="block">
           <span class="sr-only">Выбрать категорию</span>
           <select
             v-model="selectedCategoryValue"
-            class="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-800 shadow-sm focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900/10"
+            class="w-full rounded-xl border border-slate-200/80 bg-white/80 px-3 py-2 text-[13px] font-semibold text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all"
             data-testid="sidebar-category-select"
             :disabled="categories.loading || !categories.items.length"
           >
@@ -293,8 +299,8 @@ const categoryLabel = (id: number, name: string): string => {
           class="group flex items-center gap-1 rounded-md transition"
           :class="[
             selectedCollectionId === coll.id
-              ? 'bg-indigo-600/10'
-              : 'hover:bg-slate-100',
+              ? 'bg-indigo-50 border border-indigo-100 shadow-sm'
+              : 'hover:bg-white/80 border border-transparent',
             draggedId === coll.id ? 'opacity-50' : '',
           ]"
           :draggable="true"
