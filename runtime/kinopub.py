@@ -327,9 +327,9 @@ def search(
 
 
 def _build_item_url(kinopub_id: int) -> str:
-    """Stable public URL for a kino.pub item. Used by the UI to render
+    """Stable public URL for a kino.pub item player page. Used by the UI to render
     'Open on kino.pub' chips without round-tripping the API again."""
-    return f"https://kino.pub/item/{int(kinopub_id)}"
+    return f"https://kino.pub/item/view/{int(kinopub_id)}"
 
 
 def _map_video(video: dict) -> dict:

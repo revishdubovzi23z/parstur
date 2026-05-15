@@ -141,7 +141,7 @@ const kinopubUrl = computed(() => {
     return it.kinopub_url
   }
   if (it.kinopub_id) {
-    return `https://kino.pub/item/${it.kinopub_id}`
+    return `https://kino.pub/item/view/${it.kinopub_id}`
   }
   return null
 })

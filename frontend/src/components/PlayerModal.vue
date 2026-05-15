@@ -225,6 +225,14 @@ function onKinopubSubtitleChange(event: Event): void {
   const value = (event.target as HTMLSelectElement).value
   player.selectKinopubSubtitle(value)
 }
+
+function onCopyStreamUrl(): void {
+  if (!player.streamUrl) return
+  navigator.clipboard.writeText(player.streamUrl).then(() => {
+    // We don't have a toast store here directly but we can use alert for now
+    // or just assume success.
+  })
+}
 </script>
 
 <template>
@@ -628,23 +636,31 @@ function onKinopubSubtitleChange(event: Event): void {
               <span class="rounded bg-slate-100 px-2 py-0.5 text-slate-600">
                 Качество: {{ player.streamQuality ?? '—' }}
               </span>
-              <a
+               <a
                 v-if="player.streamM3uUrl"
                 :href="player.streamM3uUrl"
-                class="rounded-md bg-orange-500 px-2.5 py-1 font-medium text-white hover:bg-orange-600"
+                class="rounded-md bg-orange-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-600 shadow-sm flex items-center gap-1"
                 data-testid="player-stream-m3u"
+                title="Скачать плейлист для VLC/PotPlayer/etc"
               >
-                VLC (M3U)
+                <span>📺</span> VLC / Плейлист
               </a>
               <a
                 :href="player.streamUrl"
                 target="_blank"
                 rel="noopener"
-                class="rounded-md bg-slate-200 px-2.5 py-1 font-medium text-slate-700 hover:bg-slate-300"
+                class="rounded-md bg-slate-800 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-900 shadow-sm flex items-center gap-1"
                 data-testid="player-stream-direct-url"
               >
-                В браузере
+                <span>🔗</span> Прямая ссылка
               </a>
+              <button
+                type="button"
+                class="rounded-md bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-200 border border-slate-200"
+                @click="onCopyStreamUrl"
+              >
+                📋 Копировать URL
+              </button>
             </div>
           </div>
         </section>
