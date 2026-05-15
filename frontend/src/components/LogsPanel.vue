@@ -32,6 +32,7 @@ const TAB_ORDER: LogType[] = [
   'fix_poiskkino',
   'rezka',
   'rezka_collections',
+  'kinopub',
   'user',
   'cleanup',
   'single_update',

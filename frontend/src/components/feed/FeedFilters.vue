@@ -111,11 +111,20 @@ function scheduleApply(immediate: boolean): void {
   }, DEBOUNCE_MS)
 }
 
-// Toggles flip without debounce so the user sees results the moment
-// they tick a checkbox — same UX as the sidebar's "Только новое"
-// switch. Numeric and text inputs get the debounced path.
+// Toggles and rating sliders fire without debounce so the user sees
+// filtered results immediately. Text/date/year inputs keep the
+// debounced path so typing doesn't fan out requests.
 watch(
   () => [form.hideRated, form.hideCollected],
+  () => scheduleApply(true),
+)
+watch(
+  () => [
+    form.minKp,
+    form.maxKp,
+    form.minImdb,
+    form.maxImdb,
+  ],
   () => scheduleApply(true),
 )
 watch(
@@ -125,10 +134,6 @@ watch(
     form.maxYear,
     form.minDate,
     form.maxDate,
-    form.minKp,
-    form.maxKp,
-    form.minImdb,
-    form.maxImdb,
   ],
   () => scheduleApply(false),
 )
@@ -213,55 +218,63 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="mt-3 flex flex-wrap items-end gap-3 border-t border-slate-100 pt-3">
-      <fieldset class="flex flex-col gap-1">
-        <legend class="text-xs font-medium uppercase tracking-wide text-slate-500">
-          Рейтинг КП
+      <fieldset class="flex min-w-[220px] flex-1 flex-col gap-2">
+        <legend class="flex items-center justify-between gap-3 text-xs font-medium uppercase tracking-wide text-slate-500">
+          <span>Рейтинг КП</span>
+          <span class="font-mono text-[11px] text-slate-700">
+            {{ form.minKp.toFixed(1) }} — {{ form.maxKp.toFixed(1) }}
+          </span>
         </legend>
-        <div class="flex items-center gap-2">
+        <div class="flex flex-col gap-1.5">
           <input
             v-model.number="form.minKp"
-            type="number"
+            type="range"
             min="0"
             max="10"
             step="0.1"
-            class="w-20 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm shadow-sm focus:border-slate-900 focus:outline-none"
+            class="w-full accent-slate-900"
             data-testid="feed-filters-min-kp"
+            aria-label="Минимальный рейтинг КП"
           />
-          <span class="text-xs text-slate-400">—</span>
           <input
             v-model.number="form.maxKp"
-            type="number"
+            type="range"
             min="0"
             max="10"
             step="0.1"
-            class="w-20 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm shadow-sm focus:border-slate-900 focus:outline-none"
+            class="w-full accent-slate-900"
             data-testid="feed-filters-max-kp"
+            aria-label="Максимальный рейтинг КП"
           />
         </div>
       </fieldset>
-      <fieldset class="flex flex-col gap-1">
-        <legend class="text-xs font-medium uppercase tracking-wide text-slate-500">
-          Рейтинг IMDB
+      <fieldset class="flex min-w-[220px] flex-1 flex-col gap-2">
+        <legend class="flex items-center justify-between gap-3 text-xs font-medium uppercase tracking-wide text-slate-500">
+          <span>Рейтинг IMDB</span>
+          <span class="font-mono text-[11px] text-slate-700">
+            {{ form.minImdb.toFixed(1) }} — {{ form.maxImdb.toFixed(1) }}
+          </span>
         </legend>
-        <div class="flex items-center gap-2">
+        <div class="flex flex-col gap-1.5">
           <input
             v-model.number="form.minImdb"
-            type="number"
+            type="range"
             min="0"
             max="10"
             step="0.1"
-            class="w-20 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm shadow-sm focus:border-slate-900 focus:outline-none"
+            class="w-full accent-slate-900"
             data-testid="feed-filters-min-imdb"
+            aria-label="Минимальный рейтинг IMDB"
           />
-          <span class="text-xs text-slate-400">—</span>
           <input
             v-model.number="form.maxImdb"
-            type="number"
+            type="range"
             min="0"
             max="10"
             step="0.1"
-            class="w-20 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm shadow-sm focus:border-slate-900 focus:outline-none"
+            class="w-full accent-slate-900"
             data-testid="feed-filters-max-imdb"
+            aria-label="Максимальный рейтинг IMDB"
           />
         </div>
       </fieldset>

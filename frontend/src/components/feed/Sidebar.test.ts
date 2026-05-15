@@ -49,15 +49,17 @@ describe('Sidebar.vue', () => {
     vi.restoreAllMocks()
   })
 
-  it('renders categories and collections from the stores', () => {
+  it('renders a compact category select and collections from the stores', () => {
     setup()
     const wrapper = mount(Sidebar)
-    expect(wrapper.find('[data-testid="sidebar-category--1"]').text()).toContain(
+    const select = wrapper.find('[data-testid="sidebar-category-select"]')
+    expect(select.exists()).toBe(true)
+    expect(wrapper.find('[data-testid="sidebar-category-selected"]').text()).toContain(
       'Все видео',
     )
-    expect(wrapper.find('[data-testid="sidebar-category-5"]').text()).toContain(
-      'Movies',
-    )
+    expect(
+      wrapper.find('[data-testid="sidebar-category-option-5"]').text(),
+    ).toContain('Movies')
     expect(wrapper.find('[data-testid="sidebar-collection-1"]').text()).toContain(
       'Watch later',
     )
@@ -71,7 +73,7 @@ describe('Sidebar.vue', () => {
     collections.selectedId = 1
 
     const wrapper = mount(Sidebar)
-    await wrapper.find('[data-testid="sidebar-category-5"]').trigger('click')
+    await wrapper.find('[data-testid="sidebar-category-select"]').setValue('5')
     await flushPromises()
 
     expect(feed.filters.categoryId).toBe(5)
@@ -161,6 +163,25 @@ describe('Sidebar.vue', () => {
     expect(
       wrapper.find('[data-testid="sidebar-collection-handle-1"]').exists(),
     ).toBe(true)
+  })
+
+  it('collapses and expands the collections list', async () => {
+    setup()
+    const wrapper = mount(Sidebar)
+    expect(wrapper.find('[data-testid="sidebar-collections-list"]').exists()).toBe(
+      true,
+    )
+
+    await wrapper.find('[data-testid="sidebar-collections-toggle"]').trigger('click')
+    expect(wrapper.find('[data-testid="sidebar-collections-list"]').exists()).toBe(
+      false,
+    )
+    expect(wrapper.find('[data-testid="sidebar-collection-1"]').exists()).toBe(false)
+
+    await wrapper.find('[data-testid="sidebar-collections-toggle"]').trigger('click')
+    expect(wrapper.find('[data-testid="sidebar-collections-list"]').exists()).toBe(
+      true,
+    )
   })
 
   it('persists a new order via collections.saveOrder() on drop', async () => {
