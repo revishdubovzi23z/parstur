@@ -580,8 +580,8 @@ export const useAdminStore = defineStore('admin', {
           data.status === 'success'
             ? {
                 tone: 'success',
-                message: data.message ?? 'Медиа-данные очищены.',
-                willRestart: false,
+                message: data.message ?? 'Медиа-данные очищены. Страница будет перезагружена…',
+                willRestart: true,
               }
             : {
                 tone: 'error',

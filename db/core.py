@@ -200,14 +200,14 @@ class DbCore:
     def clear_media_data(self):
         """Delete all items, collections, and history while keeping auth/settings."""
         tables_to_clear = [
-            "items",
             "releases",
-            "collections",
             "collection_items",
+            "item_search_names",
+            "items",
+            "collections",
             "job_history",
             "audit_log",
             "user_ratings",
-            "item_search_names",
         ]
         with self._conn() as c:
             for table in tables_to_clear:
