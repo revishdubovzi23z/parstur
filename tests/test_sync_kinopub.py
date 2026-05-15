@@ -188,6 +188,25 @@ def test_run_binds_matching_item(tmp_db, fake_client) -> None:
     assert row["checked_kinopub"] == 1
 
 
+def test_run_falls_back_to_second_title_piece(tmp_db, fake_client) -> None:
+    item_id = _seed_item(
+        tmp_db, title="Несуществующее название / Inception", year=2010, category_id=1
+    )
+    fake_client.queue([])
+    fake_client.queue([{"id": 4242, "title": "Inception", "year": 2010, "type": "movie"}])
+
+    summary = sync_kinopub.run(db=tmp_db, client_factory=lambda: fake_client, delay_ms=0)
+
+    assert summary["bound"] == 1
+    assert fake_client.calls == [
+        {"query": "Несуществующее название", "type_": "movie", "year": 2010, "limit": 25},
+        {"query": "Inception", "type_": "movie", "year": 2010, "limit": 25},
+    ]
+    with tmp_db._conn() as c:
+        row = c.execute("SELECT kinopub_id FROM items WHERE id = ?", (item_id,)).fetchone()
+    assert row["kinopub_id"] == 4242
+
+
 def test_run_marks_checked_when_no_candidate(tmp_db, fake_client) -> None:
     item_id = _seed_item(tmp_db, title="Obscure Movie", year=1980, category_id=1)
     fake_client.queue([])  # Empty result set.
@@ -247,14 +266,17 @@ def test_run_recheck_resets_flag(tmp_db, fake_client) -> None:
     assert row["kinopub_id"] == 7777
 
 
-def test_run_uses_first_title_piece_for_query(tmp_db, fake_client) -> None:
+def test_run_uses_all_title_pieces_for_query(tmp_db, fake_client) -> None:
     # The DB stores Russian / English titles separated by " / ".
-    # The matcher should query with the first piece (Russian) and let
-    # kino.pub's catalog dedupe handle the rest.
+    # Query both pieces because kino.pub may index only one language variant.
     _seed_item(tmp_db, title="Начало / Inception", year=2010, category_id=1)
     fake_client.queue([])
+    fake_client.queue([])
     sync_kinopub.run(db=tmp_db, client_factory=lambda: fake_client, delay_ms=0)
-    assert fake_client.calls == [{"query": "Начало", "type_": "movie", "year": 2010, "limit": 25}]
+    assert fake_client.calls == [
+        {"query": "Начало", "type_": "movie", "year": 2010, "limit": 25},
+        {"query": "Inception", "type_": "movie", "year": 2010, "limit": 25},
+    ]
 
 
 def test_run_continues_past_api_errors(tmp_db, fake_client) -> None:
