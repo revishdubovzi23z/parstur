@@ -393,10 +393,10 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
       this.itemId = itemId
       this.itemTitle = title ?? null
       this.mode = 'stream'
-      
+
       const dbRes = await apiFetch(`/api/item/${itemId}`)
       const dbItem = await dbRes.json()
-      
+
       if (dbItem.config) {
         this.rezkaEnabled = dbItem.config.rezka_enabled !== false
         this.kinohubEnabled = dbItem.config.kinohub_enabled !== false
@@ -633,7 +633,7 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
       this.season = season ?? null
       this.episode = episode ?? null
       this.streamLoading = true
-      
+
       // Load all qualities and subtitles in parallel with resolving the URL
       void this._loadRezkaStreamDetails(itemId, translator, season, episode)
 
@@ -652,7 +652,7 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
         const data = (await res.json().catch(() => ({}))) as StreamUrlResponse & {
           error?: string
         }
-        
+
         // Safeguard: don't overwrite if the user switched sources while we were fetching
         if (this.source !== source) return
 

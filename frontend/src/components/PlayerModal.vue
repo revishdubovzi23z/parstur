@@ -13,6 +13,7 @@
 import Hls from 'hls.js'
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 
+import { getStoredToken } from '../api/client'
 import { useItemPlayerStore } from '../stores/player'
 
 const player = useItemPlayerStore()
@@ -26,6 +27,7 @@ const videoRef = ref<HTMLVideoElement | null>(null)
  *  watcher fires don't re-attach the same source. */
 const attachedUrl = ref<string | null>(null)
 const playerError = ref<string | null>(null)
+const subtitleObjectUrls = ref<string[]>([])
 
 const hlsTracks = ref<any[]>([])
 const hlsCurrentTrack = ref(-1)
@@ -117,6 +119,10 @@ const subtitleEntries = computed(() => {
   }))
 })
 
+const renderedSubtitleEntries = ref<
+  Array<{ lang: string; title: string; src: string; isDefault: boolean }>
+>([])
+
 // PR 5 — kino.pub picker entries. Computed off the active video so
 // switching seasons/episodes re-renders the quality and audio lists
 // without an explicit reset in PlayerModal.
@@ -155,6 +161,52 @@ function destroyHls(): void {
   nativeTracks.value = []
   attachedUrl.value = null
   playerError.value = null
+  for (const url of subtitleObjectUrls.value) URL.revokeObjectURL(url)
+  subtitleObjectUrls.value = []
+  renderedSubtitleEntries.value = []
+}
+
+function isDefaultSubtitle(lang: string, idx: number): boolean {
+  if (player.activeTab === 'kinopub') {
+    return Boolean(player.kinopubSubtitleLang) && lang === player.kinopubSubtitleLang
+  }
+  return idx === 0
+}
+
+async function refreshSubtitleTracks(): Promise<void> {
+  for (const url of subtitleObjectUrls.value) URL.revokeObjectURL(url)
+  subtitleObjectUrls.value = []
+  renderedSubtitleEntries.value = []
+  const entries = subtitleEntries.value
+  if (entries.length === 0) return
+
+  const token = getStoredToken()
+  const headers = token ? { Authorization: `Bearer ${token}` } : undefined
+  const loaded = await Promise.all(
+    entries.map(async (sub, idx) => {
+      try {
+        const res = await fetch(sub.src, { headers })
+        if (!res.ok) return null
+        const blob = await res.blob()
+        const objectUrl = URL.createObjectURL(
+          new Blob([blob], { type: 'text/vtt; charset=utf-8' }),
+        )
+        subtitleObjectUrls.value.push(objectUrl)
+        return {
+          lang: sub.lang,
+          title: sub.title,
+          src: objectUrl,
+          isDefault: isDefaultSubtitle(sub.lang, idx),
+        }
+      } catch {
+        return null
+      }
+    }),
+  )
+  renderedSubtitleEntries.value = loaded.filter(
+    (sub): sub is { lang: string; title: string; src: string; isDefault: boolean } =>
+      sub !== null,
+  )
 }
 
 /** Attach the current `player.streamUrl` to the `<video>` element.
@@ -172,6 +224,8 @@ async function attachStream(): Promise<void> {
   await nextTick()
   const video = videoRef.value
   if (!video) return
+  await refreshSubtitleTracks()
+  await nextTick()
   attachedUrl.value = url
   playerError.value = null
   if (player.streamIsHls && !video.canPlayType('application/vnd.apple.mpegurl')) {
@@ -229,6 +283,7 @@ watch(
     if (!isOpen.value || !confirmed) return
     void attachStream()
   },
+  { immediate: true },
 )
 
 watch(isOpen, (open) => {
@@ -303,6 +358,7 @@ function onKinopubFileChange(event: Event): void {
 function onKinopubSubtitleChange(event: Event): void {
   const value = (event.target as HTMLSelectElement).value
   player.selectKinopubSubtitle(value)
+  void refreshSubtitleTracks()
 }
 
 function onCopyStreamUrl(): void {
@@ -554,7 +610,7 @@ const externalPlayers = computed(() => {
               <h3 class="flex items-center gap-2 text-sm font-bold text-emerald-800">
                 <span class="text-lg">🎬</span> 2. REZKA
               </h3>
-              
+
               <div class="mt-3 space-y-4">
                 <p class="text-[11px] font-medium text-emerald-600 uppercase flex items-center gap-1.5">
                   <span class="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
@@ -582,7 +638,7 @@ const externalPlayers = computed(() => {
                       </option>
                     </select>
                   </label>
- 
+
                   <label
                     v-if="player.rezkaQualities.length > 0"
                     class="block"
@@ -629,7 +685,7 @@ const externalPlayers = computed(() => {
                       </select>
                     </label>
                   </div>
-                  
+
                   <button
                     v-if="player.isSeries"
                     type="button"
@@ -790,13 +846,13 @@ const externalPlayers = computed(() => {
               data-testid="player-stream-video"
             >
               <track
-                v-for="(sub, idx) in subtitleEntries"
+                v-for="sub in renderedSubtitleEntries"
                 :key="sub.lang"
                 kind="subtitles"
                 :label="sub.title"
                 :srclang="sub.lang"
                 :src="sub.src"
-                :default="player.activeTab === 'kinopub' ? sub.lang === player.kinopubSubtitleLang : idx === 0"
+                :default="sub.isDefault"
               />
             </video>
             <div class="mt-2 flex flex-wrap items-center gap-2 text-[11px]">

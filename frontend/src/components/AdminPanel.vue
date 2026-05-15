@@ -133,7 +133,7 @@ async function onRebuildFts(): Promise<void> {
   }
   await admin.rebuildFts()
 }
- 
+
 async function onClearDatabase(): Promise<void> {
   if (
     !window.confirm(
@@ -144,12 +144,12 @@ async function onClearDatabase(): Promise<void> {
   }
   await admin.clearDatabase()
 }
- 
+
 async function onRestart(): Promise<void> {
   const result = await admin.restartServer()
   if (result.willRestart) emit('restart-triggered')
 }
- 
+
 async function onRebuild(): Promise<void> {
   if (
     !window.confirm(

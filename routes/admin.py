@@ -213,7 +213,7 @@ def self_update(skip_pull: bool = False):
                 run_cmd(["git", "checkout", "--", "."], project_root)
             except Exception as e:
                 logger.warning(f"[UPDATE] git checkout failed: {e}")
-            
+
             output = run_cmd(["git", "pull"], project_root)
             if "Already up to date" in output and os.path.isdir(os.path.join(frontend_dir, "dist")):
                 # If code is up to date AND dist exists, we might not need to do anything.
