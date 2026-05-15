@@ -140,6 +140,10 @@ interface PlayerStoreState {
   streamLoading: boolean
   streamError: string | null
   subtitles: Record<string, Subtitle>
+  /** Available qualities for the current Rezka selection. */
+  rezkaQualities: string[]
+  /** Active tab in the stream surface. */
+  activeTab: 'kinohub' | 'rezka' | 'kinopub'
 
   // ── kino.pub branch (PR 5) ───────────────────────────────────
   // Populated lazily by `openKinopubStream()`. We don't reuse the
@@ -195,6 +199,8 @@ function emptyState(): PlayerStoreState {
     kinopubSubtitleLang: '',
     kinopubLoading: false,
     kinopubError: null,
+    rezkaQualities: [],
+    activeTab: 'rezka',
   }
 }
 
@@ -373,7 +379,7 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
 
     /** Open the stream surface for the given item. Initial source is
      *  'rezka'; the caller can switch via `selectSource()`. */
-    openStream(itemId: number, title?: string | null): void {
+    async openStream(itemId: number, title?: string | null): Promise<void> {
       Object.assign(this, emptyState())
       this.itemId = itemId
       this.itemTitle = title ?? null
@@ -384,6 +390,14 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
       // `openStream()` flow).
       void this.loadSources(itemId)
       void this.loadInfo(itemId, 'rezka')
+      // Auto-switch to Kinopub if no Rezka URL but bound to Kinopub
+      const dbItem = (await (await apiFetch(`/api/item/${itemId}`)).json())
+      if (!dbItem.rezka_url && dbItem.kinopub_id) {
+        this.activeTab = 'kinopub'
+        void this.loadKinopubInfo(itemId)
+      } else {
+        this.activeTab = 'rezka'
+      }
     },
 
     /** Close the modal and drop all state. */
@@ -605,11 +619,8 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
         this.streamUrl = data.url
         this.streamQuality = data.quality
         this.streamIsHls = Boolean(data.is_hls)
-        // Best-effort subtitle fetch — `stream_url` returns a single
-        // resolved URL but no subtitle metadata. The legacy
-        // `/api/stream/{id}` endpoint returns the full Rezka payload
-        // including subtitles; we tolerate failure silently.
-        await this._loadSubtitles(itemId, source, translator, season, episode)
+        // Load all qualities and subtitles
+        await this._loadRezkaStreamDetails(itemId, translator, season, episode)
       } catch (err) {
         if (err instanceof UnauthorizedError) {
           session.handleUnauthorized(err)
@@ -622,12 +633,9 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
       }
     },
 
-    /** Best-effort subtitle fetch via the legacy `/api/stream/{id}`
-     *  payload. Stays inside the store so PlayerModal doesn't have
-     *  to know about the second endpoint. */
-    async _loadSubtitles(
+    /** Fetch all qualities and subtitles for the current Rezka selection. */
+    async _loadRezkaStreamDetails(
       itemId: number,
-      source: StreamSource,
       translator: string | null,
       season?: string | null,
       episode?: string | null,
@@ -637,19 +645,50 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
         if (translator) params.set('translator', translator)
         if (season) params.set('season', season)
         if (episode) params.set('episode', episode)
-        if (source && source !== 'rezka') params.set('source', source)
         const qs = params.toString()
         const path = `/api/stream/${itemId}${qs ? `?${qs}` : ''}`
         const res = await apiFetch(path)
         if (!res.ok) return
         const data = (await res.json().catch(() => ({}))) as {
+          videos?: Record<string, string>
           subtitles?: Record<string, Subtitle>
           error?: string
         }
         if (data.error) return
         this.subtitles = data.subtitles ?? {}
+        this.rezkaQualities = data.videos ? Object.keys(data.videos) : []
+        // Sort qualities by rank
+        const rank = (q: string) => ({
+          '4K': 7,
+          '2K': 6,
+          '1080p Ultra': 5,
+          '1080p': 4,
+          '720p': 3,
+          '480p': 2,
+          '360p': 1,
+        }[q] || 0)
+        this.rezkaQualities.sort((a, b) => rank(b) - rank(a))
       } catch {
-        /* subtitle fetch failures are non-fatal */
+        /* non-fatal */
+      }
+    },
+
+    async selectRezkaQuality(quality: string): Promise<void> {
+      if (!this.itemId || !this.source) return
+      this.streamQuality = quality
+      await this.loadStream(
+        this.itemId,
+        this.source,
+        this.translatorId,
+        this.season,
+        this.episode,
+      )
+    },
+
+    setActiveTab(tab: 'kinohub' | 'rezka' | 'kinopub'): void {
+      this.activeTab = tab
+      if (tab === 'kinopub' && !this.kinopubInfo && this.itemId) {
+        void this.loadKinopubInfo(this.itemId)
       }
     },
 

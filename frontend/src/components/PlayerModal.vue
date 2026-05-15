@@ -185,6 +185,11 @@ async function onTranslatorChange(event: Event): Promise<void> {
   if (value) await player.selectTranslator(value)
 }
 
+async function onQualityChange(event: Event): Promise<void> {
+  const value = (event.target as HTMLSelectElement).value
+  if (value) await player.selectRezkaQuality(value)
+}
+
 async function onSeasonChange(event: Event): Promise<void> {
   const value = (event.target as HTMLSelectElement).value
   if (value) await player.selectSeason(value)
@@ -371,11 +376,40 @@ function onCopyStreamUrl(): void {
             {{ player.infoError }}
           </p>
 
+          <!-- ── Stream tabs ───────────────────────────────────── -->
+          <div class="flex items-center gap-1 border-b border-slate-100 px-1 pb-1">
+            <button
+              v-if="player.sourcesPageUrl || player.sources.length > 0"
+              type="button"
+              class="rounded-md px-3 py-1.5 text-xs font-bold transition-colors"
+              :class="player.activeTab === 'kinohub' ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:bg-slate-100'"
+              @click="player.setActiveTab('kinohub')"
+            >
+              🌐 Kinohub
+            </button>
+            <button
+              type="button"
+              class="rounded-md px-3 py-1.5 text-xs font-bold transition-colors"
+              :class="player.activeTab === 'rezka' ? 'bg-emerald-600 text-white' : 'text-slate-500 hover:bg-slate-100'"
+              @click="player.setActiveTab('rezka')"
+            >
+              🎬 Rezka
+            </button>
+            <button
+              type="button"
+              class="rounded-md px-3 py-1.5 text-xs font-bold transition-colors"
+              :class="player.activeTab === 'kinopub' ? 'bg-fuchsia-600 text-white' : 'text-slate-500 hover:bg-slate-100'"
+              @click="player.setActiveTab('kinopub')"
+            >
+              💎 Kino.pub
+            </button>
+          </div>
+
           <!-- ── Stream sections ───────────────────────────────────── -->
-          <div class="grid grid-cols-1 gap-4">
+          <div class="grid grid-cols-1">
             <!-- 1. Kinohub & Alternative Players -->
             <section
-              v-if="player.sourcesPageUrl || player.sources.length > 0"
+              v-if="player.activeTab === 'kinohub' && (player.sourcesPageUrl || player.sources.length > 0)"
               class="rounded-xl border border-indigo-100 bg-indigo-50/30 p-4"
               data-testid="player-section-kinohub"
             >
@@ -416,6 +450,7 @@ function onCopyStreamUrl(): void {
 
             <!-- 2. REZKA -->
             <section
+              v-if="player.activeTab === 'rezka'"
               class="rounded-xl border border-emerald-100 bg-emerald-50/30 p-4"
               data-testid="player-section-rezka"
             >
@@ -423,7 +458,7 @@ function onCopyStreamUrl(): void {
                 <span class="text-lg">🎬</span> 2. REZKA
               </h3>
               
-              <div v-if="player.source !== 'kinopub'" class="mt-3 space-y-4">
+              <div class="mt-3 space-y-4">
                 <p class="text-[11px] font-medium text-emerald-600 uppercase flex items-center gap-1.5">
                   <span class="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
                   Встроенный плеер активен
@@ -447,6 +482,26 @@ function onCopyStreamUrl(): void {
                         :value="t.id"
                       >
                         {{ t.name }}{{ t.premium ? ' ★' : '' }}
+                      </option>
+                    </select>
+                  </label>
+ 
+                  <label
+                    v-if="player.rezkaQualities.length > 0"
+                    class="block"
+                  >
+                    <span class="block text-xs font-semibold text-slate-500 uppercase mb-1">Качество</span>
+                    <select
+                      class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm shadow-sm focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
+                      :value="player.streamQuality ?? ''"
+                      @change="onQualityChange"
+                    >
+                      <option
+                        v-for="q in player.rezkaQualities"
+                        :key="q"
+                        :value="q"
+                      >
+                        {{ q }}
                       </option>
                     </select>
                   </label>
@@ -488,13 +543,12 @@ function onCopyStreamUrl(): void {
                   </button>
                 </div>
               </div>
-              <div v-else class="mt-2 text-[11px] text-slate-400 italic">
-                Для перехода на Rezka выберите её в карточке фильма
-              </div>
+
             </section>
 
             <!-- 3. KINOPUB -->
             <section
+              v-if="player.activeTab === 'kinopub'"
               class="rounded-xl border border-fuchsia-100 bg-fuchsia-50/30 p-4"
               data-testid="player-section-kinopub"
             >
@@ -502,7 +556,7 @@ function onCopyStreamUrl(): void {
                 <span class="text-lg">💎</span> 3. КИНОПАБ
               </h3>
 
-              <div v-if="player.source === 'kinopub'" class="mt-3 space-y-4">
+              <div class="mt-3 space-y-4">
                  <p class="text-[11px] font-medium text-fuchsia-600 uppercase flex items-center gap-1.5">
                   <span class="h-1.5 w-1.5 rounded-full bg-fuchsia-500 animate-pulse"></span>
                   Kino.pub активен
@@ -580,9 +634,6 @@ function onCopyStreamUrl(): void {
                   </label>
                 </div>
               </div>
-              <div v-else class="mt-2 text-[11px] text-slate-400 italic">
-                Для перехода на Kino.pub выберите его в карточке фильма
-              </div>
             </section>
           </div>
 
@@ -629,12 +680,12 @@ function onCopyStreamUrl(): void {
                 :label="sub.title"
                 :srclang="sub.lang"
                 :src="sub.src"
-                :default="player.source === 'kinopub' ? sub.lang === player.kinopubSubtitleLang : idx === 0"
+                :default="player.activeTab === 'kinopub' ? sub.lang === player.kinopubSubtitleLang : idx === 0"
               />
             </video>
             <div class="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
               <span class="rounded bg-slate-100 px-2 py-0.5 text-slate-600">
-                Качество: {{ player.streamQuality ?? '—' }}
+                Качество: {{ player.activeTab === 'kinopub' ? (player.kinopubVideo?.files?.[player.kinopubFileIdx ?? 0]?.quality ?? '—') : (player.streamQuality ?? '—') }}
               </span>
                <a
                 v-if="player.streamM3uUrl"
