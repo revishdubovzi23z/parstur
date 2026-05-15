@@ -47,10 +47,20 @@ async function toggleNewOnly(): Promise<void> {
 
 const newCollectionName = ref('')
 const showAddForm = ref(false)
+const collectionsExpanded = ref(true)
 const submitting = ref(false)
 
 const selectedCategoryId = computed(() => feed.filters.categoryId)
 const selectedCollectionId = computed(() => collections.selectedId)
+const selectedCategory = computed(() =>
+  categories.items.find((cat) => cat.id === selectedCategoryId.value),
+)
+const selectedCategoryValue = computed({
+  get: () => String(selectedCategoryId.value),
+  set: (value: string) => {
+    void selectCategory(Number(value))
+  },
+})
 
 async function selectCategory(id: number): Promise<void> {
   collections.select(null)
@@ -73,6 +83,11 @@ async function submitNewCollection(): Promise<void> {
     newCollectionName.value = ''
     showAddForm.value = false
   }
+}
+
+function toggleAddForm(): void {
+  collectionsExpanded.value = true
+  showAddForm.value = !showAddForm.value
 }
 
 async function onDelete(id: number): Promise<void> {
@@ -195,61 +210,71 @@ const categoryLabel = (id: number, name: string): string => {
       <h2 class="px-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
         Категории
       </h2>
-      <ul class="mt-2 flex flex-col">
-        <li
-          v-for="cat in categories.items"
-          :key="cat.id"
-        >
-          <button
-            type="button"
-            class="w-full flex items-center justify-between gap-2 px-2 py-1.5 text-left text-sm rounded-md transition"
-            :class="
-              selectedCategoryId === cat.id && !selectedCollectionId
-                ? 'bg-slate-900 text-white'
-                : 'text-slate-700 hover:bg-slate-100'
-            "
-            :data-testid="`sidebar-category-${cat.id}`"
-            @click="selectCategory(cat.id)"
+      <div class="mt-2 rounded-xl border border-slate-200 bg-white p-2 shadow-sm">
+        <label class="block">
+          <span class="sr-only">Выбрать категорию</span>
+          <select
+            v-model="selectedCategoryValue"
+            class="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-800 shadow-sm focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900/10"
+            data-testid="sidebar-category-select"
+            :disabled="categories.loading || !categories.items.length"
           >
-            <span class="truncate">{{ categoryLabel(cat.id, cat.name) }}</span>
-            <span
-              class="text-xs font-medium"
-              :class="
-                selectedCategoryId === cat.id && !selectedCollectionId
-                  ? 'text-slate-300'
-                  : 'text-slate-400'
-              "
+            <option
+              v-for="cat in categories.items"
+              :key="cat.id"
+              :value="String(cat.id)"
+              :data-testid="`sidebar-category-option-${cat.id}`"
             >
-              {{ cat.count }}
-            </span>
-          </button>
-        </li>
-        <li
+              {{ categoryLabel(cat.id, cat.name) }} — {{ cat.count }}
+            </option>
+          </select>
+        </label>
+        <div
+          v-if="selectedCategory"
+          class="mt-2 flex items-center justify-between gap-2 px-1 text-xs text-slate-500"
+          data-testid="sidebar-category-selected"
+        >
+          <span class="truncate">
+            Выбрано: {{ categoryLabel(selectedCategory.id, selectedCategory.name) }}
+          </span>
+          <span class="shrink-0 font-semibold text-slate-700">
+            {{ selectedCategory.count }}
+          </span>
+        </div>
+        <p
           v-if="!categories.items.length && !categories.loading"
-          class="px-2 py-1.5 text-xs text-slate-400"
+          class="px-1 py-1.5 text-xs text-slate-400"
         >
           Категорий пока нет.
-        </li>
-      </ul>
+        </p>
+      </div>
     </section>
 
     <section data-testid="sidebar-collections">
       <div class="flex items-center justify-between px-1">
-        <h2 class="text-xs font-semibold uppercase tracking-wide text-slate-500">
-          Коллекции
-        </h2>
+        <button
+          type="button"
+          class="flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-900"
+          :aria-expanded="collectionsExpanded"
+          data-testid="sidebar-collections-toggle"
+          @click="collectionsExpanded = !collectionsExpanded"
+        >
+          <span>{{ collectionsExpanded ? '▾' : '▸' }}</span>
+          <span>Коллекции</span>
+          <span class="font-medium text-slate-400">({{ collections.items.length }})</span>
+        </button>
         <button
           type="button"
           class="text-xs font-semibold text-slate-600 hover:text-slate-900"
           data-testid="sidebar-collections-toggle-add"
-          @click="showAddForm = !showAddForm"
+          @click="toggleAddForm"
         >
           {{ showAddForm ? '×' : '+' }}
         </button>
       </div>
 
       <form
-        v-if="showAddForm"
+        v-if="collectionsExpanded && showAddForm"
         class="mt-2 flex items-center gap-2"
         data-testid="sidebar-collections-add-form"
         @submit.prevent="submitNewCollection"
@@ -272,7 +297,11 @@ const categoryLabel = (id: number, name: string): string => {
         </button>
       </form>
 
-      <ul class="mt-2 flex flex-col">
+      <ul
+        v-if="collectionsExpanded"
+        class="mt-2 flex flex-col"
+        data-testid="sidebar-collections-list"
+      >
         <li
           v-for="coll in collections.items"
           :key="coll.id"

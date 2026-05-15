@@ -63,14 +63,35 @@ describe('FeedFilters auto-apply', () => {
     expect(feed.filters.hideRated).toBe(true)
   })
 
-  it('debounces numeric input edits and only fetches once after the window', async () => {
+  it('refreshes immediately when rating sliders change', async () => {
     const wrapper = mount(FeedFilters)
     await flushPromises()
     const baseline = feedCalls().length
 
     await wrapper.find('[data-testid="feed-filters-min-kp"]').setValue('5')
     await wrapper.find('[data-testid="feed-filters-max-kp"]').setValue('9')
-    // No fetch yet — still inside the 350 ms debounce window.
+    await flushPromises()
+
+    const kpCalls = feedCalls()
+    expect(kpCalls.length).toBe(baseline + 2)
+    expect(kpCalls.at(-1)).toContain('min_kp=5')
+    expect(kpCalls.at(-1)).toContain('max_kp=9')
+
+    await wrapper.find('[data-testid="feed-filters-min-imdb"]').setValue('6')
+    await flushPromises()
+
+    const calls = feedCalls()
+    expect(calls.length).toBe(baseline + 3)
+    expect(calls.at(-1)).toContain('min_imdb=6')
+  })
+
+  it('debounces year input edits and only fetches once after the window', async () => {
+    const wrapper = mount(FeedFilters)
+    await flushPromises()
+    const baseline = feedCalls().length
+
+    await wrapper.find('[data-testid="feed-filters-min-year"]').setValue('2000')
+    await wrapper.find('[data-testid="feed-filters-max-year"]').setValue('2020')
     expect(feedCalls().length).toBe(baseline)
 
     vi.advanceTimersByTime(400)
@@ -78,8 +99,8 @@ describe('FeedFilters auto-apply', () => {
 
     const calls = feedCalls()
     expect(calls.length).toBe(baseline + 1)
-    expect(calls.at(-1)).toContain('min_kp=5')
-    expect(calls.at(-1)).toContain('max_kp=9')
+    expect(calls.at(-1)).toContain('min_year=2000')
+    expect(calls.at(-1)).toContain('max_year=2020')
   })
 
   it('submitting the form (Enter) applies pending values immediately', async () => {
