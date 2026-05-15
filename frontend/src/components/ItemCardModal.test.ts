@@ -445,9 +445,13 @@ describe('ItemCardModal.vue', () => {
         .find('[data-testid="item-modal-watch-kinopub-android"]')
         .attributes('href')
       expect(href).toContain('intent://kino.pub/item/4242#')
+      // When `kinopub_url` is empty we synthesise the canonical
+      // `/item/view/<id>` shape for the browser fallback (matches
+      // the public kino.pub URL the Android app's intent-filter
+      // expects).
       expect(href).toContain(
         `S.browser_fallback_url=${encodeURIComponent(
-          'https://kino.pub/item/4242',
+          'https://kino.pub/item/view/4242',
         )}`,
       )
     })

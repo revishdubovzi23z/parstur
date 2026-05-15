@@ -184,7 +184,7 @@ def test_run_binds_matching_item(tmp_db, fake_client) -> None:
         ).fetchone()
     assert row["kinopub_id"] == 4242
     assert row["kinopub_type"] == "movie"
-    assert row["kinopub_url"] == "https://kino.pub/item/4242"
+    assert row["kinopub_url"] == "https://kino.pub/item/view/4242"
     assert row["checked_kinopub"] == 1
 
 

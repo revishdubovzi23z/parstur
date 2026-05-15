@@ -634,21 +634,26 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
       this.episode = episode ?? null
       this.streamLoading = true
 
-      // Load all qualities and subtitles in parallel with resolving the URL
+      // Resolve the playable URL first, then kick off the qualities/
+      // subtitles loader in parallel. We initiate the `/api/stream_url/`
+      // fetch synchronously before yielding so it lands in the
+      // `fetch` mock ahead of the details call, and `_loadRezkaStreamDetails`
+      // still runs concurrently with the awaited promise.
+      const params = new URLSearchParams()
+      if (translator) params.set('translator', translator)
+      if (season) params.set('season', season)
+      if (episode) params.set('episode', episode)
+      // `source` is forwarded for future backends; current code
+      // ignores it but the legacy URL pattern preserves the
+      // contract.
+      if (source && source !== 'rezka') params.set('source', source)
+      const qs = params.toString()
+      const path = `/api/stream_url/${itemId}${qs ? `?${qs}` : ''}`
+      const streamUrlPromise = apiFetch(path)
       void this._loadRezkaStreamDetails(itemId, translator, season, episode)
 
       try {
-        const params = new URLSearchParams()
-        if (translator) params.set('translator', translator)
-        if (season) params.set('season', season)
-        if (episode) params.set('episode', episode)
-        // `source` is forwarded for future backends; current code
-        // ignores it but the legacy URL pattern preserves the
-        // contract.
-        if (source && source !== 'rezka') params.set('source', source)
-        const qs = params.toString()
-        const path = `/api/stream_url/${itemId}${qs ? `?${qs}` : ''}`
-        const res = await apiFetch(path)
+        const res = await streamUrlPromise
         const data = (await res.json().catch(() => ({}))) as StreamUrlResponse & {
           error?: string
         }
