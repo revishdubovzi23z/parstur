@@ -345,7 +345,19 @@ def _map_video(video: dict) -> dict:
     for f in video.get("files", []) or []:
         if not isinstance(f, dict):
             continue
-        url = f.get("url") or f.get("file")
+        url_val = f.get("url") or f.get("file")
+        if isinstance(url_val, dict):
+            # Prefer hls -> http -> hls2 -> hls4
+            url = (
+                url_val.get("hls")
+                or url_val.get("http")
+                or url_val.get("hls2")
+                or url_val.get("hls4")
+                or next(iter(url_val.values()), None)
+            )
+        else:
+            url = url_val
+
         if not url:
             continue
         files.append(

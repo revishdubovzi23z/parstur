@@ -557,7 +557,18 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
           this.season = null
           this.episode = null
         }
+        // Auto-load the first stream for Rezka
+        if (source === 'rezka' && this.translatorId) {
+          void this.loadStream(
+            itemId,
+            'rezka',
+            this.translatorId,
+            this.season,
+            this.episode,
+          )
+        }
       } catch (err) {
+        console.error('[Player] loadInfo failed:', err)
         if (err instanceof UnauthorizedError) {
           session.handleUnauthorized(err)
           this.infoError = 'Требуется вход'
@@ -597,6 +608,10 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
       this.season = season ?? null
       this.episode = episode ?? null
       this.streamLoading = true
+      
+      // Load all qualities and subtitles in parallel with resolving the URL
+      void this._loadRezkaStreamDetails(itemId, translator, season, episode)
+
       try {
         const params = new URLSearchParams()
         if (translator) params.set('translator', translator)
@@ -619,9 +634,8 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
         this.streamUrl = data.url
         this.streamQuality = data.quality
         this.streamIsHls = Boolean(data.is_hls)
-        // Load all qualities and subtitles
-        await this._loadRezkaStreamDetails(itemId, translator, season, episode)
       } catch (err) {
+        console.error('[Player] loadStream failed:', err)
         if (err instanceof UnauthorizedError) {
           session.handleUnauthorized(err)
           this.streamError = 'Требуется вход'
@@ -661,8 +675,8 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
         const rank = (q: string) => ({
           '4K': 7,
           '2K': 6,
-          '1080p Ultra': 5,
-          '1080p': 4,
+          '1080p': 5,
+          '1080p Ultra': 4,
           '720p': 3,
           '480p': 2,
           '360p': 1,
