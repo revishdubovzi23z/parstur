@@ -291,7 +291,7 @@ def search(
     kp_id: str | None = None,
     imdb_id: str | None = None,
 ) -> list[dict]:
-    """`GET /v1/items?q=<query>` filtered by year/type.
+    """`GET /v1/items/search?q=<query>` filtered by year/type.
 
     Returns a list of `{id, title, year, type, url, poster}` dicts in
     the shape the SPA expects. We intentionally strip the heavier

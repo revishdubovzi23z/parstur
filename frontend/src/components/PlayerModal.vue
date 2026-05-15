@@ -359,7 +359,7 @@ async function onKinopubSubtitleChange(event: Event): Promise<void> {
   player.selectKinopubSubtitle(value)
   await refreshSubtitleTracks()
   await nextTick()
-  
+
   const video = videoRef.value
   if (!video) return
 
@@ -377,13 +377,13 @@ async function onKinopubSubtitleChange(event: Event): Promise<void> {
         tracks[i].mode = 'disabled'
       }
     }
-    
+
     attempts++
     if (!foundAndSet && attempts < 10) {
       setTimeout(trySetMode, 100)
     }
   }
-  
+
   trySetMode()
 }
 

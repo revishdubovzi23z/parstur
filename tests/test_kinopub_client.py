@@ -192,8 +192,10 @@ def test_search_includes_bearer_token_and_filters() -> None:
     items = c.search("Foo", type_="movie", year=2020, limit=10)
     assert items == [{"id": 1, "title": "Foo"}]
     call = fake.calls[0]
+    assert call["url"].endswith("/v1/items/search")
     assert call["headers"]["Authorization"] == "Bearer abcdef"
     assert call["params"]["q"] == "Foo"
+    assert call["params"]["field"] == "title"
     assert call["params"]["type"] == "movie"
     assert call["params"]["year"] == 2020
     assert call["params"]["perpage"] == 10

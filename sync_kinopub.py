@@ -331,20 +331,36 @@ def run(
         item_id = int(item["id"])
         try:
             queries = _candidate_titles(item) or [str(item.get("title") or "").strip()]
-            primary_query = queries[0] if queries else ""
-            if not primary_query:
+            queries = [q for q in queries if q]
+            if not queries:
                 db.mark_checked(item_id, STATUS_KEY)
                 skipped += 1
                 continue
 
             type_hint = CATEGORY_TYPE_HINT.get(int(item.get("category_id") or 0))
             year_hint = item.get("year") if isinstance(item.get("year"), int) else None
-            raw = client.search(
-                primary_query,
-                type_=type_hint,
-                year=year_hint,
-                limit=SEARCH_LIMIT,
-            )
+            raw: list[dict] = []
+            seen_ids: set[int] = set()
+            for query in queries:
+                results = client.search(
+                    query,
+                    type_=type_hint,
+                    year=year_hint,
+                    limit=SEARCH_LIMIT,
+                )
+                for entry in results:
+                    if not isinstance(entry, dict) or entry.get("id") is None:
+                        raw.append(entry)
+                        continue
+                    try:
+                        cand_id = int(entry["id"])
+                    except (TypeError, ValueError):
+                        raw.append(entry)
+                        continue
+                    if cand_id in seen_ids:
+                        continue
+                    seen_ids.add(cand_id)
+                    raw.append(entry)
             pick = best_candidate(item=item, raw_results=raw, type_hint=type_hint)
             if pick is None:
                 db.mark_checked(item_id, STATUS_KEY)
