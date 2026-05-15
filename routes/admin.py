@@ -209,7 +209,7 @@ def self_update():
             # Check for npm
             npm_cmd = "npm.cmd" if sys.platform == "win32" else "npm"
             try:
-                run_cmd([npm_cmd, "install"], frontend_dir, 600)
+                run_cmd([npm_cmd, "install", "--legacy-peer-deps"], frontend_dir, 600)
                 run_cmd([npm_cmd, "run", "build"], frontend_dir, 600)
             except Exception as e:
                 warn_msg = f"Frontend build skipped or failed: {e}"
