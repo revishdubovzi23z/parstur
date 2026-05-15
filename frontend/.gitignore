@@ -1,7 +1,6 @@
 # Build output and node_modules are produced by `npm run build` and
 # `npm ci`; both are derivative and should never be checked in.
 node_modules/
-dist/
 .vite/
 *.tsbuildinfo
 
