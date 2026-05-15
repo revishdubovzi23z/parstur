@@ -27,6 +27,17 @@ const videoRef = ref<HTMLVideoElement | null>(null)
 const attachedUrl = ref<string | null>(null)
 const playerError = ref<string | null>(null)
 
+const hlsTracks = ref<any[]>([])
+const hlsCurrentTrack = ref(-1)
+
+function onAudioTrackChange(e: Event) {
+  const idx = parseInt((e.target as HTMLSelectElement).value)
+  if (hlsRef.value) {
+    hlsRef.value.audioTrack = idx
+    hlsCurrentTrack.value = idx
+  }
+}
+
 const isOpen = computed(() => player.isOpen)
 const mode = computed(() => player.mode)
 
@@ -114,6 +125,8 @@ function destroyHls(): void {
     }
     hlsRef.value = null
   }
+  hlsTracks.value = []
+  hlsCurrentTrack.value = -1
   attachedUrl.value = null
   playerError.value = null
 }
@@ -144,6 +157,14 @@ async function attachStream(): Promise<void> {
     hls.loadSource(url)
     hls.attachMedia(video)
     hlsRef.value = hls
+
+    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      hlsTracks.value = hls.audioTracks
+      hlsCurrentTrack.value = hls.audioTrack
+    })
+    hls.on(Hls.Events.AUDIO_TRACK_SWITCHED, (_, data) => {
+      hlsCurrentTrack.value = data.id
+    })
   } else {
     video.src = url
   }
@@ -660,51 +681,52 @@ const externalPlayers = computed(() => {
 
 
           <!-- ── Shared video element ───────────────────────────────── -->
-          <p
-            v-if="player.streamLoading"
-            class="text-xs text-slate-500"
-            data-testid="player-stream-resolving"
-          >
-            Резолвим поток…
-          </p>
-          <p
-            v-if="player.streamError"
-            class="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800"
-            data-testid="player-stream-error"
-          >
-            {{ player.streamError }}
-          </p>
-          <p
-            v-if="playerError"
-            class="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800"
-            data-testid="player-stream-attach-error"
-          >
-            {{ playerError }}
-          </p>
-
-          <div
-            v-if="player.streamUrl && !player.streamConfirmed"
-            class="flex flex-col items-center justify-center rounded-xl bg-slate-50 border border-slate-200 p-8 text-center"
-            data-testid="player-confirm-wrap"
-          >
-            <p class="text-sm text-slate-600 mb-4">
-              Поток готов к воспроизведению
-            </p>
-            <button
-              type="button"
-              class="group relative flex items-center gap-3 rounded-full bg-indigo-600 px-8 py-3.5 text-lg font-bold text-white shadow-lg transition-all hover:bg-indigo-700 hover:shadow-indigo-200 active:scale-95"
-              @click="player.confirmStream()"
-              data-testid="player-confirm-btn"
+          <div v-if="player.activeTab !== 'kinohub'">
+            <p
+              v-if="player.streamLoading"
+              class="text-xs text-slate-500"
+              data-testid="player-stream-resolving"
             >
-              <span class="text-2xl transition-transform group-hover:scale-110">▶</span>
-              СМОТРЕТЬ
-            </button>
-          </div>
-
-          <div
-            v-if="player.streamUrl && player.streamConfirmed"
-            data-testid="player-stream-video-wrap"
-          >
+              Резолвим поток…
+            </p>
+            <p
+              v-if="player.streamError"
+              class="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800"
+              data-testid="player-stream-error"
+            >
+              {{ player.streamError }}
+            </p>
+            <p
+              v-if="playerError"
+              class="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800"
+              data-testid="player-stream-attach-error"
+            >
+              {{ playerError }}
+            </p>
+  
+            <div
+              v-if="player.streamUrl && !player.streamConfirmed"
+              class="flex flex-col items-center justify-center rounded-xl bg-slate-50 border border-slate-200 p-8 text-center"
+              data-testid="player-confirm-wrap"
+            >
+              <p class="text-sm text-slate-600 mb-4">
+                Поток готов к воспроизведению
+              </p>
+              <button
+                type="button"
+                class="group relative flex items-center gap-3 rounded-full bg-indigo-600 px-8 py-3.5 text-lg font-bold text-white shadow-lg transition-all hover:bg-indigo-700 hover:shadow-indigo-200 active:scale-95"
+                @click="player.confirmStream()"
+                data-testid="player-confirm-btn"
+              >
+                <span class="text-2xl transition-transform group-hover:scale-110">▶</span>
+                СМОТРЕТЬ
+              </button>
+            </div>
+  
+            <div
+              v-if="player.streamUrl && player.streamConfirmed"
+              data-testid="player-stream-video-wrap"
+            >
             <video
               ref="videoRef"
               controls
@@ -727,6 +749,20 @@ const externalPlayers = computed(() => {
               <span class="rounded bg-slate-100 px-2 py-0.5 text-slate-600">
                 Качество: {{ player.activeTab === 'kinopub' ? (player.kinopubVideo?.files?.[player.kinopubFileIdx ?? 0]?.quality ?? '—') : (player.streamQuality ?? '—') }}
               </span>
+
+              <!-- Audio Tracks (HLS.js) -->
+              <div v-if="hlsTracks.length > 1" class="flex items-center gap-1">
+                <span class="text-slate-400 font-bold uppercase text-[9px]">Дорожка:</span>
+                <select
+                  class="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                  :value="hlsCurrentTrack"
+                  @change="onAudioTrackChange"
+                >
+                  <option v-for="t in hlsTracks" :key="t.id" :value="t.id">
+                    {{ t.name || `Дорожка ${t.id + 1}` }}
+                  </option>
+                </select>
+              </div>
                <a
                 v-if="player.streamM3uUrl"
                 :href="player.streamM3uUrl"
@@ -770,6 +806,7 @@ const externalPlayers = computed(() => {
                   {{ p.name }}
                 </a>
               </div>
+            </div>
             </div>
           </div>
         </section>
