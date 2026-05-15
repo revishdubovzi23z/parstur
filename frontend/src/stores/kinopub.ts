@@ -300,7 +300,7 @@ export const useKinopubStore = defineStore('kinopub', {
      * them as picker rows. */
     async search(
       title: string,
-      opts: { year?: number | null; type?: string | null; limit?: number } = {},
+      opts: { year?: number | null; type?: string | null; limit?: number; kp_id?: string | null; imdb_id?: string | null } = {},
     ): Promise<void> {
       const q = title.trim()
       if (q.length === 0) {
@@ -315,6 +315,8 @@ export const useKinopubStore = defineStore('kinopub', {
         if (opts.year) params.set('year', String(opts.year))
         if (opts.type) params.set('type', opts.type)
         if (opts.limit) params.set('limit', String(opts.limit))
+        if (opts.kp_id) params.set('kp_id', opts.kp_id)
+        if (opts.imdb_id) params.set('imdb_id', opts.imdb_id)
         const res = await apiFetch(`/api/kinopub/search?${params.toString()}`)
         if (!res.ok) {
           const detail = await safeReadDetail(res)

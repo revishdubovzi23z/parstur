@@ -202,6 +202,8 @@ def search(
     year: int | None = Query(default=None, ge=1900, le=2100),
     type_: str | None = Query(default=None, alias="type", max_length=32),
     limit: int = Query(default=25, ge=1, le=50),
+    kp_id: str | None = Query(default=None),
+    imdb_id: str | None = Query(default=None),
 ) -> SearchResponse:
     """Search the kino.pub catalog by title (optionally filtered by year/type).
 
@@ -210,7 +212,9 @@ def search(
     """
     _ensure_enabled()
     try:
-        results = _kinopub.search(title, year=year, type_=type_, limit=limit)
+        results = _kinopub.search(
+            title, year=year, type_=type_, limit=limit, kp_id=kp_id, imdb_id=imdb_id
+        )
     except KinopubError as e:
         raise _map_kinopub_error(e) from e
     return SearchResponse(results=[SearchResultItem(**r) for r in results])

@@ -128,10 +128,28 @@ def score_candidate(
 ) -> int:
     """Return the matcher score for one kino.pub search result against
     one par2 item. Pure function — every parameter is data."""
+
+    # ID matching is the strongest signal: guaranteed match if they agree.
+    cand_kp = str(candidate.get("kinopoisk") or "")
+    cand_imdb = str(candidate.get("imdb") or "")
+    item_kp = str(item.get("kp_id") or "")
+    item_imdb = str(item.get("imdb_id") or "")
+
+    if item_imdb and item_imdb.startswith("tt"):
+        item_imdb = item_imdb[2:]
+    if cand_imdb and cand_imdb.startswith("tt"):
+        cand_imdb = cand_imdb[2:]
+
+    if item_kp and cand_kp and item_kp == cand_kp:
+        return 1000
+    if item_imdb and cand_imdb and item_imdb == cand_imdb:
+        return 1000
+
     score = 0
 
     # Title overlap is the floor: every other signal piles on top.
     cand_title_norm = _normalise_title(candidate.get("title"))
+    title_matched = False
     if cand_title_norm:
         for piece in _candidate_titles(item):
             piece_norm = _normalise_title(piece)
@@ -139,10 +157,17 @@ def score_candidate(
                 continue
             if piece_norm == cand_title_norm:
                 score += SCORE_TITLE_MATCH
+                title_matched = True
                 break
             if piece_norm in cand_title_norm or cand_title_norm in piece_norm:
                 score += SCORE_TITLE_PARTIAL
+                title_matched = True
                 break
+
+    # If the title didn't match at all, we reject the candidate immediately
+    # (unless it was an exact ID match, which is handled above).
+    if not title_matched:
+        return 0
 
     cand_year = candidate.get("year")
     item_year = item.get("year")

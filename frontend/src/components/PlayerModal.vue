@@ -228,11 +228,7 @@ async function attachStream(): Promise<void> {
   await nextTick()
   attachedUrl.value = url
   playerError.value = null
-  if (player.streamIsHls && !video.canPlayType('application/vnd.apple.mpegurl')) {
-    if (!Hls.isSupported()) {
-      playerError.value = 'Браузер не поддерживает HLS'
-      return
-    }
+  if (player.streamIsHls && Hls.isSupported()) {
     const hls = new Hls()
     hls.loadSource(url)
     hls.attachMedia(video)
@@ -241,6 +237,9 @@ async function attachStream(): Promise<void> {
     hls.on(Hls.Events.MANIFEST_PARSED, () => {
       hlsTracks.value = hls.audioTracks
       hlsCurrentTrack.value = hls.audioTrack
+    })
+    hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, (_, data) => {
+      hlsTracks.value = data.audioTracks
     })
     hls.on(Hls.Events.LEVEL_LOADED, () => {
        // Sometimes tracks appear after level is loaded
@@ -252,7 +251,7 @@ async function attachStream(): Promise<void> {
     hls.on(Hls.Events.AUDIO_TRACK_SWITCHED, (_, data) => {
       hlsCurrentTrack.value = data.id
     })
-  } else {
+  } else if (player.streamIsHls || video.canPlayType('application/vnd.apple.mpegurl')) {
     video.src = url
     // For native HLS (Safari), we can try to access audioTracks
     // but it's often not available until after the first play or metadata load.
@@ -355,10 +354,37 @@ function onKinopubFileChange(event: Event): void {
   if (Number.isFinite(value)) player.selectKinopubFile(value)
 }
 
-function onKinopubSubtitleChange(event: Event): void {
+async function onKinopubSubtitleChange(event: Event): Promise<void> {
   const value = (event.target as HTMLSelectElement).value
   player.selectKinopubSubtitle(value)
-  void refreshSubtitleTracks()
+  await refreshSubtitleTracks()
+  await nextTick()
+  
+  const video = videoRef.value
+  if (!video) return
+
+  const selectedLang = player.kinopubSubtitleLang
+  // Retry loop to ensure the track is loaded and set to showing
+  let attempts = 0
+  const trySetMode = () => {
+    let foundAndSet = false
+    const tracks = video.textTracks
+    for (let i = 0; i < tracks.length; i++) {
+      if (tracks[i].language === selectedLang) {
+        tracks[i].mode = 'showing'
+        foundAndSet = true
+      } else {
+        tracks[i].mode = 'disabled'
+      }
+    }
+    
+    attempts++
+    if (!foundAndSet && attempts < 10) {
+      setTimeout(trySetMode, 100)
+    }
+  }
+  
+  trySetMode()
 }
 
 function onCopyStreamUrl(): void {
@@ -763,8 +789,21 @@ const externalPlayers = computed(() => {
                     </select>
                   </label>
 
+                  <label v-if="availableTracks.length > 0" class="block">
+                    <span class="block text-xs font-semibold text-slate-500 uppercase mb-1">Дорожка</span>
+                    <select
+                      class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm shadow-sm focus:border-fuchsia-500 focus:ring-1 focus:ring-fuchsia-500"
+                      :value="currentTrackId"
+                      @change="onAudioTrackChange"
+                    >
+                      <option v-for="t in availableTracks" :key="t.id" :value="t.id">
+                        {{ t.name || `Дорожка ${t.id + 1}` }}
+                      </option>
+                    </select>
+                  </label>
+
                   <p
-                    v-if="kinopubAudioEntries.length > 0"
+                    v-else-if="kinopubAudioEntries.length > 0"
                     class="text-[11px] text-slate-500 bg-white/50 rounded px-2 py-1 border border-slate-100"
                   >
                     <span class="font-semibold uppercase text-[9px] text-slate-400 block mb-0.5">Дорожки</span>

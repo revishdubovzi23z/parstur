@@ -234,6 +234,8 @@ async function onKinopubSearch(): Promise<void> {
   kinopubSearchOpen.value = true
   await kinopub.search(q, {
     year: cur.year ?? undefined,
+    kp_id: cur.kp_id,
+    imdb_id: cur.imdb_id,
   })
 }
 

@@ -271,7 +271,7 @@ def test_run_continues_past_api_errors(tmp_db, fake_client) -> None:
         call_count["n"] += 1
         if call_count["n"] == 1:
             raise KinopubAPIError(500, "upstream sneezed")
-        return [{"id": 555, "title": "Second", "year": 2010, "type": "movie"}]
+        return [{"id": 555, "title": "First", "year": 2010, "type": "movie"}]
 
     fake_client.search = search_with_error  # type: ignore[assignment]
 

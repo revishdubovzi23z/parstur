@@ -180,9 +180,9 @@ def test_assets_path_is_not_auth_gated(monkeypatch) -> None:
     candidate = next(assets.iterdir())
     client = TestClient(main.app)
     r = client.get(f"/assets/{candidate.name}")
-    assert (
-        r.status_code == 200
-    ), f"/assets/{candidate.name} must be public; got {r.status_code} {r.text!r}"
+    assert r.status_code == 200, (
+        f"/assets/{candidate.name} must be public; got {r.status_code} {r.text!r}"
+    )
     # And a sibling /api/* without a Bearer token must 401 so we know
     # the gate actually ran (rather than auth being silently off).
     r = client.get("/api/collections")
