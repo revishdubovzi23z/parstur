@@ -103,7 +103,11 @@ def _get_folder_items(url, session):
         logger.info(f"      [+] Found {found_on_page} items on page {page}")
 
         # Rezka favorite pagination: look for 'next' class or 'paginator-next' or similar
-        pagination = soup.select_one("a.next, a.paginator-next, .b-navigation a:-fast-ascii('Следующая')")
+        pagination = soup.select_one("a.next, a.paginator-next")
+        if not pagination:
+            # Fallback: look for <a> containing "Следующая" text
+            pagination = soup.find("a", string=re.compile(r"Следующая|Вперед", re.I))
+        
         if not pagination:
             # Fallback regex search for any 'next' in class
             pagination = soup.find("a", class_=re.compile(r"next|pag", re.I))

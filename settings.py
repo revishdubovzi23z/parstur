@@ -245,7 +245,7 @@ class Settings(
         description="Path to the main application log file.",
     )
     restart_command: list[str] | None = Field(
-        default=None,
+        default=["systemctl", "restart", "parsclode"],
         description="Command to run when the server needs to restart (e.g. ['systemctl', 'restart', 'parsclode']).",
     )
 
