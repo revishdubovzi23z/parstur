@@ -234,6 +234,8 @@ async function onKinopubSearch(): Promise<void> {
   kinopubSearchOpen.value = true
   await kinopub.search(q, {
     year: cur.year ?? undefined,
+    kp_id: cur.kp_id,
+    imdb_id: cur.imdb_id,
   })
 }
 
@@ -963,6 +965,7 @@ function onToggleEditIds(): void {
                   rezka_url: 'Ссылка Rezka',
                   kp_rating: 'Рейтинг КП',
                   imdb_rating: 'Рейтинг IMDb',
+                  kinopub_id: 'ID Kino.pub',
                 } as Record<string, string>
               )[f] || f
             }}

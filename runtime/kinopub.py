@@ -288,8 +288,10 @@ def search(
     type_: str | None = None,
     limit: int = 25,
     client: KinopubClient | None = None,
+    kp_id: str | None = None,
+    imdb_id: str | None = None,
 ) -> list[dict]:
-    """`GET /v1/items?q=<query>` filtered by year/type.
+    """`GET /v1/items/search?q=<query>` filtered by year/type.
 
     Returns a list of `{id, title, year, type, url, poster}` dicts in
     the shape the SPA expects. We intentionally strip the heavier
@@ -298,12 +300,18 @@ def search(
     """
     c = client or _authenticated_client()
     raw = c.search(query, type_=type_, year=year, limit=limit)
-    out: list[dict] = []
+
+    if imdb_id and imdb_id.startswith("tt"):
+        imdb_id = imdb_id[2:]
+
+    exact_matches: list[dict] = []
+    other_matches: list[dict] = []
+
     for entry in raw:
         if not isinstance(entry, dict):
             continue
-        kp_id = entry.get("id")
-        if kp_id is None:
+        ent_id = entry.get("id")
+        if ent_id is None:
             continue
         posters = entry.get("posters") if isinstance(entry.get("posters"), dict) else {}
         poster = (
@@ -313,17 +321,32 @@ def search(
             or entry.get("poster")
             or None
         )
-        out.append(
-            {
-                "id": int(kp_id),
-                "title": str(entry.get("title") or "").strip() or None,
-                "year": int(entry["year"]) if entry.get("year") else None,
-                "type": str(entry.get("type") or "") or None,
-                "url": _build_item_url(int(kp_id)),
-                "poster": str(poster) if poster else None,
-            }
-        )
-    return out
+
+        # Check for exact ID match
+        cand_kp = str(entry.get("kinopoisk") or "")
+        cand_imdb = str(entry.get("imdb") or "")
+
+        is_exact = False
+        if kp_id and str(kp_id) == cand_kp:
+            is_exact = True
+        if imdb_id and str(imdb_id) == cand_imdb:
+            is_exact = True
+
+        res_item = {
+            "id": int(ent_id),
+            "title": str(entry.get("title") or "").strip() or None,
+            "year": int(entry["year"]) if entry.get("year") else None,
+            "type": str(entry.get("type") or "") or None,
+            "url": _build_item_url(int(ent_id)),
+            "poster": str(poster) if poster else None,
+        }
+
+        if is_exact:
+            exact_matches.append(res_item)
+        else:
+            other_matches.append(res_item)
+
+    return exact_matches + other_matches
 
 
 def _build_item_url(kinopub_id: int) -> str:
@@ -337,7 +360,7 @@ def _extract_string(val: Any) -> str | None:
     Preference: hls -> http -> title -> name -> first value."""
     if not val:
         return None
-    if isinstance(val, (str, int, float)):
+    if isinstance(val, str | int | float):
         return str(val)
     if isinstance(val, dict):
         return (
@@ -355,19 +378,32 @@ def _map_video(video: dict) -> dict:
     """Normalise one `videos[]` entry from `/v1/items/{id}` into the
     shape the SPA player will consume."""
     files: list[dict] = []
-    for f in video.get("files", []) or []:
-        if not isinstance(f, dict):
-            continue
-        url = _extract_string(f.get("url") or f.get("file"))
-        if not url:
-            continue
-        files.append(
-            {
-                "url": url,
-                "quality": _extract_string(f.get("quality")),
-                "codec": _extract_string(f.get("codec")),
-            }
-        )
+
+    # Check if we have an hls4 (adaptive) stream in the first file.
+    # Kino.pub hls4 master playlists contain all qualities and audio tracks.
+    raw_files = video.get("files", []) or []
+    if isinstance(raw_files, list) and len(raw_files) > 0 and isinstance(raw_files[0], dict):
+        url_dict = raw_files[0].get("url") or raw_files[0].get("file")
+        if isinstance(url_dict, dict) and url_dict.get("hls4"):
+            files.append(
+                {"url": url_dict["hls4"], "quality": "Adaptive (HLS Pro)", "codec": "h264"}
+            )
+
+    # If no hls4 was found, fall back to extracting the individual files
+    if not files:
+        for f in raw_files:
+            if not isinstance(f, dict):
+                continue
+            url = _extract_string(f.get("url") or f.get("file"))
+            if not url:
+                continue
+            files.append(
+                {
+                    "url": url,
+                    "quality": _extract_string(f.get("quality")),
+                    "codec": _extract_string(f.get("codec")),
+                }
+            )
 
     audios: list[dict] = []
     for a in video.get("audios", []) or []:

@@ -61,7 +61,7 @@ describe('AppShell.vue', () => {
     expect(logo.text()).toContain('Antigravity Tracker')
   })
 
-  it('logo click resets filters / page / collection and refetches', async () => {
+  it('logo click preserves filters / page and only closes modals + scrolls to top', async () => {
     const feed = useFeedStore()
     feed.filters.search = 'something'
     feed.filters.minKp = 7
@@ -74,13 +74,16 @@ describe('AppShell.vue', () => {
     await wrapper.find('[data-testid="logo-home"]').trigger('click')
     await flushPromises()
 
-    expect(feed.filters.search).toBe('')
-    expect(feed.filters.minKp).toBe(0)
-    expect(feed.filters.hideRated).toBe(false)
-    expect(feed.page).toBe(1)
+    // Per the 10.7z follow-up, clicking the logo no longer wipes
+    // filters; it only closes overlays and scrolls back to the top.
+    expect(feed.filters.search).toBe('something')
+    expect(feed.filters.minKp).toBe(7)
+    expect(feed.filters.hideRated).toBe(true)
+    expect(feed.page).toBe(4)
+    expect(window.scrollTo).toHaveBeenCalled()
   })
 
-  it('logo click also clears the "только новое" toggle if it was on', async () => {
+  it('logo click leaves the "только новое" toggle untouched', async () => {
     const visits = useVisitStore()
     visits.$patch({ showNewOnly: true, lastVisit: '2025-01-01' })
 
@@ -90,7 +93,9 @@ describe('AppShell.vue', () => {
     await wrapper.find('[data-testid="logo-home"]').trigger('click')
     await flushPromises()
 
-    expect(visits.showNewOnly).toBe(false)
+    // The "go home" behaviour is now scroll-only; the new-only
+    // toggle persists across logo clicks.
+    expect(visits.showNewOnly).toBe(true)
   })
 
   it('auto-opens the logs overlay on a sync-started event with the right log type', async () => {

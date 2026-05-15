@@ -120,6 +120,17 @@ def _candidate_titles(item: dict) -> list[str]:
     return [p for p in parts if p]
 
 
+def _clean_query_for_search(q: str) -> str:
+    """Remove years in brackets and quality tags (UHD, BDRemux) to make
+    the search query more likely to find a match on kino.pub."""
+    # Remove year in brackets like (2026)
+    q = re.sub(r"\(\d{4}\)", "", q)
+    # Remove common quality tags
+    q = re.sub(r"\b(UHD|BDRemux|1080p|720p|HDR|DV|4K)\b", "", q, flags=re.IGNORECASE)
+    # Collapse whitespace
+    return " ".join(q.split()).strip()
+
+
 def score_candidate(
     *,
     item: dict,
@@ -128,21 +139,59 @@ def score_candidate(
 ) -> int:
     """Return the matcher score for one kino.pub search result against
     one par2 item. Pure function — every parameter is data."""
+
+    # ID matching is the strongest signal: guaranteed match if they agree.
+    cand_kp = str(candidate.get("kinopoisk") or "")
+    cand_imdb = str(candidate.get("imdb") or "")
+    item_kp = str(item.get("kp_id") or "")
+    item_imdb = str(item.get("imdb_id") or "")
+
+    if item_imdb and item_imdb.startswith("tt"):
+        item_imdb = item_imdb[2:]
+    if cand_imdb and cand_imdb.startswith("tt"):
+        cand_imdb = cand_imdb[2:]
+
+    if item_kp and cand_kp and item_kp == cand_kp:
+        return 1000
+    if item_imdb and cand_imdb and item_imdb == cand_imdb:
+        return 1000
+
     score = 0
 
     # Title overlap is the floor: every other signal piles on top.
-    cand_title_norm = _normalise_title(candidate.get("title"))
-    if cand_title_norm:
-        for piece in _candidate_titles(item):
-            piece_norm = _normalise_title(piece)
-            if not piece_norm:
-                continue
-            if piece_norm == cand_title_norm:
-                score += SCORE_TITLE_MATCH
-                break
-            if piece_norm in cand_title_norm or cand_title_norm in piece_norm:
-                score += SCORE_TITLE_PARTIAL
-                break
+    cand_raw = str(candidate.get("title") or "")
+    cand_pieces = [p.strip() for p in cand_raw.split("/")]
+    cand_pieces_norm = [_normalise_title(p) for p in cand_pieces if p]
+    cand_title_full_norm = _normalise_title(cand_raw)
+
+    title_matched = False
+    for piece in _candidate_titles(item):
+        piece_norm = _normalise_title(piece)
+        if not piece_norm:
+            continue
+
+        # 1. Exact match against any piece of candidate title
+        if any(piece_norm == cp_norm for cp_norm in cand_pieces_norm):
+            score += SCORE_TITLE_MATCH
+            title_matched = True
+            break
+
+        # 2. Exact match against the full candidate title
+        if piece_norm == cand_title_full_norm:
+            score += SCORE_TITLE_MATCH
+            title_matched = True
+            break
+
+        # 3. Partial match against full candidate title
+        if piece_norm in cand_title_full_norm or cand_title_full_norm in piece_norm:
+            score += SCORE_TITLE_PARTIAL
+            title_matched = True
+            break
+
+    # If the title didn't match at all, we reject the candidate immediately
+    # (unless it was an exact ID match, which is handled above).
+    if not title_matched:
+        return 0
 
     cand_year = candidate.get("year")
     item_year = item.get("year")
@@ -151,7 +200,9 @@ def score_candidate(
             score += SCORE_YEAR_MATCH
         elif abs(cand_year - item_year) == 1:
             score += SCORE_YEAR_OFF_BY_ONE
-        else:
+        elif type_hint != "serial":
+            # Only penalize year mismatch heavily for movies,
+            # as series often have the season year instead of start year.
             score += SCORE_YEAR_MISMATCH
 
     cand_type = candidate.get("type")
@@ -306,20 +357,44 @@ def run(
         item_id = int(item["id"])
         try:
             queries = _candidate_titles(item) or [str(item.get("title") or "").strip()]
-            primary_query = queries[0] if queries else ""
-            if not primary_query:
+            queries = [q for q in queries if q]
+            if not queries:
                 db.mark_checked(item_id, STATUS_KEY)
                 skipped += 1
                 continue
 
             type_hint = CATEGORY_TYPE_HINT.get(int(item.get("category_id") or 0))
             year_hint = item.get("year") if isinstance(item.get("year"), int) else None
-            raw = client.search(
-                primary_query,
-                type_=type_hint,
-                year=year_hint,
-                limit=SEARCH_LIMIT,
-            )
+
+            # For series, we don't pass the year to the search API because the catalog
+            # year is the start year (e.g. 2019), but the release title often has the season year (e.g. 2026).
+            api_year = year_hint if type_hint != "serial" else None
+
+            raw: list[dict] = []
+            seen_ids: set[int] = set()
+            for query in queries:
+                clean_q = _clean_query_for_search(query)
+                if not clean_q:
+                    continue
+                results = client.search(
+                    clean_q,
+                    type_=None,  # Don't pass type to API to find matches even if DB category is wrong
+                    year=api_year,
+                    limit=SEARCH_LIMIT,
+                )
+                for entry in results:
+                    if not isinstance(entry, dict) or entry.get("id") is None:
+                        raw.append(entry)
+                        continue
+                    try:
+                        cand_id = int(entry["id"])
+                    except (TypeError, ValueError):
+                        raw.append(entry)
+                        continue
+                    if cand_id in seen_ids:
+                        continue
+                    seen_ids.add(cand_id)
+                    raw.append(entry)
             pick = best_candidate(item=item, raw_results=raw, type_hint=type_hint)
             if pick is None:
                 db.mark_checked(item_id, STATUS_KEY)

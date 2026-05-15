@@ -268,15 +268,17 @@ class KinopubClient:
         year: int | None = None,
         limit: int = 25,
     ) -> list[dict]:
-        """`GET /v1/items?q=<query>` with optional type/year filters.
+        """`GET /v1/items/search?q=<query>` with optional type/year filters.
         Returns the raw `items` array; mapping into par2 shape is the
         caller's job."""
         params: dict[str, Any] = {"q": query, "perpage": limit}
         if type_:
             params["type"] = type_
+        if query:
+            params["field"] = "title"
         if year:
             params["year"] = year
-        body = self._request("GET", "/v1/items", params=params)
+        body = self._request("GET", "/v1/items/search", params=params)
         return list(body.get("items", []) or [])
 
     def get_item(self, item_id: int) -> dict:
