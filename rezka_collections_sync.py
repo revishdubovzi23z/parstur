@@ -73,10 +73,11 @@ def _get_folder_items(url, session):
     import requests
     from bs4 import BeautifulSoup
 
-    all_urls = []
-    page = 0
+    all_urls = set()
+    page = 1
     while True:
-        page_url = url if page == 0 else f"{url}page/{page}/"
+        page_url = url if page == 1 else f"{url}page/{page}/"
+        logger.info(f"    [fetch] Loading favorites page {page}: {page_url}")
         r = requests.get(
             page_url,
             headers=REZKA_PAGE_HEADERS,
@@ -84,20 +85,37 @@ def _get_folder_items(url, session):
             timeout=20,
         )
         if r.status_code != 200:
+            logger.warning(f"      [!] Page {page} returned status {r.status_code}")
             break
         soup = BeautifulSoup(r.content, "html.parser")
         items = soup.select(".b-content__inline_item")
         if not items:
+            logger.info(f"      [!] No items found on page {page}")
             break
+        
+        found_on_page = 0
         for item in items:
             link = item.find("a", href=re.compile(r"rezka\.ag"))
             if link:
-                all_urls.append(link["href"])
-        pagination = soup.find("a", class_=re.compile(r"pag.*next"))
+                all_urls.add(link["href"])
+                found_on_page += 1
+        
+        logger.info(f"      [+] Found {found_on_page} items on page {page}")
+
+        # Rezka favorite pagination: look for 'next' class or 'paginator-next' or similar
+        pagination = soup.select_one("a.next, a.paginator-next, .b-navigation a:-fast-ascii('Следующая')")
+        if not pagination:
+            # Fallback regex search for any 'next' in class
+            pagination = soup.find("a", class_=re.compile(r"next|pag", re.I))
+        
         if not pagination:
             break
+        
         page += 1
-    return all_urls
+        if page > 50:  # Safety break
+            break
+            
+    return list(all_urls)
 
 
 def _add_to_rezka_folder(post_id, cat_id, session):
