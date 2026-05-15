@@ -26,8 +26,6 @@
 // session store's `status` getter. The gear button mounts the admin
 // modal that owns self-update / db export / db import / db reset.
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { useCollectionsStore } from '../stores/collections'
-import { useFeedStore } from '../stores/feed'
 import {
   LOG_TYPE_LABELS,
   PROCESS_TO_LOG,
@@ -36,7 +34,6 @@ import {
 } from '../stores/logs'
 import { useSessionStore } from '../stores/session'
 import { useSyncStore, type ProcessKey } from '../stores/sync'
-import { useVisitStore } from '../stores/visits'
 import AdminPanel from './AdminPanel.vue'
 import AuditPanel from './AuditPanel.vue'
 import ItemCardModal from './ItemCardModal.vue'
@@ -48,10 +45,7 @@ import ToastContainer from './ToastContainer.vue'
 
 const session = useSessionStore()
 const sync = useSyncStore()
-const collections = useCollectionsStore()
-const feed = useFeedStore()
 const logs = useLogsStore()
-const visits = useVisitStore()
 const showAdmin = ref(false)
 const showStats = ref(false)
 const showSync = ref(false)
@@ -136,22 +130,14 @@ async function onLogoClick(): Promise<void> {
   showLogs.value = false
   showRules.value = false
   showAudit.value = false
-  // Reset feed filters + page + collection selection + new-only toggle
-  // and refire the queries. Skip the network calls when the session
-  // can't reach the API; the watcher below will refetch as soon as
-  // it can.
-  feed.homeReset()
-  collections.select(null)
-  if (visits.showNewOnly) {
-    await visits.toggleNewOnly()
-  }
-  if (session.canCallApi) {
-    await feed.fetchFeed()
-  }
+
+  // 10.7z follow-up: user wants to keep filters when clicking the logo.
+  // We only scroll to top and ensure any modal is closed.
   if (typeof window !== 'undefined' && typeof window.scrollTo === 'function') {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 }
+
 
 onMounted(() => {
   if (session.canCallApi) void sync.connect()
