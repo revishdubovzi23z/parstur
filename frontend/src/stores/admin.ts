@@ -52,6 +52,8 @@ interface AdminStoreState {
   itemsExportBusy: boolean
   /** FTS index rebuild (`/api/rebuild_fts`). */
   rebuildFtsBusy: boolean
+  /** Clear media data while keeping auth (`/api/database_clear`). */
+  clearDatabaseBusy: boolean
   /** Most recent action outcome, rendered in the panel. */
   lastResult: AdminActionResult | null
 }
@@ -70,6 +72,7 @@ export const useAdminStore = defineStore('admin', {
     backupBusy: false,
     itemsExportBusy: false,
     rebuildFtsBusy: false,
+    clearDatabaseBusy: false,
     lastResult: null,
   }),
 
@@ -544,6 +547,62 @@ export const useAdminStore = defineStore('admin', {
         return result
       } finally {
         this.rebuildFtsBusy = false
+      }
+    },
+    /**
+     * POST /api/database_clear — deletes all items/collections but
+     * keeps auth and settings.
+     */
+    async clearDatabase(): Promise<AdminActionResult> {
+      const session = useSessionStore()
+      if (!session.canCallApi) {
+        return {
+          tone: 'error',
+          message: 'Сессия не авторизована',
+          willRestart: false,
+        }
+      }
+      this.clearDatabaseBusy = true
+      this.lastResult = null
+      try {
+        const res = await apiFetch('/api/database_clear', { method: 'POST' })
+        if (!res.ok) {
+          const result: AdminActionResult = {
+            tone: 'error',
+            message: `HTTP ${res.status}`,
+            willRestart: false,
+          }
+          this.lastResult = result
+          return result
+        }
+        const data: { status?: string; message?: string } = await res.json()
+        const result: AdminActionResult =
+          data.status === 'success'
+            ? {
+                tone: 'success',
+                message: data.message ?? 'Медиа-данные очищены.',
+                willRestart: false,
+              }
+            : {
+                tone: 'error',
+                message: data.message ?? 'Неизвестная ошибка',
+                willRestart: false,
+              }
+        this.lastResult = result
+        return result
+      } catch (err) {
+        if (err instanceof UnauthorizedError) {
+          session.handleUnauthorized(err)
+        }
+        const result: AdminActionResult = {
+          tone: 'error',
+          message: `Сбой запроса: ${describe(err)}`,
+          willRestart: false,
+        }
+        this.lastResult = result
+        return result
+      } finally {
+        this.clearDatabaseBusy = false
       }
     },
   },

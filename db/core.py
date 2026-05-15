@@ -197,6 +197,29 @@ class DbCore:
                 pass
             raise
 
+    def clear_media_data(self):
+        """Delete all items, collections, and history while keeping auth/settings."""
+        tables_to_clear = [
+            "items",
+            "releases",
+            "collections",
+            "collection_items",
+            "job_history",
+            "audit_log",
+            "user_ratings",
+            "item_search_names",
+        ]
+        with self._conn() as c:
+            for table in tables_to_clear:
+                try:
+                    c.execute(f"DELETE FROM {table}")
+                except sqlite3.OperationalError:
+                    pass
+            # Clear last_visit state
+            c.execute("DELETE FROM app_state WHERE key = 'last_visit'")
+            # Truncate WAL and reclaim space
+            c.execute("VACUUM")
+
     def init_schema(self):
         with self._conn() as c:
             cur = c.cursor()

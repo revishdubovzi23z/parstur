@@ -37,7 +37,8 @@ const anyBusy = computed(
     admin.exportBusy ||
     admin.backupBusy ||
     admin.itemsExportBusy ||
-    admin.rebuildFtsBusy,
+    admin.rebuildFtsBusy ||
+    admin.clearDatabaseBusy,
 )
 
 // Items-export (`/api/export`) controls. Backend defaults to all
@@ -130,6 +131,17 @@ async function onRebuildFts(): Promise<void> {
   }
   await admin.rebuildFts()
 }
+ 
+async function onClearDatabase(): Promise<void> {
+  if (
+    !window.confirm(
+      'Очистить все медиа-данные (фильмы, папки, историю)? Авторизация и настройки сохранятся.',
+    )
+  ) {
+    return
+  }
+  await admin.clearDatabase()
+}
 </script>
 
 <template>
@@ -217,6 +229,15 @@ async function onRebuildFts(): Promise<void> {
               @click="onImportClick"
             >
               {{ admin.importBusy ? 'Импорт…' : '⬆ Импорт' }}
+            </button>
+            <button
+              type="button"
+              class="inline-flex items-center justify-center rounded-md bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 border border-amber-200 hover:bg-amber-100 disabled:opacity-50"
+              data-testid="admin-db-clear"
+              :disabled="anyBusy"
+              @click="onClearDatabase"
+            >
+              {{ admin.clearDatabaseBusy ? 'Очистка…' : '🧹 Очистить медиа' }}
             </button>
             <input
               ref="importInput"

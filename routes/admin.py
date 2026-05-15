@@ -233,6 +233,16 @@ def self_update():
         return {"status": "error", "message": str(e)[:500]}
 
 
+@router.post("/api/database_clear")
+def database_clear():
+    try:
+        db.clear_media_data()
+        return {"status": "success", "message": "Медиа-данные успешно очищены"}
+    except Exception as e:
+        logger.error(f"[CLEAR] Failed to clear media data: {e}")
+        return {"status": "error", "message": str(e)[:500]}
+
+
 @router.get("/api/database_export")
 def database_export():
     db_path = settings.resolved_db_path
