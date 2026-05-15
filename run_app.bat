@@ -45,9 +45,9 @@ if exist "frontend\package.json" (
 )
 
 REM ── 4. Launch the server ───────────────────────────────────────────
-echo [4/4] Starting uvicorn on http://127.0.0.1:8000 ...
+echo [4/4] Starting uvicorn on http://0.0.0.0:8000 ...
 start "" http://127.0.0.1:8000
-python -m uvicorn main:app --host 127.0.0.1 --port 8000
+python -m uvicorn main:app --host 0.0.0.0 --port 8000
 
 echo.
 echo [run_app] uvicorn exited.
