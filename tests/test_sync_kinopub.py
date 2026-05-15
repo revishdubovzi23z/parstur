@@ -175,7 +175,7 @@ def test_run_binds_matching_item(tmp_db, fake_client) -> None:
     assert summary["bound"] == 1
     assert summary["skipped"] == 0
     assert fake_client.calls == [
-        {"query": "Inception", "type_": "movie", "year": 2010, "limit": 25}
+        {"query": "Inception", "type_": None, "year": 2010, "limit": 25}
     ]
     with tmp_db._conn() as c:
         row = c.execute(
@@ -199,8 +199,8 @@ def test_run_falls_back_to_second_title_piece(tmp_db, fake_client) -> None:
 
     assert summary["bound"] == 1
     assert fake_client.calls == [
-        {"query": "Несуществующее название", "type_": "movie", "year": 2010, "limit": 25},
-        {"query": "Inception", "type_": "movie", "year": 2010, "limit": 25},
+        {"query": "Несуществующее название", "type_": None, "year": 2010, "limit": 25},
+        {"query": "Inception", "type_": None, "year": 2010, "limit": 25},
     ]
     with tmp_db._conn() as c:
         row = c.execute("SELECT kinopub_id FROM items WHERE id = ?", (item_id,)).fetchone()
@@ -274,8 +274,8 @@ def test_run_uses_all_title_pieces_for_query(tmp_db, fake_client) -> None:
     fake_client.queue([])
     sync_kinopub.run(db=tmp_db, client_factory=lambda: fake_client, delay_ms=0)
     assert fake_client.calls == [
-        {"query": "Начало", "type_": "movie", "year": 2010, "limit": 25},
-        {"query": "Inception", "type_": "movie", "year": 2010, "limit": 25},
+        {"query": "Начало", "type_": None, "year": 2010, "limit": 25},
+        {"query": "Inception", "type_": None, "year": 2010, "limit": 25},
     ]
 
 

@@ -38,6 +38,7 @@ export const RESETTABLE_FIELDS = [
   'imdb_rating',
   'poster_url',
   'description',
+  'kinopub_id',
 ] as const
 
 export type ResettableField = (typeof RESETTABLE_FIELDS)[number]

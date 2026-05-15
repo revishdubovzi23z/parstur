@@ -413,6 +413,11 @@ const externalPlayers = computed(() => {
       icon: '🔵',
       url: `nplayer-${url}`,
     },
+    {
+      name: 'Android Плеер',
+      icon: '🤖',
+      url: `intent:${url}#Intent;action=android.intent.action.VIEW;type=video/*;end`,
+    },
   ]
 })
 </script>

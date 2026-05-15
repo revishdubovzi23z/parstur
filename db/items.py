@@ -212,6 +212,7 @@ class DbItemsMixin:
             "ratings": "kp_rating = 0, imdb_rating = 0",
             "kp_rating": "kp_rating = 0",
             "imdb_rating": "imdb_rating = 0",
+            "kinopub_id": "kinopub_id = NULL, kinopub_url = NULL, kinopub_type = NULL, checked_kinopub = 0",
         }
         updates = [field_map[f] for f in fields if f in field_map]
         if not updates:
@@ -518,6 +519,12 @@ class DbItemsMixin:
                         "AND (items.imdb_id IS NULL OR items.imdb_id = '')"
                     )
                     params.extend(VIDEO_CATEGORY_IDS)
+                elif category_id == -105:
+                    where_clauses.append(
+                        f"items.category_id IN ({video_cats_ph}) "
+                        "AND (items.kinopub_id IS NULL OR items.kinopub_id = '')"
+                    )
+                    params.extend(VIDEO_CATEGORY_IDS)
                 elif category_id != 0:
                     where_clauses.append("items.category_id = ?")
                     params.append(category_id)
@@ -794,7 +801,8 @@ class DbItemsMixin:
                 "  SUM(CASE WHEN is_ignored = 0 AND (kp_rating = 0 OR kp_rating IS NULL OR imdb_rating = 0 OR imdb_rating IS NULL) THEN 1 ELSE 0 END) AS no_ratings, "
                 "  SUM(CASE WHEN is_ignored = 0 AND (kp_id IS NULL OR kp_id = '') THEN 1 ELSE 0 END) AS no_kp_id, "
                 "  SUM(CASE WHEN is_ignored = 0 AND (imdb_id IS NULL OR imdb_id = '') THEN 1 ELSE 0 END) AS no_imdb_id, "
-                "  SUM(CASE WHEN is_ignored = 0 AND (kp_id IS NULL OR kp_id = '') AND (imdb_id IS NULL OR imdb_id = '') THEN 1 ELSE 0 END) AS no_any_id "
+                "  SUM(CASE WHEN is_ignored = 0 AND (kp_id IS NULL OR kp_id = '') AND (imdb_id IS NULL OR imdb_id = '') THEN 1 ELSE 0 END) AS no_any_id, "
+                "  SUM(CASE WHEN is_ignored = 0 AND (kinopub_id IS NULL OR kinopub_id = '') THEN 1 ELSE 0 END) AS no_kinopub "
                 "FROM items i "
                 f"WHERE category_id IN ({video_cats_ph}) {not_in_sql}",
                 video_params + not_in_params,
@@ -805,6 +813,7 @@ class DbItemsMixin:
             no_kp_id_count = video_row["no_kp_id"] or 0
             no_imdb_id_count = video_row["no_imdb_id"] or 0
             no_any_id_count = video_row["no_any_id"] or 0
+            no_kinopub_count = video_row["no_kinopub"] or 0
 
             # any-category + ignored together (one scan).
             any_row = c.execute(
@@ -824,6 +833,7 @@ class DbItemsMixin:
                 {"id": -102, "name": "🆔 БЕЗ КП ID", "count": no_kp_id_count},
                 {"id": -103, "name": "🆔 БЕЗ IMDb ID", "count": no_imdb_id_count},
                 {"id": -104, "name": "🚫 БЕЗ ID ВООБЩЕ", "count": no_any_id_count},
+                {"id": -105, "name": "🚫 БЕЗ KINOPUB ID", "count": no_kinopub_count},
                 {"id": 0, "name": "Любая категория", "count": count_any},
                 *cats,
                 {"id": -2, "name": "🗑️ ИГНОРИРУЕМЫЕ", "count": count_ignored},
