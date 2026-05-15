@@ -394,6 +394,7 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
       const dbItem = (await (await apiFetch(`/api/item/${itemId}`)).json())
       if (!dbItem.rezka_url && dbItem.kinopub_id) {
         this.activeTab = 'kinopub'
+        this.source = 'kinopub'
         void this.loadKinopubInfo(itemId)
       } else {
         this.activeTab = 'rezka'
@@ -558,7 +559,7 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
           this.episode = null
         }
         // Auto-load the first stream for Rezka
-        if (source === 'rezka' && this.translatorId) {
+        if (this.source === 'rezka' && this.translatorId) {
           void this.loadStream(
             itemId,
             'rezka',
@@ -627,6 +628,10 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
         const data = (await res.json().catch(() => ({}))) as StreamUrlResponse & {
           error?: string
         }
+        
+        // Safeguard: don't overwrite if the user switched sources while we were fetching
+        if (this.source !== source) return
+
         if (!res.ok || data.error) {
           this.streamError = data.error ?? `HTTP ${res.status}`
           return
@@ -701,8 +706,24 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
 
     setActiveTab(tab: 'kinohub' | 'rezka' | 'kinopub'): void {
       this.activeTab = tab
-      if (tab === 'kinopub' && !this.kinopubInfo && this.itemId) {
-        void this.loadKinopubInfo(this.itemId)
+      if (tab === 'kinopub') {
+        this.source = 'kinopub'
+        if (!this.kinopubInfo && this.itemId) {
+          void this.loadKinopubInfo(this.itemId)
+        } else {
+          this._refreshKinopubStream()
+        }
+      } else if (tab === 'rezka') {
+        this.source = 'rezka'
+        if (this.itemId && this.translatorId) {
+          void this.loadStream(
+            this.itemId,
+            'rezka',
+            this.translatorId,
+            this.season,
+            this.episode,
+          )
+        }
       }
     },
 

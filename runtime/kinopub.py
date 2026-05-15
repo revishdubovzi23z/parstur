@@ -332,39 +332,40 @@ def _build_item_url(kinopub_id: int) -> str:
     return f"https://kino.pub/item/view/{int(kinopub_id)}"
 
 
+def _extract_string(val: Any) -> str | None:
+    """Pick the most useful string from a value that might be a dict.
+    Preference: hls -> http -> title -> name -> first value."""
+    if not val:
+        return None
+    if isinstance(val, (str, int, float)):
+        return str(val)
+    if isinstance(val, dict):
+        return (
+            val.get("hls")
+            or val.get("http")
+            or val.get("title")
+            or val.get("name")
+            or val.get("code")
+            or next((str(v) for v in val.values() if v), None)
+        )
+    return str(val)
+
+
 def _map_video(video: dict) -> dict:
     """Normalise one `videos[]` entry from `/v1/items/{id}` into the
-    shape the SPA player will consume.
-
-    The kino.pub response has historically grown a number of shapes
-    (`files`, `streams`, embedded HLS-only entries with `url`/`format`,
-    …). We only surface the simple `{quality, url, codec}` triples
-    here; PlayerModal will display them as quality-picker entries.
-    """
+    shape the SPA player will consume."""
     files: list[dict] = []
     for f in video.get("files", []) or []:
         if not isinstance(f, dict):
             continue
-        url_val = f.get("url") or f.get("file")
-        if isinstance(url_val, dict):
-            # Prefer hls -> http -> hls2 -> hls4
-            url = (
-                url_val.get("hls")
-                or url_val.get("http")
-                or url_val.get("hls2")
-                or url_val.get("hls4")
-                or next(iter(url_val.values()), None)
-            )
-        else:
-            url = url_val
-
+        url = _extract_string(f.get("url") or f.get("file"))
         if not url:
             continue
         files.append(
             {
-                "url": str(url),
-                "quality": str(f.get("quality") or "").strip() or None,
-                "codec": str(f.get("codec") or "").strip() or None,
+                "url": url,
+                "quality": _extract_string(f.get("quality")),
+                "codec": _extract_string(f.get("codec")),
             }
         )
 
@@ -372,16 +373,11 @@ def _map_video(video: dict) -> dict:
     for a in video.get("audios", []) or []:
         if not isinstance(a, dict):
             continue
-        lang_obj = a.get("lang")
-        if isinstance(lang_obj, dict):
-            lang = lang_obj.get("code") or lang_obj.get("title")
-        else:
-            lang = lang_obj
         audios.append(
             {
-                "lang": str(lang) if lang else None,
-                "type": str(a.get("type") or "").strip() or None,
-                "author": str(a.get("author") or "").strip() or None,
+                "lang": _extract_string(a.get("lang")),
+                "type": _extract_string(a.get("type")),
+                "author": _extract_string(a.get("author")),
             }
         )
 
@@ -389,13 +385,13 @@ def _map_video(video: dict) -> dict:
     for s in video.get("subtitles", []) or []:
         if not isinstance(s, dict):
             continue
-        url = s.get("url") or s.get("file")
+        url = _extract_string(s.get("url") or s.get("file"))
         if not url:
             continue
         subtitles.append(
             {
-                "url": str(url),
-                "lang": str(s.get("lang") or "").strip() or None,
+                "url": url,
+                "lang": _extract_string(s.get("lang")),
                 "shift": int(s.get("shift") or 0),
                 "embed": bool(s.get("embed", False)),
             }
