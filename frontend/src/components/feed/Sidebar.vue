@@ -6,7 +6,7 @@
 // create / rename / delete buttons. Selecting a category or
 // collection patches the feed filters and triggers a refetch.
 
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useCategoriesStore } from '../../stores/categories'
 import { useCollectionsStore } from '../../stores/collections'
 import { useFeedStore } from '../../stores/feed'
@@ -47,7 +47,13 @@ async function toggleNewOnly(): Promise<void> {
 
 const newCollectionName = ref('')
 const showAddForm = ref(false)
-const collectionsExpanded = ref(true)
+const collectionsExpanded = ref(
+  localStorage.getItem('par2_sidebar_collections_expanded') !== 'false',
+)
+
+watch(collectionsExpanded, (val) => {
+  localStorage.setItem('par2_sidebar_collections_expanded', String(val))
+})
 const submitting = ref(false)
 
 const selectedCategoryId = computed(() => feed.filters.categoryId)
