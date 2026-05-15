@@ -13,6 +13,9 @@ type CredentialKey =
   | 'POISKKINO_API_KEY'
   | 'TMDB_API_KEY'
   | 'TMDB_API_TOKEN'
+  | 'KINOPUB_ENABLED'
+  | 'KINOPUB_CLIENT_ID'
+  | 'KINOPUB_CLIENT_SECRET'
 
 interface CredentialEntry {
   configured: boolean
@@ -37,6 +40,9 @@ const status = reactive<Record<CredentialKey, CredentialEntry>>({
   POISKKINO_API_KEY: { configured: false, value: '' },
   TMDB_API_KEY: { configured: false, value: '' },
   TMDB_API_TOKEN: { configured: false, value: '' },
+  KINOPUB_ENABLED: { configured: false, value: '' },
+  KINOPUB_CLIENT_ID: { configured: false, value: '' },
+  KINOPUB_CLIENT_SECRET: { configured: false, value: '' },
 })
 const draft = reactive<Record<CredentialKey, string>>({
   REZKA_EMAIL: '',
@@ -45,6 +51,9 @@ const draft = reactive<Record<CredentialKey, string>>({
   POISKKINO_API_KEY: '',
   TMDB_API_KEY: '',
   TMDB_API_TOKEN: '',
+  KINOPUB_ENABLED: '',
+  KINOPUB_CLIENT_ID: '',
+  KINOPUB_CLIENT_SECRET: '',
 })
 
 const sensitiveKeys = new Set<CredentialKey>([
@@ -234,6 +243,43 @@ onMounted(() => {
             data-testid="credentials-tmdb-api-token"
             type="password"
             :placeholder="status.TMDB_API_TOKEN.configured ? 'Сейчас сохранён' : 'TMDB_API_TOKEN'"
+          />
+        </label>
+      </div>
+    </div>
+
+    <div class="mt-4 border-t border-slate-100 pt-4">
+      <h4 class="text-xs font-semibold uppercase tracking-wide text-slate-500">
+        Kino.pub
+      </h4>
+      <div class="mt-3 grid gap-3 sm:grid-cols-2">
+        <label class="flex flex-col gap-1 text-xs text-slate-600">
+          <span class="font-semibold">Включить Kino.pub (true/false)</span>
+          <input
+            v-model="draft.KINOPUB_ENABLED"
+            class="rounded-md border border-slate-300 px-2 py-1.5 text-xs"
+            data-testid="credentials-kinopub-enabled"
+            placeholder="true"
+          />
+        </label>
+        <div class="hidden sm:block"></div>
+        <label class="flex flex-col gap-1 text-xs text-slate-600">
+          <span class="font-semibold">Client ID (опционально)</span>
+          <input
+            v-model="draft.KINOPUB_CLIENT_ID"
+            class="rounded-md border border-slate-300 px-2 py-1.5 text-xs"
+            data-testid="credentials-kinopub-client-id"
+            :placeholder="status.KINOPUB_CLIENT_ID.configured ? 'Сейчас сохранён' : 'По умолчанию: xbmc'"
+          />
+        </label>
+        <label class="flex flex-col gap-1 text-xs text-slate-600">
+          <span class="font-semibold">Client Secret (опционально)</span>
+          <input
+            v-model="draft.KINOPUB_CLIENT_SECRET"
+            class="rounded-md border border-slate-300 px-2 py-1.5 text-xs"
+            data-testid="credentials-kinopub-client-secret"
+            type="password"
+            :placeholder="status.KINOPUB_CLIENT_SECRET.configured ? 'Сейчас сохранён' : 'Секретный ключ'"
           />
         </label>
       </div>
