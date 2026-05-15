@@ -4,7 +4,7 @@
 // alongside the grid and triggers `refresh()` on the sidebar stores
 // whenever the session becomes API-callable.
 
-import { onMounted, onUnmounted, watch } from 'vue'
+import { onMounted, onUnmounted, watch, ref } from 'vue'
 import FeedFilters from './FeedFilters.vue'
 import FeedItemCard from './FeedItemCard.vue'
 import Sidebar from './Sidebar.vue'
@@ -20,6 +20,7 @@ const categories = useCategoriesStore()
 const collections = useCollectionsStore()
 const session = useSessionStore()
 const visits = useVisitStore()
+const showMobileSidebar = ref(false)
 let detachPersistence: (() => void) | null = null
 
 async function refreshAll(): Promise<void> {
@@ -70,8 +71,17 @@ function retry(): void {
 
 <template>
   <section class="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8" data-testid="feed-view">
-    <header class="mb-6 flex flex-col gap-2">
-      <h1 class="text-2xl font-bold text-slate-900">Лента релизов</h1>
+    <header class="mb-4 sm:mb-6 flex flex-col gap-2">
+      <div class="flex items-center justify-between gap-3">
+        <h1 class="text-2xl font-bold text-slate-900">Лента релизов</h1>
+        <button
+          type="button"
+          class="lg:hidden rounded-full border border-slate-200/60 bg-white/50 backdrop-blur-sm px-4 py-2 text-xs font-semibold text-slate-700 shadow-sm hover:bg-white transition-colors shrink-0"
+          @click="showMobileSidebar = !showMobileSidebar"
+        >
+          {{ showMobileSidebar ? 'Скрыть фильтры' : 'Фильтры' }}
+        </button>
+      </div>
       <p class="text-sm text-slate-600">
         Список новых и обновлённых раздач, собранных с Rutor и обогащённых
         метаданными.
@@ -79,7 +89,9 @@ function retry(): void {
     </header>
 
     <div class="flex flex-col gap-6 lg:flex-row lg:items-start">
-      <Sidebar />
+      <div :class="showMobileSidebar ? 'block mb-6 lg:mb-0' : 'hidden lg:block'" class="w-full lg:w-auto shrink-0">
+        <Sidebar />
+      </div>
       <div class="flex-1 min-w-0">
         <FeedFilters class="mb-6" />
 

@@ -181,8 +181,8 @@ const authBadge = computed(() => {
 <template>
   <div class="flex min-h-screen flex-col">
     <header class="sticky top-0 z-50 border-b border-slate-200/50 bg-white/70 backdrop-blur-md shadow-sm">
-      <div class="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
-        <div class="flex items-center gap-3">
+      <div class="mx-auto flex max-w-6xl flex-col md:flex-row items-start md:items-center justify-between px-4 py-2.5 md:py-3 gap-3 md:gap-0">
+        <div class="flex items-center gap-3 shrink-0">
           <button
             type="button"
             class="flex items-center gap-2 text-base font-semibold text-slate-900 hover:text-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-900/20 rounded"
@@ -194,9 +194,9 @@ const authBadge = computed(() => {
             <span class="bg-gradient-to-br from-slate-900 to-slate-500 bg-clip-text text-transparent">Antigravity Tracker</span>
           </button>
         </div>
-        <div class="flex items-center gap-3">
+        <div class="flex items-center gap-1.5 md:gap-3 w-full md:w-auto overflow-x-auto pb-1 md:pb-0 no-scrollbar">
           <span
-            class="rounded-full px-2.5 py-1 text-xs font-medium"
+            class="rounded-full px-2.5 py-1 text-xs font-medium shrink-0"
             :class="authBadge.tone"
             data-testid="auth-badge"
           >
@@ -205,7 +205,7 @@ const authBadge = computed(() => {
           <button
             v-if="session.canCallApi"
             type="button"
-            class="rounded-full px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-200/50 hover:text-slate-900 transition-all"
+            class="rounded-full px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-200/50 hover:text-slate-900 transition-all shrink-0"
             data-testid="sync-open"
             aria-label="Открыть панель синхронизации"
             @click="openSync"
@@ -215,7 +215,7 @@ const authBadge = computed(() => {
           <button
             v-if="session.canCallApi"
             type="button"
-            class="rounded-full px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-200/50 hover:text-slate-900 transition-all"
+            class="rounded-full px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-200/50 hover:text-slate-900 transition-all shrink-0"
             data-testid="logs-open"
             aria-label="Открыть панель логов"
             @click="openLogs"
@@ -225,7 +225,7 @@ const authBadge = computed(() => {
           <button
             v-if="session.canCallApi"
             type="button"
-            class="rounded-full px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-200/50 hover:text-slate-900 transition-all"
+            class="rounded-full px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-200/50 hover:text-slate-900 transition-all shrink-0"
             data-testid="rules-open"
             aria-label="Открыть панель фильтр-правил"
             @click="openRules"
@@ -235,7 +235,7 @@ const authBadge = computed(() => {
           <button
             v-if="session.canCallApi"
             type="button"
-            class="rounded-full px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-200/50 hover:text-slate-900 transition-all"
+            class="rounded-full px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-200/50 hover:text-slate-900 transition-all shrink-0"
             data-testid="audit-open"
             aria-label="Открыть журнал аудита"
             @click="openAudit"
@@ -245,7 +245,7 @@ const authBadge = computed(() => {
           <button
             v-if="session.canCallApi"
             type="button"
-            class="rounded-full px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-200/50 hover:text-slate-900 transition-all"
+            class="rounded-full px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-200/50 hover:text-slate-900 transition-all shrink-0"
             data-testid="stats-open"
             aria-label="Открыть статистику"
             @click="openStats"
@@ -255,7 +255,7 @@ const authBadge = computed(() => {
           <button
             v-if="session.canCallApi"
             type="button"
-            class="rounded-full px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-200/50 hover:text-slate-900 transition-all"
+            class="rounded-full px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-200/50 hover:text-slate-900 transition-all shrink-0"
             data-testid="admin-open"
             aria-label="Открыть панель администратора"
             @click="openAdmin"

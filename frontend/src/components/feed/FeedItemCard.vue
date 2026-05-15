@@ -72,11 +72,11 @@ function onHoverReset(): void {
 
 <template>
   <article
-    class="group bg-white rounded-2xl shadow-sm hover:shadow-xl hover:-translate-y-1 border border-slate-200/60 overflow-hidden flex flex-col transition-all duration-300"
+    class="group bg-white rounded-2xl shadow-sm hover:shadow-xl hover:-translate-y-1 border border-slate-200/60 overflow-hidden flex flex-row sm:flex-col transition-all duration-300"
     data-testid="feed-item-card"
     :data-item-id="item.id"
   >
-    <div class="relative aspect-[2/3] bg-gray-100 overflow-hidden">
+    <div class="relative w-[35%] sm:w-full shrink-0 aspect-[2/3] bg-gray-100 overflow-hidden">
       <img
         v-if="item.poster_url"
         :src="item.poster_url"
@@ -242,7 +242,7 @@ function onHoverReset(): void {
         </p>
       </div>
     </div>
-    <div class="p-4 flex flex-col gap-1 bg-white relative z-10">
+    <div class="p-3 sm:p-4 flex flex-col gap-1 bg-white relative z-10 flex-1 min-w-0 justify-center sm:justify-start">
       <button
         type="button"
         class="text-left text-[15px] font-bold text-slate-800 leading-snug tracking-tight line-clamp-2 hover:text-indigo-600 focus:outline-none focus:text-indigo-600 transition-colors"
