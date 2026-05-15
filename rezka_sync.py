@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import random
 import re
 from collections import defaultdict
 
@@ -27,7 +28,7 @@ def _initial_concurrency() -> int:
     env = settings.rezka_concurrency
     if env:
         return env
-    return int(_config.get("rezka", {}).get("concurrency", 6))
+    return int(_config.get("rezka", {}).get("concurrency", 2))
 
 
 REZKA_CONCURRENCY = _initial_concurrency()
@@ -440,8 +441,11 @@ def _extract_metadata_from_rezka(rezka_obj, kp_rating, imdb_rating):
 
 
 def _sync_search(query):
+    import time
+
     from HdRezkaApi.search import HdRezkaSearch
 
+    time.sleep(random.uniform(4.0, 8.0))
     try:
         results = HdRezkaSearch(REZKA_ORIGIN)(query)
         return [
@@ -458,8 +462,11 @@ def _sync_search(query):
 
 
 def _sync_load_rezka(url):
+    import time
+
     from HdRezkaApi import HdRezkaApi
 
+    time.sleep(random.uniform(4.0, 8.0))
     try:
         rezka = HdRezkaApi(url)
         if rezka.ok:
@@ -646,6 +653,7 @@ def _print_batch_errors(label: str) -> None:
 
 async def _async_search(session, query, semaphore):
     async with semaphore:
+        await asyncio.sleep(random.uniform(2.5, 5.0))
         try:
             async with session.post(
                 REZKA_SEARCH_URL,
@@ -678,6 +686,7 @@ async def _async_search(session, query, semaphore):
 
 async def _async_load_page(session, url, semaphore):
     async with semaphore:
+        await asyncio.sleep(random.uniform(2.5, 5.0))
         try:
             async with session.get(
                 url,
