@@ -29,7 +29,6 @@ watch(showMobileSidebar, (val) => {
     window.sessionStorage.removeItem('f_showMobileSidebar')
   }
 })
-
 let detachPersistence: (() => void) | null = null
 
 async function refreshAll(): Promise<void> {
