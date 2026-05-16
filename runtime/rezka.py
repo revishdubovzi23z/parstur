@@ -64,6 +64,36 @@ def _init_rezka_session() -> bool:
     the live session indicator.
     """
     global rezka_session, rezka_session_folders_cache, rezka_session_state
+
+    # Try loading manual cookies first (5.12)
+    import json
+    import os
+    from types import SimpleNamespace
+
+    cookies_path = os.path.join(settings.app_data_dir, "rezka_cookies.json")
+    if os.path.exists(cookies_path):
+        try:
+            with open(cookies_path) as f:
+                manual_cookies = json.load(f)
+                logger.info(f"[REZKA] Loading cookies from {cookies_path}")
+
+                # Support Cookie-Editor array format
+                if isinstance(manual_cookies, list):
+                    cookies_dict = {}
+                    for c in manual_cookies:
+                        if isinstance(c, dict) and "name" in c and "value" in c:
+                            cookies_dict[c["name"]] = c["value"]
+                    manual_cookies = cookies_dict
+
+                rezka_session = SimpleNamespace(cookies=manual_cookies)
+                _refresh_rezka_folders_cache()
+
+                rezka_session_state = "up"
+                broadcast_threadsafe({"type": "rezka_session", "state": "up"})
+                return True
+        except Exception as e:
+            logger.warning(f"[REZKA] Failed to read manual cookies: {e}")
+
     rezka_email = settings.rezka_email
     rezka_password = settings.rezka_password
     if not rezka_email or not rezka_password:

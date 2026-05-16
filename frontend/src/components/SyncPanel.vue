@@ -51,6 +51,39 @@ const filters = reactive<{
   minDate: '',
 })
 
+const cookiesJson = ref('')
+const savingCookies = ref(false)
+const cookiesStatus = ref('')
+
+async function saveCookies() {
+  if (!cookiesJson.value.trim()) return
+  savingCookies.value = true
+  cookiesStatus.value = ''
+  try {
+    const parsed = JSON.parse(cookiesJson.value)
+    const response = await fetch('/api/settings/rezka_cookies', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(parsed),
+    })
+    const data = await response.json()
+    if (response.ok) {
+      cookiesStatus.value = data.message || 'Куки успешно сохранены'
+      cookiesJson.value = ''
+      // Refresh status
+      void sync.fetchStatus()
+    } else {
+      cookiesStatus.value = 'Ошибка: ' + (data.message || 'Неизвестная ошибка')
+    }
+  } catch (e) {
+    cookiesStatus.value = 'Невалидный JSON: ' + (e as Error).message
+  } finally {
+    savingCookies.value = false
+  }
+}
+
 async function runStart(
   key: ProcessKey,
   start: () => Promise<boolean>,
@@ -335,6 +368,41 @@ watch(
             </label>
           </div>
         </section>
+
+        <section
+          class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3"
+          data-testid="sync-rezka-cookies"
+        >
+          <h3 class="text-xs font-semibold uppercase tracking-wider text-slate-500">
+            Куки Rezka
+          </h3>
+          <p class="mt-1 text-[11px] text-slate-500">
+            Вставьте JSON с куками из расширения Cookie-Editor для обхода блокировок.
+          </p>
+          <div class="mt-2">
+            <textarea
+              v-model="cookiesJson"
+              placeholder='[{"name": "...", "value": "..."}]'
+              class="w-full h-20 rounded-md border border-slate-300 px-2 py-1 text-xs font-mono"
+              data-testid="sync-rezka-cookies-textarea"
+            ></textarea>
+            <div class="mt-1 flex items-center justify-between">
+              <span class="text-xs" :class="cookiesStatus.startsWith('Ошибка') ? 'text-red-500' : 'text-emerald-500'">
+                {{ cookiesStatus }}
+              </span>
+              <button
+                type="button"
+                class="rounded-md bg-slate-900 px-3 py-1 text-xs font-semibold text-white hover:bg-slate-700 disabled:opacity-50"
+                :disabled="!cookiesJson.trim() || savingCookies"
+                data-testid="sync-rezka-cookies-save"
+                @click="saveCookies"
+              >
+                {{ savingCookies ? 'Сохранение...' : 'Сохранить куки' }}
+              </button>
+            </div>
+          </div>
+        </section>
+
         <article
           v-for="control in CONTROLS"
           :key="control.key"

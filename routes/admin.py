@@ -146,6 +146,30 @@ def update_credentials_settings(payload: CredentialsUpdate):
     }
 
 
+@router.post("/api/settings/rezka_cookies")
+def update_rezka_cookies(payload: list | dict):
+    import json
+    cookies_path = os.path.join(settings.app_data_dir, "rezka_cookies.json")
+    try:
+        with open(cookies_path, "w") as f:
+            json.dump(payload, f)
+            
+        # Trigger re-init of rezka session to pick up new cookies
+        try:
+            from runtime.rezka import _init_rezka_session
+            _init_rezka_session()
+        except Exception as e:
+            logger.warning("[REZKA] Failed to re-init session: %s", e)
+            
+        return {"status": "success", "message": "Куки успешно сохранены"}
+    except Exception as e:
+        logger.error("[REZKA] Failed to save cookies: %s", e)
+        return JSONResponse(
+            {"status": "error", "message": f"Ошибка сохранения: {e}"},
+            status_code=500,
+        )
+
+
 @router.get("/api/export")
 def export_data(fmt: str = "json", category_id: int = -1):
     items = db.export_items(category_id)
