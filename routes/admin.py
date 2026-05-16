@@ -378,3 +378,24 @@ def reset_database(confirm: str | None = None):
     if restarted:
         return {"status": "success", "message": "Database deleted, server is restarting..."}
     return {"status": "success", "message": "Database deleted, please restart server manually"}
+
+
+@router.post("/api/settings/rezka_cookies")
+async def save_rezka_cookies(cookies: list | dict):
+    import json
+    cookies_path = os.path.join(settings.app_data_dir, "rezka_cookies.json")
+    try:
+        with open(cookies_path, "w") as f:
+            json.dump(cookies, f, indent=2)
+
+        # Re-initialize rezka session state if possible
+        try:
+            from runtime.rezka import _init_rezka_session
+            _init_rezka_session()
+        except Exception as e:
+            logger.warning(f"Failed to re-init rezka session after cookie update: {e}")
+
+        return {"status": "success", "message": "Куки успешно сохранены"}
+    except Exception as e:
+        logger.error(f"Failed to save rezka cookies: {e}")
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
