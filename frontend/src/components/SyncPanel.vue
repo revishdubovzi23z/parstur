@@ -335,7 +335,6 @@ watch(
             </label>
           </div>
         </section>
-
         <article
           v-for="control in CONTROLS"
           :key="control.key"

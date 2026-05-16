@@ -7,7 +7,7 @@ import secrets
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, UploadFile, Request
+from fastapi import APIRouter, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
@@ -144,30 +144,6 @@ def update_credentials_settings(payload: CredentialsUpdate):
         "status": "success",
         "credentials": _credential_status(),
     }
-
-
-@router.post("/api/settings/rezka_cookies")
-def update_rezka_cookies(payload: list | dict):
-    import json
-    cookies_path = os.path.join(settings.app_data_dir, "rezka_cookies.json")
-    try:
-        with open(cookies_path, "w") as f:
-            json.dump(payload, f)
-            
-        # Trigger re-init of rezka session to pick up new cookies
-        try:
-            from runtime.rezka import _init_rezka_session
-            _init_rezka_session()
-        except Exception as e:
-            logger.warning("[REZKA] Failed to re-init session: %s", e)
-            
-        return {"status": "success", "message": "Куки успешно сохранены"}
-    except Exception as e:
-        logger.error("[REZKA] Failed to save cookies: %s", e)
-        return JSONResponse(
-            {"status": "error", "message": f"Ошибка сохранения: {e}"},
-            status_code=500,
-        )
 
 
 @router.get("/api/export")
@@ -378,28 +354,3 @@ def reset_database(confirm: str | None = None):
     if restarted:
         return {"status": "success", "message": "Database deleted, server is restarting..."}
     return {"status": "success", "message": "Database deleted, please restart server manually"}
-
-
-@router.post("/api/settings/rezka_cookies")
-async def save_rezka_cookies(request: Request):
-    import json
-    try:
-        cookies = await request.json()
-    except Exception as e:
-        return JSONResponse({"status": "error", "message": f"Invalid JSON: {e}"}, status_code=400)
-    cookies_path = os.path.join(settings.app_data_dir, "rezka_cookies.json")
-    try:
-        with open(cookies_path, "w") as f:
-            json.dump(cookies, f, indent=2)
-
-        # Re-initialize rezka session state if possible
-        try:
-            from runtime.rezka import _init_rezka_session
-            _init_rezka_session()
-        except Exception as e:
-            logger.warning(f"Failed to re-init rezka session after cookie update: {e}")
-
-        return {"status": "success", "message": "Куки успешно сохранены"}
-    except Exception as e:
-        logger.error(f"Failed to save rezka cookies: {e}")
-        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
