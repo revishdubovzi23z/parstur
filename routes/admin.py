@@ -7,7 +7,7 @@ import secrets
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, UploadFile
+from fastapi import APIRouter, UploadFile, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
@@ -381,8 +381,12 @@ def reset_database(confirm: str | None = None):
 
 
 @router.post("/api/settings/rezka_cookies")
-async def save_rezka_cookies(cookies: list | dict):
+async def save_rezka_cookies(request: Request):
     import json
+    try:
+        cookies = await request.json()
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": f"Invalid JSON: {e}"}, status_code=400)
     cookies_path = os.path.join(settings.app_data_dir, "rezka_cookies.json")
     try:
         with open(cookies_path, "w") as f:
