@@ -33,7 +33,7 @@ def _initial_concurrency() -> int:
 
 REZKA_CONCURRENCY = _initial_concurrency()
 STATUS_KEY = settings.status_key
-REZKA_ORIGIN = settings.rezka_origin
+REZKA_ORIGIN = "https://rezka.ag"
 REZKA_SEARCH_URL = f"{REZKA_ORIGIN}/engine/ajax/search.php"
 REZKA_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.138 Safari/537.36"
@@ -74,28 +74,6 @@ def _login_cookies() -> dict:
     anonymous defaults when no creds are present or login fails. The
     returned dict is safe to feed into aiohttp.ClientSession(cookies=...).
     """
-    # 5.12: Support manual cookies to bypass Cloudflare/Captcha
-    cookies_path = os.path.join(settings.app_data_dir, "rezka_cookies.json")
-    if os.path.exists(cookies_path):
-        try:
-            with open(cookies_path) as f:
-                manual_cookies = json.load(f)
-                logger.info(f"[rezka] Loaded cookies from {cookies_path}")
-
-                # Support Cookie-Editor array format
-                if isinstance(manual_cookies, list):
-                    cookies_dict = {}
-                    for c in manual_cookies:
-                        if isinstance(c, dict) and "name" in c and "value" in c:
-                            cookies_dict[c["name"]] = c["value"]
-                    manual_cookies = cookies_dict
-
-                cookies = dict(REZKA_COOKIES)
-                cookies.update(manual_cookies)
-                return cookies
-        except Exception as e:
-            logger.warning(f"[rezka] Failed to read manual cookies: {e}")
-
     if not REZKA_EMAIL or not REZKA_PASSWORD:
         return dict(REZKA_COOKIES)
     try:
