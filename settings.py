@@ -62,6 +62,10 @@ class _RezkaSettings(BaseSettings):
 
     rezka_email: str = Field(default="", description="HDRezka login (optional).")
     rezka_password: str = Field(default="", description="HDRezka password (optional).")
+    rezka_origin: str = Field(
+        default="https://rezka.ag",
+        description="HDRezka origin URL (with scheme, no trailing slash).",
+    )
     rezka_concurrency: int | None = Field(
         default=None,
         description=(
