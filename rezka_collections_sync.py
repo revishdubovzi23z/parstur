@@ -31,6 +31,38 @@ REZKA_PATH_TO_CATEGORY = {
 
 def _login():
     from HdRezkaApi import HdRezkaSession
+    import os
+    import json
+
+    # Try loading manual cookies first (5.12)
+    cookies_path = os.path.join(settings.app_data_dir, "rezka_cookies.json")
+    if os.path.exists(cookies_path):
+        try:
+            with open(cookies_path) as f:
+                manual_cookies = json.load(f)
+                logger.info(f"[REZKA] Loading cookies from {cookies_path}")
+
+                # Support Cookie-Editor array format
+                if isinstance(manual_cookies, list):
+                    cookies_dict = {}
+                    for c in manual_cookies:
+                        if isinstance(c, dict) and "name" in c and "value" in c:
+                            cookies_dict[c["name"]] = c["value"]
+                    manual_cookies = cookies_dict
+
+                session = HdRezkaSession(REZKA_ORIGIN)
+                # Inject cookies into the session
+                try:
+                    session.cookies.update(manual_cookies)
+                except Exception:
+                    # Fallback if it's a dict or something else
+                    for k, v in manual_cookies.items():
+                        session.cookies[k] = v
+
+                logger.info("  [+] Rezka session initialized with manual cookies")
+                return session
+        except Exception as e:
+            logger.warning(f"[REZKA] Failed to read manual cookies: {e}")
 
     session = HdRezkaSession(REZKA_ORIGIN)
     try:
