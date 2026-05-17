@@ -44,6 +44,7 @@ export const PROCESS_KEYS = [
   'rezka',
   'rezka_collections',
   'kinopub',
+  'kinopub_collections',
   'tmdb',
   'full_pipeline',
   'single_update',

@@ -262,6 +262,7 @@ describe('LOG_TYPE_FILENAMES', () => {
         'fix',
         'fix_poiskkino',
         'kinopub',
+        'kinopub_collections',
         'other',
         'reprocess',
         'rezka',

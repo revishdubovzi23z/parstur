@@ -34,6 +34,7 @@ const TAB_ORDER: LogType[] = [
   'rezka_collections',
   'tmdb',
   'kinopub',
+  'kinopub_collections',
   'user',
   'cleanup',
   'single_update',
