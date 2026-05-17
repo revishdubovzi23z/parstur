@@ -120,6 +120,15 @@ export const useFeedStore = defineStore('feed', {
       }
     },
 
+    onItemRemoved(): void {
+      if (this.items.length === 0) {
+        if (this.page > 1) {
+          this.page -= 1
+        }
+        void this.fetchFeed()
+      }
+    },
+
     async fetchFeed(): Promise<void> {
       // Don't bother hitting the backend if we know the session is
       // not authenticated — the legacy code does the same so 401
@@ -155,8 +164,10 @@ export const useFeedStore = defineStore('feed', {
         this.connectionError = false
         this.lastFetchedAt = Date.now()
         if (this.page > this.totalPages) {
-          // Backend shrunk; clamp without re-fetching to avoid a loop.
           this.page = this.totalPages
+          // Re-fetch for the clamped page
+          await this.fetchFeed()
+          return
         }
         // Stage 10.5 — fan out into the collections store so cards
         // can render their bookmark badge. Don't await; the cards

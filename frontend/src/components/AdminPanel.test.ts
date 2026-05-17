@@ -30,7 +30,7 @@ function setup(): { admin: ReturnType<typeof useAdminStore> } {
 function mountPanel(open = true) {
   return mount(AdminPanel, {
     props: { open },
-    global: { stubs: { KinopubAuthPanel: true, CredentialSettingsPanel: true } },
+    global: { stubs: { KinopubAuthPanel: true, CredentialSettingsPanel: true, TmdbAuthPanel: true } },
   })
 }
 

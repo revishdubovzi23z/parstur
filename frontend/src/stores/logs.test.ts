@@ -267,6 +267,7 @@ describe('LOG_TYPE_FILENAMES', () => {
         'rezka',
         'rezka_collections',
         'single_update',
+        'tmdb',
         'user',
         'video',
       ].sort(),

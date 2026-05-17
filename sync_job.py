@@ -344,6 +344,9 @@ def run_sync(mode="video", manual_min_date=None):
                             search_term = display_title.split(" / ")[0].split("/")[0].strip()
                             search_term = re.sub(r"\(.*?\)", "", search_term)
                             search_term = re.sub(r"\[.*?\]", "", search_term).strip()
+                            # Заменяем тире и дефисы на пробелы для расширения результатов поиска
+                            search_term = search_term.replace("—", " ").replace("-", " ").strip()
+                            search_term = re.sub(r"\s+", " ", search_term)
 
                             logger.info(f"  🔍 Рутор (1.2 Глубокий поиск): {search_term}")
                             search_results = parser.search_releases(search_term)

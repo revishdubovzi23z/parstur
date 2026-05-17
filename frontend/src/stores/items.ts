@@ -336,6 +336,7 @@ export const useItemsStore = defineStore('items', {
       if (ok) {
         // Remove from current view immediately
         feed.items = feed.items.filter((it) => it.id !== id)
+        feed.onItemRemoved()
         useToastStore().success(
           wasIgnored ? 'Фильм восстановлен' : 'Фильм отправлен в корзину',
         )

@@ -540,7 +540,8 @@ class DbItemsMixin:
                 except Exception:
                     pass
                 if fts_available:
-                    fts_query = " OR ".join(search.strip().split())
+                    # Quote terms to avoid FTS syntax errors with hyphens (e.g. "Уидоус-Бэй")
+                    fts_query = " OR ".join(f'"{term}"' for term in search.strip().split() if term)
                     where_clauses.append(
                         "items.id IN (SELECT rowid FROM items_fts WHERE items_fts MATCH ?)"
                     )

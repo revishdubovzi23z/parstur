@@ -28,9 +28,14 @@ class RutorParser:
     def clean_display_title(self, full_title):
         # Очищаем заголовок от технического мусора
         t = full_title
-        # Пытаемся сохранить год
-        year_match = re.search(r"\((\d{4})\)", t)
-        year_str = f" ({year_match.group(1)})" if year_match else ""
+        # Пытаемся сохранить год (ищем первые 4 цифры в диапазоне 1900-2100)
+        year_str = ""
+        year_matches = re.findall(r"(\d{4})", t)
+        for ym in year_matches:
+            y = int(ym)
+            if 1900 <= y <= 2100:
+                year_str = f" ({y})"
+                break
 
         # Отсекаем всё, что начинается с технических тегов качества
         t = re.split(
@@ -99,9 +104,13 @@ class RutorParser:
             parsed = PTN.parse(full_title)
             year = parsed.get("year")
             if not year:
-                year_match = re.search(r"\((\d{4})\)", full_title)
-                if year_match:
-                    year = int(year_match.group(1))
+                # Ищем любые 4 цифры в диапазоне 1900-2100 (чтобы поддерживать диапазоны типа 2025-2026)
+                year_matches = re.findall(r"(\d{4})", full_title)
+                for ym in year_matches:
+                    y = int(ym)
+                    if 1900 <= y <= 2100:
+                        year = y
+                        break
 
             releases.append(
                 {
@@ -169,9 +178,13 @@ class RutorParser:
             parsed = PTN.parse(full_title)
             year = parsed.get("year")
             if not year:
-                year_match = re.search(r"\((\d{4})\)", full_title)
-                if year_match:
-                    year = int(year_match.group(1))
+                # Ищем любые 4 цифры в диапазоне 1900-2100 (чтобы поддерживать диапазоны типа 2025-2026)
+                year_matches = re.findall(r"(\d{4})", full_title)
+                for ym in year_matches:
+                    y = int(ym)
+                    if 1900 <= y <= 2100:
+                        year = y
+                        break
 
             releases.append(
                 {

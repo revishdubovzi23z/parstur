@@ -127,7 +127,7 @@ async def start_cleanup():
     check_any_running()
     log_file = "cleanup_log.txt"
     with open(log_file, "w", encoding="utf-8") as f:
-        f.write("=== Запуск очистки дубликатов ===\n")
+        f.write("\ufeff=== Запуск очистки дубликатов ===\n")
     await task_queue.add_task(
         run_script_with_args,
         "cleanup",
@@ -311,7 +311,11 @@ def get_sync_log(log_type: str = "video"):
 def download_log(log_type: str = "video"):
     filename = _LOG_FILES.get(log_type)
     if filename and os.path.exists(filename):
-        return FileResponse(path=filename, filename=filename, media_type="text/plain")
+        return FileResponse(
+            path=filename,
+            filename=filename,
+            media_type="text/plain; charset=utf-8",
+        )
     return {"error": "Файл не найден"}
 
 
@@ -321,7 +325,7 @@ def clear_log(log_type: str = "video"):
     if not filename:
         return {"status": "error", "message": "Unknown log type"}
     with open(filename, "w", encoding="utf-8") as f:
-        f.write("=== Очищено ===\n")
+        f.write("\ufeff=== Очищено ===\n")
     return {"status": "success"}
 
 

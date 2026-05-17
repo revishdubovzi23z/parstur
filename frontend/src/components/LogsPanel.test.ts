@@ -60,7 +60,7 @@ describe('LogsPanel.vue', () => {
     const wrapper = mount(LogsPanel, { props: { open: true } })
     await flushPromises()
     const tabs = wrapper.findAll('[data-testid^="logs-tab-"]')
-    expect(tabs).toHaveLength(11)
+    expect(tabs).toHaveLength(12)
     expect(wrapper.find('[data-testid="logs-tab-kinopub"]').exists()).toBe(true)
   })
 

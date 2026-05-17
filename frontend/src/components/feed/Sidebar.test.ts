@@ -52,13 +52,11 @@ describe('Sidebar.vue', () => {
   it('renders a compact category select and collections from the stores', () => {
     setup()
     const wrapper = mount(Sidebar)
-    const select = wrapper.find('[data-testid="sidebar-category-select"]')
-    expect(select.exists()).toBe(true)
-    expect(
-      wrapper.find('[data-testid="sidebar-category-selected"]').exists(),
-    ).toBe(false)
+    expect(wrapper.find('[data-testid="sidebar-all-videos-btn"]').text()).toContain(
+      'Все видео',
+    )
     expect(wrapper.find('[data-testid="sidebar-category-select"]').text()).toContain(
-      'Все видео — 100',
+      'Movies',
     )
     expect(
       wrapper.find('[data-testid="sidebar-category-option-5"]').text(),
