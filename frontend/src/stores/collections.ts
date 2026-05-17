@@ -132,6 +132,11 @@ export const useCollectionsStore = defineStore('collections', {
               ? current
               : [...current, collectionId],
           }
+          // Update count optimistically
+          const collection = this.items.find((c) => c.id === collectionId)
+          if (collection) {
+            collection.count = (collection.count ?? 0) + 1
+          }
           // If the feed is set to hide collected items, remove this one now
           if (feedStore.filters.hideCollected) {
             feedStore.items = feedStore.items.filter((it) => it.id !== itemId)
@@ -142,6 +147,11 @@ export const useCollectionsStore = defineStore('collections', {
           this.itemCollections = {
             ...this.itemCollections,
             [itemId]: current.filter((c) => c !== collectionId),
+          }
+          // Update count optimistically
+          const collection = this.items.find((c) => c.id === collectionId)
+          if (collection) {
+            collection.count = Math.max(0, (collection.count ?? 0) - 1)
           }
           return 'removed'
         }

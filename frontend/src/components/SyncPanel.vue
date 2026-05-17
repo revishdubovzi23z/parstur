@@ -149,6 +149,13 @@ const CONTROLS: ControlRow[] = [
     startLabel: 'Старт',
   },
   {
+    key: 'tmdb',
+    label: 'TMDB · папки',
+    description: 'Синхронизация коллекций со списками TMDB (API v4).',
+    start: () => sync.startSyncTmdb(),
+    startLabel: 'Старт',
+  },
+  {
     key: 'cleanup',
     label: 'Очистка дубликатов',
     description: 'Сворачивает повторы из items / releases.',

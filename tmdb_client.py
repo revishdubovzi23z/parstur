@@ -19,7 +19,22 @@ def _norm(s):
 class TMDBClient:
     def __init__(self):
         self.api_key = settings.tmdb_api_key
-        self.api_token = settings.tmdb_api_token
+
+        # Check DB for authenticated token first
+        from db import db
+
+        db_token = None
+        try:
+            with db._conn() as c:
+                row = c.execute(
+                    "SELECT value FROM app_state WHERE key = 'tmdb_access_token'"
+                ).fetchone()
+                db_token = row[0] if row else None
+        except Exception as e:
+            logger.debug(f"Failed to read tmdb_access_token from DB: {e}")
+
+        self.api_token = db_token or settings.tmdb_api_token
+
         self.base_url = "https://api.themoviedb.org/3"
         self.image_base_url = "https://image.tmdb.org/t/p/w500"
         self.headers = {"accept": "application/json"}
@@ -253,7 +268,136 @@ class TMDBClient:
             "description": best["description"],
             "release_date": best["release_date"],
             "imdb_id": imdb_id,
+            "tmdb_id": best["tmdb_id"],
+            "media_type": best["media_type"],
         }
+
+    def create_list(self, name, description=""):
+        """Create a new list on TMDB (API v4).
+        Requires self.api_token (v4).
+        """
+        if not self.api_token:
+            logger.error("TMDB create_list failed: No v4 API token configured")
+            return None
+        url = "https://api.themoviedb.org/4/list"
+        payload = {
+            "name": name,
+            "description": description,
+            "public": False,
+            "iso_639_1": "ru",
+        }
+        try:
+            resp = self.session.post(url, json=payload, headers=self.headers, timeout=10)
+            if resp.status_code == 201:
+                return str(resp.json().get("id"))
+            logger.warning(f"TMDB create_list failed: HTTP {resp.status_code} - {resp.text}")
+        except Exception as e:
+            logger.error(f"TMDB create_list failed: {e}", exc_info=True)
+        return None
+
+    def update_list(self, list_id, name, description=None):
+        """Update a list on TMDB (API v4).
+        Requires self.api_token (v4).
+        """
+        if not self.api_token:
+            return False
+        url = f"https://api.themoviedb.org/4/list/{list_id}"
+        payload = {"name": name}
+        if description is not None:
+            payload["description"] = description
+        try:
+            resp = self.session.put(url, json=payload, headers=self.headers, timeout=10)
+            if resp.status_code == 200:
+                return True
+            logger.warning(f"TMDB update_list failed: HTTP {resp.status_code} - {resp.text}")
+        except Exception as e:
+            logger.error(f"TMDB update_list failed: {e}", exc_info=True)
+        return False
+
+    def delete_list(self, list_id):
+        """Delete a list on TMDB (API v4).
+        Requires self.api_token (v4).
+        """
+        if not self.api_token:
+            return False
+        url = f"https://api.themoviedb.org/4/list/{list_id}"
+        try:
+            resp = self.session.delete(url, headers=self.headers, timeout=10)
+            if resp.status_code == 200:
+                return True
+            logger.warning(f"TMDB delete_list failed: HTTP {resp.status_code} - {resp.text}")
+        except Exception as e:
+            logger.error(f"TMDB delete_list failed: {e}", exc_info=True)
+        return False
+
+    def get_list_items(self, list_id):
+        """Get items from a TMDB list (API v4)."""
+        if not self.api_token:
+            return []
+        url = f"https://api.themoviedb.org/4/list/{list_id}"
+        all_results = []
+        page = 1
+        while True:
+            try:
+                resp = self.session.get(
+                    url, headers=self.headers, params={"page": page}, timeout=10
+                )
+                if resp.status_code != 200:
+                    logger.warning(
+                        f"TMDB get_list_items failed: HTTP {resp.status_code} on page {page}"
+                    )
+                    break
+                data = resp.json()
+                results = data.get("results", [])
+                all_results.extend(results)
+
+                total_pages = data.get("total_pages", 1)
+                if page >= total_pages:
+                    break
+                page += 1
+            except Exception as e:
+                logger.error(
+                    f"TMDB get_list_items failed on page {page}: {e}",
+                    exc_info=True,
+                )
+                break
+        return all_results
+
+    def add_items_to_list(self, list_id, items):
+        """Add items to a TMDB list (API v4).
+        `items` should be a list of dicts: [{"media_type": "movie", "media_id": 123}, ...]
+        """
+        if not self.api_token or not items:
+            return False
+        url = f"https://api.themoviedb.org/4/list/{list_id}/items"
+        payload = {"items": items}
+        try:
+            resp = self.session.post(url, json=payload, headers=self.headers, timeout=10)
+            if resp.status_code in (200, 201):
+                return True
+            logger.warning(f"TMDB add_items_to_list failed: HTTP {resp.status_code} - {resp.text}")
+        except Exception as e:
+            logger.error(f"TMDB add_items_to_list failed: {e}", exc_info=True)
+        return False
+
+    def remove_items_from_list(self, list_id, items):
+        """Remove items from a TMDB list (API v4).
+        `items` should be a list of dicts: [{"media_type": "movie", "media_id": 123}, ...]
+        """
+        if not self.api_token or not items:
+            return False
+        url = f"https://api.themoviedb.org/4/list/{list_id}/items"
+        payload = {"items": items}
+        try:
+            resp = self.session.delete(url, json=payload, headers=self.headers, timeout=10)
+            if resp.status_code == 200:
+                return True
+            logger.warning(
+                f"TMDB remove_items_from_list failed: HTTP {resp.status_code} - {resp.text}"
+            )
+        except Exception as e:
+            logger.error(f"TMDB remove_items_from_list failed: {e}", exc_info=True)
+        return False
 
 
 if __name__ == "__main__":

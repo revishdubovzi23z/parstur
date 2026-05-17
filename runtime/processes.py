@@ -63,6 +63,7 @@ PROCESS_KEYS: tuple[str, ...] = (
     "rezka",
     "rezka_collections",
     "kinopub",
+    "tmdb",
     "full_pipeline",
     "single_update",
 )
@@ -93,6 +94,7 @@ _LOG_FILES = {
     "rezka": "sync_rezka_log.txt",
     "rezka_collections": "rezka_collections_log.txt",
     "kinopub": "sync_kinopub_log.txt",
+    "tmdb": "sync_tmdb_log.txt",
     "single_update": "single_update_log.txt",
 }
 

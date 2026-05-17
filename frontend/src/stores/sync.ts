@@ -44,6 +44,7 @@ export const PROCESS_KEYS = [
   'rezka',
   'rezka_collections',
   'kinopub',
+  'tmdb',
   'full_pipeline',
   'single_update',
 ] as const
@@ -539,6 +540,10 @@ export const useSyncStore = defineStore('sync', {
 
     startSyncUser(): Promise<boolean> {
       return this._post('/api/sync_user', 'Импорт CSV')
+    },
+
+    startSyncTmdb(): Promise<boolean> {
+      return this._post('/api/start_sync_tmdb', 'Синхронизация TMDB')
     },
 
     stop(key: ProcessKey): Promise<boolean> {

@@ -17,6 +17,7 @@ import { computed, ref, watch } from 'vue'
 import CollectionsIO from './CollectionsIO.vue'
 import CredentialSettingsPanel from './CredentialSettingsPanel.vue'
 import KinopubAuthPanel from './KinopubAuthPanel.vue'
+import TmdbAuthPanel from './TmdbAuthPanel.vue'
 import { useAdminStore } from '../stores/admin'
 
 const props = defineProps<{ open: boolean }>()
@@ -350,6 +351,8 @@ async function onRebuild(): Promise<void> {
         <CollectionsIO />
 
         <KinopubAuthPanel :visible="open" />
+
+        <TmdbAuthPanel :visible="open" />
 
         <CredentialSettingsPanel :visible="open" />
 

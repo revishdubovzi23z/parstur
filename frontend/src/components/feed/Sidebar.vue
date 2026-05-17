@@ -65,6 +65,10 @@ const selectedCategoryValue = computed({
   },
 })
 
+const dropdownCategories = computed(() =>
+  categories.items.filter((cat) => cat.id !== -1)
+)
+
 async function selectCategory(id: number): Promise<void> {
   collections.select(null)
   feed.setFilters({ categoryId: id, collectionId: null })
@@ -214,16 +218,28 @@ const categoryLabel = (id: number, name: string): string => {
         Категории
       </h2>
       <div class="mt-2 rounded-2xl border border-slate-200/60 bg-white/50 backdrop-blur-sm p-3 shadow-sm">
+        <button
+          type="button"
+          class="w-full mb-2 rounded-xl border border-slate-200/80 bg-white/80 px-3 py-2 text-[13px] font-semibold shadow-sm hover:bg-slate-100 focus:outline-none transition-all flex justify-between items-center"
+          :class="selectedCategoryId === -1 && !selectedCollectionId ? 'bg-indigo-50 text-indigo-700 border-indigo-200' : 'bg-white text-slate-700 border-slate-200/80'"
+          data-testid="sidebar-all-videos-btn"
+          @click="selectCategory(-1)"
+        >
+          <span>Все видео</span>
+          <span class="text-xs text-slate-400" v-if="categories.items.find(c => c.id === -1)">
+            {{ categories.items.find(c => c.id === -1)?.count }}
+          </span>
+        </button>
         <label class="block">
           <span class="sr-only">Выбрать категорию</span>
           <select
             v-model="selectedCategoryValue"
             class="w-full rounded-xl border border-slate-200/80 bg-white/80 px-3 py-2 text-[13px] font-semibold text-slate-800 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all"
             data-testid="sidebar-category-select"
-            :disabled="categories.loading || !categories.items.length"
+            :disabled="categories.loading || !dropdownCategories.length"
           >
             <option
-              v-for="cat in categories.items"
+              v-for="cat in dropdownCategories"
               :key="cat.id"
               :value="String(cat.id)"
               :data-testid="`sidebar-category-option-${cat.id}`"

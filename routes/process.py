@@ -158,6 +158,23 @@ async def start_rezka_collections():
     return {"status": "started"}
 
 
+@router.post("/api/start_sync_tmdb")
+async def start_sync_tmdb():
+    check_any_running()
+    log_file = "sync_tmdb_log.txt"
+    with open(log_file, "w", encoding="utf-8") as f:
+        f.write("=== Синхронизация коллекций TMDB ===\n")
+    await task_queue.add_task(
+        run_script_with_args,
+        "tmdb",
+        "tmdb_sync.py",
+        [],
+        "tmdb",
+        log_file,
+    )
+    return {"status": "started"}
+
+
 @router.post("/api/stop/{key}")
 async def stop_process(key: str):
     if not _is_valid_status_key(key):

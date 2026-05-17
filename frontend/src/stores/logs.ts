@@ -38,6 +38,7 @@ export const LOG_TYPE_LABELS: Record<string, string> = {
   user: 'CSV',
   cleanup: 'Чистка',
   single_update: 'Карточка',
+  tmdb: 'TMDB Папки',
 }
 
 export type LogType = keyof typeof LOG_TYPE_LABELS
@@ -57,6 +58,7 @@ export const LOG_TYPE_FILENAMES: Record<LogType, string> = {
   user: 'user_sync_log.txt',
   cleanup: 'cleanup_log.txt',
   single_update: 'single_update_log.txt',
+  tmdb: 'sync_tmdb_log.txt',
 }
 
 /** Process key (as it appears in `process_status`) → log tab id.
@@ -75,6 +77,7 @@ export const PROCESS_TO_LOG: Partial<Record<ProcessKey, LogType>> = {
   user: 'user',
   cleanup: 'cleanup',
   single_update: 'single_update',
+  tmdb: 'tmdb',
 }
 
 /** Inverse mapping log type → ProcessKey for the panel header's
@@ -92,6 +95,7 @@ export const LOG_TO_PROCESS: Record<LogType, ProcessKey> = {
   user: 'user',
   cleanup: 'cleanup',
   single_update: 'single_update',
+  tmdb: 'tmdb',
 }
 
 interface LogsStoreState {

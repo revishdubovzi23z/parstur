@@ -76,6 +76,23 @@ def delete_collection(id: int):
             cache = _rezka.rezka_session_folders_cache
             if cache and coll_norm in cache:
                 _rezka_folder_action("remove_cat", {"cat_id": cache[coll_norm]})
+
+    from settings import settings
+
+    if settings.tmdb_api_token:
+        with db._conn() as c:
+            row = c.execute(
+                "SELECT value FROM app_state WHERE key = ?", (f"tmdb_list_id_{id}",)
+            ).fetchone()
+            list_id = row[0] if row else None
+        if list_id:
+            from tmdb_client import TMDBClient
+
+            client = TMDBClient()
+            client.delete_list(list_id)
+            with db._conn() as c:
+                c.execute("DELETE FROM app_state WHERE key = ?", (f"tmdb_list_id_{id}",))
+
     db.delete_collection(id)
     return {"status": "success"}
 
@@ -101,6 +118,21 @@ def rename_collection(id: int, data: CollectionRename):
             cache = _rezka.rezka_session_folders_cache
             if cache and coll_norm in cache:
                 cat_id = cache[coll_norm]
+
+    from settings import settings
+
+    if settings.tmdb_api_token:
+        with db._conn() as c:
+            row = c.execute(
+                "SELECT value FROM app_state WHERE key = ?", (f"tmdb_list_id_{id}",)
+            ).fetchone()
+            list_id = row[0] if row else None
+        if list_id:
+            from tmdb_client import TMDBClient
+
+            client = TMDBClient()
+            client.update_list(list_id, data.name)
+
     db.rename_collection(id, data.name)
     if cat_id:
         _rezka_folder_action("change_cat_name", {"cat_id": cat_id, "name": data.name})
@@ -295,13 +327,115 @@ def _sync_rezka_folder_wrapper(action, collection_id, item_id):
         )
 
 
+def _sync_tmdb_list(action, collection_id, item_id):
+    try:
+        from tmdb_client import TMDBClient
+        from tmdb_sync import CATEGORY_TO_MEDIA_TYPE
+
+        client = TMDBClient()
+        if not client.api_token:
+            return
+
+        with db._conn() as c:
+            row = c.execute(
+                "SELECT value FROM app_state WHERE key = ?",
+                (f"tmdb_list_id_{collection_id}",),
+            ).fetchone()
+            list_id = row[0] if row else None
+
+        if not list_id:
+            with db._conn() as c:
+                row = c.execute(
+                    "SELECT name FROM collections WHERE id = ?", (collection_id,)
+                ).fetchone()
+                coll_name = row[0] if row else None
+            if not coll_name:
+                return
+            list_id = client.create_list(
+                coll_name,
+                f"Синхронизировано из Antigravity Tracker (Коллекция ID {collection_id})",
+            )
+            if list_id:
+                with db._conn() as c:
+                    c.execute(
+                        "INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)",
+                        (f"tmdb_list_id_{collection_id}", list_id),
+                    )
+            else:
+                return
+
+        item = db.get_item(item_id)
+        if not item:
+            return
+
+        imdb_id = item.get("imdb_id")
+        category_id = item.get("category_id")
+        media_type = CATEGORY_TO_MEDIA_TYPE.get(category_id, "movie")
+
+        tmdb_id = None
+        if imdb_id:
+            meta = client.find_by_imdb_id(imdb_id, return_meta=True)
+            if meta:
+                tmdb_id = meta.get("tmdb_id")
+                media_type = meta.get("media_type") or media_type
+
+        if not tmdb_id:
+            title = item.get("title")
+            year = item.get("year")
+            if title:
+                meta = client.search_movie(title, year)
+                if meta:
+                    tmdb_id = meta.get("tmdb_id")
+                    media_type = meta.get("media_type") or media_type
+
+        if not tmdb_id:
+            logger.warning(f"[TMDB SYNC] Не нашли TMDB ID для элемента {item_id}")
+            return
+
+        items_payload = [{"media_type": media_type, "media_id": int(tmdb_id)}]
+        if action == "added":
+            res = client.add_items_to_list(list_id, items_payload)
+            logger.info(
+                f"[TMDB SYNC] Добавили элемент {item_id} (TMDB: {tmdb_id}) в список {list_id}. Успешно: {res}"
+            )
+        elif action == "removed":
+            res = client.remove_items_from_list(list_id, items_payload)
+            logger.info(
+                f"[TMDB SYNC] Удалили элемент {item_id} (TMDB: {tmdb_id}) из списка {list_id}. Успешно: {res}"
+            )
+
+    except Exception as e:
+        logger.error(f"[TMDB SYNC ERROR] {e}", exc_info=True)
+
+
+def _sync_tmdb_list_wrapper(action, collection_id, item_id):
+    try:
+        _sync_tmdb_list(action, collection_id, item_id)
+    except Exception as e:
+        logger.error(f"[TMDB SYNC WRAPPER ERROR] {e}", exc_info=True)
+
+
 @router.post("/api/collections/{collection_id}/toggle")
 async def toggle_collection_item(collection_id: int, data: CollectionItemRequest):
     action = db.toggle_collection_item(collection_id, data.item_id)
 
-    if action in ("added", "removed") and _rezka.rezka_session:
+    if action in ("added", "removed"):
         loop = asyncio.get_running_loop()
-        loop.run_in_executor(None, _sync_rezka_folder_wrapper, action, collection_id, data.item_id)
+        if _rezka.rezka_session:
+            loop.run_in_executor(
+                None,
+                _sync_rezka_folder_wrapper,
+                action,
+                collection_id,
+                data.item_id,
+            )
+        loop.run_in_executor(
+            None,
+            _sync_tmdb_list_wrapper,
+            action,
+            collection_id,
+            data.item_id,
+        )
 
     return {"status": "success", "action": action}
 
