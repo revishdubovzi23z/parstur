@@ -287,3 +287,54 @@ class KinopubClient:
         object, NOT the outer envelope."""
         body = self._request("GET", f"/v1/items/{item_id}")
         return dict(body.get("item", body))
+
+    # ── Bookmarks (folders) ──────────────────────────────────────────────
+    #
+    # kino.pub's "Закладки" are functionally identical to par2 collections:
+    # a flat list of named folders, each of which holds a set of items.
+    # Docs: https://kinoapi.com/api_bookmarks.html
+    #
+    # The endpoints return either `{"status": 200, "items": [...]}` or
+    # `{"status": 200, "folder": {...}, "items": [...]}` depending on the
+    # call — we normalise to plain lists/dicts here.
+
+    def list_bookmark_folders(self) -> list[dict]:
+        """`GET /v1/bookmarks` — list every folder on the operator's
+        account. Each entry carries `id`, `title`, `count`, `views`,
+        `created`, `updated`."""
+        body = self._request("GET", "/v1/bookmarks")
+        items = body.get("items") or body.get("data") or []
+        return list(items) if isinstance(items, list) else []
+
+    def get_bookmark_folder_items(self, folder_id: int) -> list[dict]:
+        """`GET /v1/bookmarks/{folder_id}` — list the catalog items
+        inside one folder. Returns the raw `items[]` array; callers
+        only care about `id` / `title` / `year` / `type` for matching.
+        """
+        body = self._request("GET", f"/v1/bookmarks/{int(folder_id)}")
+        items = body.get("items") or []
+        return list(items) if isinstance(items, list) else []
+
+    def create_bookmark_folder(self, title: str) -> dict:
+        """`POST /v1/bookmarks/create` — create a folder with the
+        given title. Returns the API's `folder` object (which carries
+        the freshly-assigned `id`)."""
+        body = self._request(
+            "POST",
+            "/v1/bookmarks/create",
+            data={"title": title},
+        )
+        folder = body.get("folder")
+        if isinstance(folder, dict):
+            return dict(folder)
+        return {}
+
+    def add_to_bookmark_folder(self, *, item: int, folder: int) -> None:
+        """`POST /v1/bookmarks/add` — add a catalog item to a folder.
+        Returns silently on success; raises `KinopubAPIError` otherwise.
+        """
+        self._request(
+            "POST",
+            "/v1/bookmarks/add",
+            data={"item": int(item), "folder": int(folder)},
+        )

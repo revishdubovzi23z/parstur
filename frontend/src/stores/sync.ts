@@ -44,6 +44,7 @@ export const PROCESS_KEYS = [
   'rezka',
   'rezka_collections',
   'kinopub',
+  'kinopub_collections',
   'tmdb',
   'full_pipeline',
   'single_update',
@@ -519,6 +520,10 @@ export const useSyncStore = defineStore('sync', {
 
     startSyncKinopub(): Promise<boolean> {
       return this._post('/api/start_sync_kinopub', 'Синхронизация kino.pub')
+    },
+
+    startKinopubCollections(): Promise<boolean> {
+      return this._post('/api/start_kinopub_collections', 'Папки kino.pub')
     },
 
     startCleanup(): Promise<boolean> {
