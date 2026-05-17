@@ -148,9 +148,18 @@ function retry(): void {
 
         <nav
           v-if="feed.hasItems && feed.totalPages > 1"
-          class="mt-6 flex items-center justify-center gap-3"
+          class="mt-6 flex items-center justify-center gap-2"
           data-testid="feed-pagination"
         >
+          <button
+            type="button"
+            class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+            :disabled="feed.page === 1 || feed.loading"
+            data-testid="feed-first"
+            @click="feed.setPage(1); feed.fetchFeed()"
+          >
+            «
+          </button>
           <button
             type="button"
             class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
@@ -160,8 +169,8 @@ function retry(): void {
           >
             ← Назад
           </button>
-          <span class="text-sm text-slate-600" data-testid="feed-page-indicator">
-            Страница {{ feed.page }} из {{ feed.totalPages }}
+          <span class="text-sm font-medium text-slate-600 px-1" data-testid="feed-page-indicator">
+            {{ feed.page }} / {{ feed.totalPages }}
           </span>
           <button
             type="button"
@@ -171,6 +180,15 @@ function retry(): void {
             @click="feed.nextPage()"
           >
             Вперёд →
+          </button>
+          <button
+            type="button"
+            class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+            :disabled="feed.page === feed.totalPages || feed.loading"
+            data-testid="feed-last"
+            @click="feed.setPage(feed.totalPages); feed.fetchFeed()"
+          >
+            »
           </button>
         </nav>
       </div>

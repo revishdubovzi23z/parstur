@@ -118,7 +118,7 @@ describe('FeedView.vue', () => {
     expect(cards[0].attributes('data-item-id')).toBe('1')
     expect(wrapper.find('[data-testid="feed-pagination"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="feed-page-indicator"]').text()).toContain(
-      'Страница 1 из 3',
+      '1 / 3',
     )
   })
 
@@ -186,7 +186,7 @@ describe('FeedView.vue', () => {
     const wrapper = mount(FeedView)
     await flushPromises()
     expect(wrapper.find('[data-testid="feed-page-indicator"]').text()).toContain(
-      '1 из 2',
+      '1 / 2',
     )
 
     await wrapper.find('[data-testid="feed-next"]').trigger('click')
