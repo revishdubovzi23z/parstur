@@ -260,24 +260,13 @@ onMounted(() => {
       <h4 class="text-xs font-semibold uppercase tracking-wide text-slate-500">
         Источники (Вкл/Выкл)
       </h4>
-      <div class="mt-3 grid gap-3 sm:grid-cols-3">
+      <div class="mt-3 grid gap-3 sm:grid-cols-2">
         <label class="flex flex-col gap-1 text-xs text-slate-600">
           <span class="font-semibold">HDRezka</span>
           <select
             v-model="draft.REZKA_ENABLED"
             class="rounded-md border border-slate-300 px-2 py-1.5 text-xs"
             data-testid="credentials-rezka-enabled"
-          >
-            <option value="true">Включено</option>
-            <option value="false">Скрыто</option>
-          </select>
-        </label>
-        <label class="flex flex-col gap-1 text-xs text-slate-600">
-          <span class="font-semibold">Kino.pub</span>
-          <select
-            v-model="draft.KINOPUB_ENABLED"
-            class="rounded-md border border-slate-300 px-2 py-1.5 text-xs"
-            data-testid="credentials-kinopub-enabled"
           >
             <option value="true">Включено</option>
             <option value="false">Скрыто</option>
@@ -295,7 +284,24 @@ onMounted(() => {
           </select>
         </label>
       </div>
-      <div class="mt-3 grid gap-3 sm:grid-cols-2">
+    </div>
+
+    <div class="mt-4 border-t border-slate-100 pt-4">
+      <h4 class="text-xs font-semibold uppercase tracking-wide text-slate-500">
+        Kino.pub
+      </h4>
+      <div class="mt-3 grid gap-3 sm:grid-cols-3">
+        <label class="flex flex-col gap-1 text-xs text-slate-600">
+          <span class="font-semibold">Статус</span>
+          <select
+            v-model="draft.KINOPUB_ENABLED"
+            class="rounded-md border border-slate-300 px-2 py-1.5 text-xs"
+            data-testid="credentials-kinopub-enabled"
+          >
+            <option value="true">Включено</option>
+            <option value="false">Скрыто</option>
+          </select>
+        </label>
         <label class="flex flex-col gap-1 text-xs text-slate-600">
           <span class="font-semibold">Client ID (опционально)</span>
           <input

@@ -174,9 +174,7 @@ def test_run_binds_matching_item(tmp_db, fake_client) -> None:
 
     assert summary["bound"] == 1
     assert summary["skipped"] == 0
-    assert fake_client.calls == [
-        {"query": "Inception", "type_": None, "year": 2010, "limit": 25}
-    ]
+    assert fake_client.calls == [{"query": "Inception", "type_": None, "year": 2010, "limit": 25}]
     with tmp_db._conn() as c:
         row = c.execute(
             "SELECT kinopub_id, kinopub_type, kinopub_url, checked_kinopub FROM items WHERE id = ?",
