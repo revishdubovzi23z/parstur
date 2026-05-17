@@ -158,6 +158,26 @@ async def start_rezka_collections():
     return {"status": "started"}
 
 
+@router.post("/api/start_kinopub_collections")
+async def start_kinopub_collections():
+    """Bi-directional sync between par2 collections and kino.pub
+    bookmark folders. Same flight-control pattern as
+    `/api/start_rezka_collections`."""
+    check_any_running()
+    log_file = "kinopub_collections_log.txt"
+    with open(log_file, "w", encoding="utf-8") as f:
+        f.write("=== Синхронизация коллекций kino.pub ===\n")
+    await task_queue.add_task(
+        run_script_with_args,
+        "kinopub_collections",
+        "kinopub_collections_sync.py",
+        [],
+        "kinopub_collections",
+        log_file,
+    )
+    return {"status": "started"}
+
+
 @router.post("/api/start_sync_tmdb")
 async def start_sync_tmdb():
     check_any_running()

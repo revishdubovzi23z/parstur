@@ -149,6 +149,14 @@ const CONTROLS: ControlRow[] = [
     startLabel: 'Старт',
   },
   {
+    key: 'kinopub_collections',
+    label: 'kino.pub · папки',
+    description:
+      'Двунаправленная синхронизация коллекций с папками-закладками kino.pub.',
+    start: () => sync.startKinopubCollections(),
+    startLabel: 'Старт',
+  },
+  {
     key: 'tmdb',
     label: 'TMDB · папки',
     description: 'Синхронизация коллекций со списками TMDB (API v4).',

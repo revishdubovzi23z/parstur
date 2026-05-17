@@ -497,3 +497,59 @@ def get_stream_info(
         )
 
     return out
+
+
+# ---------------------------------------------------------------------------
+# Bookmarks (folders) — used by `kinopub_collections_sync.py` to mirror
+# par2 collections against the operator's kino.pub account, analogous
+# to `rezka_collections_sync.py`.
+
+
+def list_bookmark_folders(
+    client: KinopubClient | None = None,
+) -> list[dict]:
+    """Return every folder on the operator's kino.pub account.
+
+    Output shape matches the API's `items[]` array: each dict carries
+    `id`, `title`, `count`, `created`, `updated`. Callers downstream
+    only rely on `id` and `title`.
+    """
+    c = client or _authenticated_client()
+    return c.list_bookmark_folders()
+
+
+def list_folder_items(
+    folder_id: int,
+    *,
+    client: KinopubClient | None = None,
+) -> list[dict]:
+    """Return the catalog items currently inside a kino.pub folder.
+
+    Each entry is the raw catalog row (we only need `id` / `title` /
+    `year` / `type` for the sync's matching logic).
+    """
+    c = client or _authenticated_client()
+    return c.get_bookmark_folder_items(int(folder_id))
+
+
+def create_folder(
+    title: str,
+    *,
+    client: KinopubClient | None = None,
+) -> dict:
+    """Create a folder on kino.pub with the given title and return
+    the new folder dict (which carries the freshly-assigned `id`)."""
+    c = client or _authenticated_client()
+    return c.create_bookmark_folder(title)
+
+
+def add_item_to_folder(
+    *,
+    item: int,
+    folder: int,
+    client: KinopubClient | None = None,
+) -> None:
+    """Add a kino.pub catalog item to a folder. Idempotent on the
+    API side — adding twice is a no-op."""
+    c = client or _authenticated_client()
+    c.add_to_bookmark_folder(item=int(item), folder=int(folder))

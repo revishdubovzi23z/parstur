@@ -521,6 +521,10 @@ export const useSyncStore = defineStore('sync', {
       return this._post('/api/start_sync_kinopub', 'Синхронизация kino.pub')
     },
 
+    startKinopubCollections(): Promise<boolean> {
+      return this._post('/api/start_kinopub_collections', 'Папки kino.pub')
+    },
+
     startCleanup(): Promise<boolean> {
       return this._post('/api/start_cleanup', 'Очистка дубликатов')
     },
