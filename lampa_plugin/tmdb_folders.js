@@ -32,7 +32,7 @@
 
     var MANIFEST = {
         type: 'video',
-        version: '0.2.0',
+        version: '0.3.0',
         name: 'TMDB папки',
         description: 'Показывает списки (папки) с TMDB в левом меню Lampa',
         component: 'tmdb_folders'
@@ -302,6 +302,37 @@
      * ids are appended only if they're not already present in the account
      * results, so we never duplicate folders.
      */
+    /**
+     * For folders that have no explicit poster_path / backdrop_path and no
+     * preview items yet, fetch page 1 of the list so we can borrow the first
+     * item's poster as a cover. Errors are swallowed: an imageless folder is
+     * still better than no folders at all.
+     */
+    function enrichFolderPreviews(folders, done) {
+        var needsPreview = folders.filter(function (f) {
+            if (!f || f.id == null) return false;
+            if (f.poster_path || f.backdrop_path) return false;
+            if (f._preview_results && f._preview_results.length) return false;
+            return true;
+        });
+        if (!needsPreview.length) { done(); return; }
+
+        var pending = needsPreview.length;
+        needsPreview.forEach(function (folder) {
+            fetchListDetails(folder.id, 1, function (data) {
+                if (data && data.results && data.results.length) {
+                    folder._preview_results = data.results;
+                }
+                pending -= 1;
+                if (pending === 0) done();
+            }, function (err) {
+                log('preview fetch failed for list ' + folder.id, err);
+                pending -= 1;
+                if (pending === 0) done();
+            });
+        });
+    }
+
     function loadAllFolders(oncomplete, onerror) {
         var manualIds = manualListIds();
 
@@ -312,7 +343,7 @@
             var missingManual = manualIds.filter(function (id) { return !seen[id]; });
 
             if (!missingManual.length) {
-                oncomplete(accountLists);
+                enrichFolderPreviews(accountLists, function () { oncomplete(accountLists); });
                 return;
             }
 
@@ -343,13 +374,13 @@
                         });
                     }
                     pending -= 1;
-                    if (pending === 0) oncomplete(resolved);
+                    if (pending === 0) enrichFolderPreviews(resolved, function () { oncomplete(resolved); });
                 }, function (err) {
                     hadError = true;
                     log('manual list ' + listId + ' failed', err);
                     pending -= 1;
                     if (pending === 0) {
-                        if (resolved.length || !hadError) oncomplete(resolved);
+                        if (resolved.length || !hadError) enrichFolderPreviews(resolved, function () { oncomplete(resolved); });
                         else onerror(err);
                     }
                 });
@@ -386,7 +417,7 @@
                     }
                     pending -= 1;
                     if (pending === 0) {
-                        if (resolved.length) oncomplete(resolved);
+                        if (resolved.length) enrichFolderPreviews(resolved, function () { oncomplete(resolved); });
                         else onerror(err);
                     }
                 }, function (e) {
@@ -394,7 +425,7 @@
                     log('manual list ' + listId + ' failed (fallback)', e);
                     pending -= 1;
                     if (pending === 0) {
-                        if (resolved.length) oncomplete(resolved);
+                        if (resolved.length) enrichFolderPreviews(resolved, function () { oncomplete(resolved); });
                         else onerror(err);
                     }
                 });
@@ -449,8 +480,26 @@
         // Render a folder as a "fake card" so InteractionCategory can lay it
         // out next to real movie cards. We borrow the list's metadata for the
         // poster / backdrop fields and remember the real id in _list_id.
+        // If the list itself has no poster (typical: users rarely upload one),
+        // fall back to the first item inside the list.
         var name = folder.name || ('Список ' + folder.id);
         var count = folder.number_of_items != null ? folder.number_of_items : '';
+
+        var previewPoster = '';
+        var previewBackdrop = '';
+        var preview = folder._preview_results;
+        if (preview && preview.length) {
+            for (var i = 0; i < preview.length; i++) {
+                var it = preview[i];
+                if (!previewPoster && it && it.poster_path) previewPoster = it.poster_path;
+                if (!previewBackdrop && it && it.backdrop_path) previewBackdrop = it.backdrop_path;
+                if (previewPoster && previewBackdrop) break;
+            }
+        }
+
+        var posterPath = folder.poster_path || previewPoster || folder.backdrop_path || previewBackdrop || '';
+        var backdropPath = folder.backdrop_path || previewBackdrop || folder.poster_path || previewPoster || '';
+
         var card = {
             source: 'tmdb',
             type: 'movie',
@@ -462,8 +511,8 @@
             overview: folder.description || (count ? (count + ' элементов') : ''),
             release_date: '',
             first_air_date: '',
-            poster_path: folder.poster_path || folder.backdrop_path || '',
-            backdrop_path: folder.backdrop_path || folder.poster_path || '',
+            poster_path: posterPath,
+            backdrop_path: backdropPath,
             vote_average: 0,
             vote_count: 0,
             adult: false,
