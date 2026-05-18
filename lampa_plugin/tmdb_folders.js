@@ -20,19 +20,53 @@
 (function () {
     'use strict';
 
-    if (typeof Lampa === 'undefined') return;
-    if (window.tmdb_folders_ready) return;
+    if (typeof Lampa === 'undefined') {
+        try { console.warn('[tmdb_folders] Lampa global is missing, plugin will not load'); } catch (e) {}
+        return;
+    }
+    if (window.tmdb_folders_ready) {
+        try { console.log('[tmdb_folders] already loaded, skipping'); } catch (e) {}
+        return;
+    }
     window.tmdb_folders_ready = true;
 
     var MANIFEST = {
         type: 'video',
-        version: '0.1.0',
+        version: '0.2.0',
         name: 'TMDB папки',
         description: 'Показывает списки (папки) с TMDB в левом меню Lampa',
         component: 'tmdb_folders'
     };
 
-    Lampa.Manifest.plugins = MANIFEST;
+    function safeLog() {
+        try {
+            var args = ['[tmdb_folders]'].concat(Array.prototype.slice.call(arguments));
+            console.log.apply(console, args);
+        } catch (e) { /* noop */ }
+    }
+
+    function safeWarn() {
+        try {
+            var args = ['[tmdb_folders]'].concat(Array.prototype.slice.call(arguments));
+            console.warn.apply(console, args);
+        } catch (e) { /* noop */ }
+    }
+
+    function safeError() {
+        try {
+            var args = ['[tmdb_folders]'].concat(Array.prototype.slice.call(arguments));
+            console.error.apply(console, args);
+        } catch (e) { /* noop */ }
+    }
+
+    safeLog('init start, Lampa.Manifest.app_version =',
+        (Lampa.Manifest && Lampa.Manifest.app_version) || 'unknown');
+
+    try {
+        Lampa.Manifest.plugins = MANIFEST;
+    } catch (e) {
+        safeWarn('Lampa.Manifest.plugins setter threw, ignoring:', e && e.message);
+    }
 
     var STORAGE = {
         token: 'tmdb_folders_token',
@@ -46,6 +80,8 @@
     var POSTER_HOST = 'https://image.tmdb.org/t/p';
 
     // ---------- helpers ----------
+
+    var log = safeLog;
 
     function token() {
         return (Lampa.Storage.get(STORAGE.token, '') || '').toString().trim();
@@ -89,19 +125,26 @@
     }
 
     function noty(msg) {
-        try { Lampa.Noty.show(msg); } catch (e) { /* noop */ }
-    }
-
-    function log() {
         try {
-            var args = ['[tmdb_folders]'].concat(Array.prototype.slice.call(arguments));
-            console.log.apply(console, args);
+            if (Lampa.Noty && typeof Lampa.Noty.show === 'function') Lampa.Noty.show(msg);
+            else safeLog('noty (no Lampa.Noty):', msg);
         } catch (e) { /* noop */ }
     }
 
     // ---------- rate-limited request queue with cache ----------
 
-    var network = new Lampa.Reguest();
+    var network = null;
+    function getNetwork() {
+        if (network) return network;
+        try {
+            if (typeof Lampa.Reguest === 'function') network = new Lampa.Reguest();
+            else if (typeof Lampa.Request === 'function') network = new Lampa.Request();
+        } catch (e) {
+            safeWarn('failed to construct Lampa.Reguest:', e && e.message);
+        }
+        return network;
+    }
+
     var cache = {};
     var queue = [];
     var inflight = false;
@@ -169,8 +212,15 @@
                 return;
             }
 
-            network.timeout(15000);
-            network.silent(
+            var net = getNetwork();
+            if (!net) {
+                inflight = false;
+                job.onerror({ status: 0, message: 'Lampa.Reguest unavailable' });
+                processQueue();
+                return;
+            }
+            try { net.timeout(15000); } catch (e) { /* older forks may not have .timeout */ }
+            net.silent(
                 job.url,
                 function (data) {
                     cacheSet(job.url, data);
@@ -435,8 +485,17 @@
      * Renders each TMDB list as a card; entering a card drills into its
      * contents.
      */
+    function makeInteractionCategory(object) {
+        if (typeof Lampa.InteractionCategory === 'function') return new Lampa.InteractionCategory(object);
+        if (typeof Lampa.InteractionMain === 'function') {
+            safeWarn('Lampa.InteractionCategory missing, falling back to InteractionMain');
+            return new Lampa.InteractionMain(object);
+        }
+        throw new Error('Neither Lampa.InteractionCategory nor Lampa.InteractionMain are available');
+    }
+
     function foldersComponent(object) {
-        var comp = new Lampa.InteractionCategory(object);
+        var comp = makeInteractionCategory(object);
 
         comp.create = function () {
             var self = this;
@@ -496,7 +555,7 @@
      * specific TMDB list. Each card opens Lampa's standard 'full' component.
      */
     function folderContentComponent(object) {
-        var comp = new Lampa.InteractionCategory(object);
+        var comp = makeInteractionCategory(object);
 
         function loadPage(page, resolve, reject) {
             if (!object.list_id) {
@@ -548,6 +607,13 @@
     // ---------- settings page ----------
 
     function registerSettings() {
+        if (!Lampa.SettingsApi ||
+            typeof Lampa.SettingsApi.addComponent !== 'function' ||
+            typeof Lampa.SettingsApi.addParam !== 'function') {
+            safeWarn('Lampa.SettingsApi missing, skipping settings registration');
+            return;
+        }
+
         var icon =
             '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">' +
             '<path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2z" fill="currentColor"/>' +
@@ -647,10 +713,20 @@
 
     // ---------- left menu integration ----------
 
-    function addMenuButton() {
-        if ($('.menu .menu__list li[data-action="tmdb_folders"]').length) return;
+    function findMenuList() {
+        if (typeof $ !== 'function') return null;
+        // Try the canonical selector first; fall back to a couple of common
+        // variants used by Lampa forks. We always pick the first `.menu__list`
+        // (the user-content section, above the system buttons).
+        var $primary = $('.menu .menu__list').eq(0);
+        if ($primary && $primary.length) return $primary;
+        var $alt = $('.menu__list').eq(0);
+        if ($alt && $alt.length) return $alt;
+        return null;
+    }
 
-        var $button = $(
+    function buildMenuButton() {
+        return $(
             '<li class="menu__item selector" data-action="tmdb_folders">' +
             '<div class="menu__ico">' +
             '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">' +
@@ -660,39 +736,99 @@
             '<div class="menu__text">' + MANIFEST.name + '</div>' +
             '</li>'
         );
+    }
 
+    function addMenuButton() {
+        var $list = findMenuList();
+        if (!$list) {
+            safeWarn('addMenuButton: no .menu__list found yet');
+            return false;
+        }
+        // If the button is already attached somewhere in the menu, do nothing.
+        if ($('.menu li[data-action="tmdb_folders"]').length) {
+            safeLog('addMenuButton: button already present');
+            return true;
+        }
+
+        var $button = buildMenuButton();
         $button.on('hover:enter', function () {
             if (!hasToken()) {
                 noty('Сначала задайте TMDB v4 токен в Настройки → ' + MANIFEST.name);
                 return;
             }
 
-            Lampa.Activity.push({
-                url: '',
-                title: MANIFEST.name,
-                component: 'tmdb_folders',
-                page: 1
-            });
+            try {
+                Lampa.Activity.push({
+                    url: '',
+                    title: MANIFEST.name,
+                    component: 'tmdb_folders',
+                    page: 1
+                });
+            } catch (err) {
+                safeError('Activity.push failed:', err && err.message);
+            }
         });
 
-        var $list = $('.menu .menu__list').eq(0);
-        if ($list.length) $list.append($button);
+        $list.append($button);
+        safeLog('menu button appended');
+        return true;
+    }
+
+    function scheduleMenuAttach() {
+        // Try immediately; if the menu isn't in the DOM yet, retry on a short
+        // interval (covers slow Lampa boot and async plugin loading).
+        if (addMenuButton()) return;
+
+        var attempts = 0;
+        var max = 60; // 60 * 500ms = 30s
+        var timer = setInterval(function () {
+            attempts += 1;
+            if (addMenuButton() || attempts >= max) {
+                clearInterval(timer);
+                if (attempts >= max) safeWarn('gave up after ' + max + ' attempts, menu DOM never appeared');
+            }
+        }, 500);
     }
 
     // ---------- bootstrap ----------
 
     function bootstrap() {
-        Lampa.Component.add('tmdb_folders', foldersComponent);
-        Lampa.Component.add('tmdb_folder_content', folderContentComponent);
+        try {
+            if (!Lampa.Component || typeof Lampa.Component.add !== 'function') {
+                safeError('Lampa.Component.add is missing — incompatible Lampa version');
+                return;
+            }
+            Lampa.Component.add('tmdb_folders', foldersComponent);
+            Lampa.Component.add('tmdb_folder_content', folderContentComponent);
 
-        registerSettings();
+            registerSettings();
 
-        if (window.appready) {
-            addMenuButton();
-        } else {
-            Lampa.Listener.follow('app', function (e) {
-                if (e.type === 'ready') addMenuButton();
-            });
+            scheduleMenuAttach();
+
+            // Re-attach on app:ready (covers the case where Lampa rebuilds the
+            // menu after our initial attempts).
+            try {
+                if (Lampa.Listener && typeof Lampa.Listener.follow === 'function') {
+                    Lampa.Listener.follow('app', function (e) {
+                        if (e && e.type === 'ready') {
+                            safeLog('app:ready fired, re-attaching menu button');
+                            scheduleMenuAttach();
+                        }
+                    });
+                    Lampa.Listener.follow('menu', function (e) {
+                        if (e && (e.type === 'end' || e.type === 'start')) {
+                            safeLog('menu:' + e.type + ' fired, re-attaching menu button');
+                            scheduleMenuAttach();
+                        }
+                    });
+                }
+            } catch (listenErr) {
+                safeWarn('failed to subscribe to Lampa.Listener:', listenErr && listenErr.message);
+            }
+
+            safeLog('bootstrap finished');
+        } catch (err) {
+            safeError('bootstrap failed:', err && err.message, err && err.stack);
         }
     }
 
