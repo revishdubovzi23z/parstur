@@ -355,15 +355,19 @@ def run(
             break
 
         item_id = int(item["id"])
+        item_title = item.get("title")
+        logger.info(f"[{idx + 1}/{total}] 🎬 {item_title} ({item.get('year')})")
         try:
             queries = _candidate_titles(item) or [str(item.get("title") or "").strip()]
             queries = [q for q in queries if q]
             if not queries:
+                logger.info("  ❌ Пропущен (нет названий для поиска)")
                 db.mark_checked(item_id, STATUS_KEY)
                 skipped += 1
                 continue
 
             type_hint = CATEGORY_TYPE_HINT.get(int(item.get("category_id") or 0))
+
             year_hint = item.get("year") if isinstance(item.get("year"), int) else None
 
             # For series, we don't pass the year to the search API because the catalog
@@ -382,6 +386,14 @@ def run(
                     year=api_year,
                     limit=SEARCH_LIMIT,
                 )
+                if not results and api_year is not None:
+                    # Fallback search without a strict year parameter in case of a year mismatch on kino.pub
+                    results = client.search(
+                        clean_q,
+                        type_=None,
+                        year=None,
+                        limit=SEARCH_LIMIT,
+                    )
                 for entry in results:
                     if not isinstance(entry, dict) or entry.get("id") is None:
                         raw.append(entry)
@@ -399,6 +411,22 @@ def run(
             if pick is None:
                 db.mark_checked(item_id, STATUS_KEY)
                 skipped += 1
+
+                # Ищем лучший из неудачных кандидатов исключительно для подробного логирования
+                best_failed = None
+                for cand in raw:
+                    if not isinstance(cand, dict) or cand.get("id") is None:
+                        continue
+                    score = score_candidate(item=item, candidate=cand, type_hint=type_hint)
+                    if best_failed is None or score > best_failed[1]:
+                        best_failed = (cand, score)
+                if best_failed:
+                    cand, score = best_failed
+                    logger.info(
+                        f"  ❌ Не сопоставлено (лучший кандидат: '{cand.get('title')}' с оценкой {score}, порог {SCORE_MIN_ACCEPT})"
+                    )
+                else:
+                    logger.info("  ❌ Не сопоставлено (нет результатов на кинопабе)")
             else:
                 cand, score = pick
                 kp_id = int(cand["id"])
@@ -408,10 +436,7 @@ def run(
                     kinopub_type=cand.get("type") or None,
                     kinopub_url=_build_item_url(kp_id),
                 )
-                logger.info(
-                    f"[kinopub] bound item {item_id} -> #{kp_id} "
-                    f"(title={cand.get('title')!r}, score={score})"
-                )
+                logger.info(f"  ✅ Сопоставлено -> #{kp_id} ({cand.get('title')}), оценка: {score}")
                 bound += 1
         except KinopubRateLimitError as e:
             logger.error(

@@ -190,14 +190,18 @@ def test_run_falls_back_to_second_title_piece(tmp_db, fake_client) -> None:
     item_id = _seed_item(
         tmp_db, title="Несуществующее название / Inception", year=2010, category_id=1
     )
-    fake_client.queue([])
-    fake_client.queue([{"id": 4242, "title": "Inception", "year": 2010, "type": "movie"}])
+    fake_client.queue([])  # Primary search for first title piece with year=2010 -> returns empty
+    fake_client.queue([])  # Fallback search for first title piece with year=None -> returns empty
+    fake_client.queue(
+        [{"id": 4242, "title": "Inception", "year": 2010, "type": "movie"}]
+    )  # Primary search for second title piece with year=2010 -> returns match
 
     summary = sync_kinopub.run(db=tmp_db, client_factory=lambda: fake_client, delay_ms=0)
 
     assert summary["bound"] == 1
     assert fake_client.calls == [
         {"query": "Несуществующее название", "type_": None, "year": 2010, "limit": 25},
+        {"query": "Несуществующее название", "type_": None, "year": None, "limit": 25},
         {"query": "Inception", "type_": None, "year": 2010, "limit": 25},
     ]
     with tmp_db._conn() as c:
@@ -273,8 +277,31 @@ def test_run_uses_all_title_pieces_for_query(tmp_db, fake_client) -> None:
     sync_kinopub.run(db=tmp_db, client_factory=lambda: fake_client, delay_ms=0)
     assert fake_client.calls == [
         {"query": "Начало", "type_": None, "year": 2010, "limit": 25},
+        {"query": "Начало", "type_": None, "year": None, "limit": 25},
         {"query": "Inception", "type_": None, "year": 2010, "limit": 25},
+        {"query": "Inception", "type_": None, "year": None, "limit": 25},
     ]
+
+
+def test_run_falls_back_to_year_none_when_year_mismatch(tmp_db, fake_client) -> None:
+    # DB has year 2024, but Kino.pub has year 2023.
+    item_id = _seed_item(tmp_db, title="Last Straw", year=2024, category_id=1)
+    # 1. Search with year=2024 returns empty (due to mismatch).
+    fake_client.queue([])
+    # 2. Fallback search with year=None returns the 2023 candidate.
+    fake_client.queue([{"id": 5426, "title": "Last Straw", "year": 2023, "type": "movie"}])
+
+    summary = sync_kinopub.run(db=tmp_db, client_factory=lambda: fake_client, delay_ms=0)
+
+    # Should match! (score for 2023 vs 2024 off by one is 50 title + 30 year off by one + 40 type = 120 >= 60).
+    assert summary["bound"] == 1
+    assert fake_client.calls == [
+        {"query": "Last Straw", "type_": None, "year": 2024, "limit": 25},
+        {"query": "Last Straw", "type_": None, "year": None, "limit": 25},
+    ]
+    with tmp_db._conn() as c:
+        row = c.execute("SELECT kinopub_id FROM items WHERE id = ?", (item_id,)).fetchone()
+    assert row["kinopub_id"] == 5426
 
 
 def test_run_continues_past_api_errors(tmp_db, fake_client) -> None:
