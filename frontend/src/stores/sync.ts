@@ -75,6 +75,7 @@ interface StatusMessage {
   /** Full snapshot. */
   statuses?: Record<string, ProcessStatus>
   progress?: Record<string, ProgressEntry>
+  checkpoints?: Record<string, boolean>
   rezka_session?: RezkaSessionState
 }
 
@@ -124,6 +125,7 @@ export interface SyncFilters {
 interface SyncStoreState {
   statuses: Record<ProcessKey, ProcessStatus>
   progress: Record<ProcessKey, ProgressEntry>
+  checkpoints: Record<ProcessKey, boolean>
   rezkaSession: RezkaSessionState
   wsConnected: boolean
   /** Last UI-visible error from an action (start_x / stop). */
@@ -136,6 +138,12 @@ const POLL_INTERVAL_MS = 5000
 function emptyProgress(): Record<ProcessKey, ProgressEntry> {
   const acc = {} as Record<ProcessKey, ProgressEntry>
   for (const key of PROCESS_KEYS) acc[key] = { current: 0, total: 0 }
+  return acc
+}
+
+function emptyCheckpoints(): Record<ProcessKey, boolean> {
+  const acc = {} as Record<ProcessKey, boolean>
+  for (const key of PROCESS_KEYS) acc[key] = false
   return acc
 }
 
@@ -176,6 +184,7 @@ export const useSyncStore = defineStore('sync', {
   state: (): SyncStoreState => ({
     statuses: idleStatuses(),
     progress: emptyProgress(),
+    checkpoints: emptyCheckpoints(),
     rezkaSession: 'down',
     wsConnected: false,
     lastError: null,
@@ -233,6 +242,13 @@ export const useSyncStore = defineStore('sync', {
         for (const key of Object.keys(msg.progress)) {
           if (isProcessKey(key)) {
             this.progress[key] = msg.progress[key]
+          }
+        }
+      }
+      if (msg.checkpoints) {
+        for (const key of Object.keys(msg.checkpoints)) {
+          if (isProcessKey(key)) {
+            this.checkpoints[key] = msg.checkpoints[key]
           }
         }
       }
@@ -408,6 +424,7 @@ export const useSyncStore = defineStore('sync', {
         const data = (await res.json()) as {
           statuses?: Record<string, ProcessStatus>
           progress?: Record<string, ProgressEntry>
+          checkpoints?: Record<string, boolean>
         }
         if (data.statuses) {
           for (const key of Object.keys(data.statuses)) {
@@ -417,6 +434,11 @@ export const useSyncStore = defineStore('sync', {
         if (data.progress) {
           for (const key of Object.keys(data.progress)) {
             if (isProcessKey(key)) this.progress[key] = data.progress[key]
+          }
+        }
+        if (data.checkpoints) {
+          for (const key of Object.keys(data.checkpoints)) {
+            if (isProcessKey(key)) this.checkpoints[key] = data.checkpoints[key]
           }
         }
         const running: ProcessKey[] = []
@@ -496,8 +518,9 @@ export const useSyncStore = defineStore('sync', {
       }
     },
 
-    startFullPipeline(): Promise<boolean> {
-      return this._post('/api/start_full_pipeline', 'Полный цикл')
+    startFullPipeline(filters: Partial<SyncFilters> = {}): Promise<boolean> {
+      const qs = buildSyncQuery(filters)
+      return this._post(`/api/start_full_pipeline${qs}`, 'Полный цикл')
     },
 
     startSyncVideo(filters: Partial<SyncFilters> = {}): Promise<boolean> {
@@ -553,6 +576,28 @@ export const useSyncStore = defineStore('sync', {
 
     stop(key: ProcessKey): Promise<boolean> {
       return this._post(`/api/stop/${key}`, `Остановка ${key}`)
+    },
+
+    async clearCheckpoint(key: ProcessKey): Promise<boolean> {
+      this.lastError = null
+      const toast = useToastStore()
+      try {
+        const res = await apiFetch(`/api/clear_checkpoint/${key}`, { method: 'POST' })
+        if (!res.ok) {
+          this.lastError = `HTTP ${res.status}`
+          toast.error(`Не удалось сбросить поиск: ошибка ${res.status}`)
+          return false
+        }
+        this.checkpoints[key] = false
+        this.progress[key] = { current: 0, total: 0 }
+        toast.success('Поиск сброшен, можно начать заново!')
+        return true
+      } catch (err) {
+        const description = describe(err)
+        this.lastError = description
+        toast.error('Не удалось сбросить поиск: сбой запроса')
+        return false
+      }
     },
 
     /** Forget state and tear down sockets/timers. Idempotent. */

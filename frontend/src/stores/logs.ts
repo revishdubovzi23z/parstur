@@ -27,6 +27,7 @@ import type { ProcessKey } from './sync'
 
 /** Tab id → human label. Mirrors `logTypes` at `index.html:1171`. */
 export const LOG_TYPE_LABELS: Record<string, string> = {
+  full_pipeline: 'Полный цикл',
   reprocess: 'Обновление',
   video: 'Видео',
   other: 'Остальное',
@@ -48,6 +49,7 @@ export type LogType = keyof typeof LOG_TYPE_LABELS
  *  `index.html:1251-1264`. Exposed mostly so the panel can render
  *  the file path next to the tabs (visual continuity with legacy). */
 export const LOG_TYPE_FILENAMES: Record<LogType, string> = {
+  full_pipeline: 'full_pipeline_log.txt',
   reprocess: 'reprocess_log.txt',
   video: 'sync_video_log.txt',
   other: 'sync_other_log.txt',
@@ -68,6 +70,7 @@ export const LOG_TYPE_FILENAMES: Record<LogType, string> = {
  *  process keys differ from log type ids (e.g. `sync_video` vs
  *  `video`). */
 export const PROCESS_TO_LOG: Partial<Record<ProcessKey, LogType>> = {
+  full_pipeline: 'full_pipeline',
   sync_video: 'video',
   sync_other: 'other',
   reprocess: 'reprocess',
@@ -87,6 +90,7 @@ export const PROCESS_TO_LOG: Partial<Record<ProcessKey, LogType>> = {
  *  "currently active stop" button (`currentStatusKey` in
  *  `index.html:1255-1268`). */
 export const LOG_TO_PROCESS: Record<LogType, ProcessKey> = {
+  full_pipeline: 'full_pipeline',
   video: 'sync_video',
   other: 'sync_other',
   reprocess: 'reprocess',

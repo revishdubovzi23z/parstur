@@ -6,18 +6,24 @@ from db import Database
 from kinopoisk_client import KinopoiskClient
 from logging_config import setup_logging
 from poiskkino_client import PoiskKinoClient
-from script_utils import clear_stop_flag, load_config, should_stop
-from settings import settings
+from script_utils import (
+    clear_checkpoint,
+    clear_stop_flag,
+    load_checkpoint,
+    load_config,
+    save_checkpoint,
+    should_stop,
+)
 
 _config = load_config()
 FIX_BATCH_SIZE = _config.get("fix_posters", {}).get("batch_size", 300)
 FIX_REQUEST_DELAY = _config.get("fix_posters", {}).get("request_delay", 0.5)
-STATUS_KEY = settings.status_key
 logger = setup_logging("parsclode.fix", "fix_log.txt")
 
 
 def fix_metadata(api_type="tech"):
-    clear_stop_flag(STATUS_KEY)
+    status_key = "poiskkino" if api_type == "poiskkino" else "fix"
+    clear_stop_flag(status_key)
     if api_type == "tech":
         client = KinopoiskClient()
         api_name = "Кинопоиск (Legacy/Tech)"
@@ -26,6 +32,11 @@ def fix_metadata(api_type="tech"):
         api_name = "PoiskKino (Dev)"
 
     logger.info(f"\n\n=== ЗАПУСК: {api_name} ({time.strftime('%H:%M:%S')}) ===")
+
+    checkpoint = load_checkpoint(status_key)
+    if checkpoint and checkpoint.get("interrupted"):
+        logger.info(f"[RESUME] Обнаружен прерванный чекпоинт {status_key}. Продолжаем...")
+
     check_col = f"checked_{api_type}"
 
     db = Database()
@@ -38,13 +49,18 @@ def fix_metadata(api_type="tech"):
         logger.info("Все данные в порядке!")
     else:
         for idx, item_data in enumerate(items, 1):
-            if should_stop(STATUS_KEY):
-                logger.info("\n[STOP] Graceful shutdown requested.")
+            if should_stop(status_key):
+                logger.info("\n[STOP] Graceful shutdown requested. Saving checkpoint...")
+                save_checkpoint(status_key, {"interrupted": True})
                 break
 
             if client.is_limited:
-                logger.warning("\n[!] Лимит API исчерпан. Остановка.")
-                break
+                logger.error(
+                    f"[LIMIT_EXHAUSTED] [{status_key}] Лимит API исчерпан. Остановка процесса."
+                )
+                save_checkpoint(status_key, {"interrupted": True})
+                conn.close()
+                sys.exit(2)
 
             item_id = item_data["id"]
             title = item_data["title"]
@@ -154,9 +170,16 @@ def fix_metadata(api_type="tech"):
             else:
                 logger.info("  ❌ API не вернул данных.")
 
-            if not client.is_limited:
-                db.mark_checked(item_id, api_type, conn=conn)
-                conn.commit()
+            if client.is_limited:
+                logger.error(
+                    f"[LIMIT_EXHAUSTED] [{status_key}] Лимит API исчерпан. Остановка процесса."
+                )
+                save_checkpoint(status_key, {"interrupted": True})
+                conn.close()
+                sys.exit(2)
+
+            db.mark_checked(item_id, api_type, conn=conn)
+            conn.commit()
 
             time.sleep(FIX_REQUEST_DELAY)
 
@@ -168,6 +191,7 @@ def fix_metadata(api_type="tech"):
     logger.info("===========================\n")
 
     conn.close()
+    clear_checkpoint(status_key)
 
 
 if __name__ == "__main__":

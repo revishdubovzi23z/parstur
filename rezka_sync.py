@@ -11,7 +11,14 @@ from bs4 import BeautifulSoup
 from app_core import clean_title_for_search, normalize_title
 from db import Database
 from logging_config import setup_logging
-from script_utils import clear_stop_flag, load_config, should_stop
+from script_utils import (
+    clear_checkpoint,
+    clear_stop_flag,
+    load_checkpoint,
+    load_config,
+    save_checkpoint,
+    should_stop,
+)
 from settings import settings
 
 _config = load_config()
@@ -704,7 +711,29 @@ async def _async_load_page(session, url, semaphore):
             return url, None
 
 
-async def _search_rezka_batch(items, db, conn):
+def _check_rezka_limits() -> bool:
+    if not _BATCH_ERRORS:
+        return False
+
+    terminals = {"HTTP 401", "HTTP 403", "HTTP 429"}
+    error_count = 0
+    for kind, key, err in _BATCH_ERRORS:
+        if err in terminals:
+            logger.error(f"[LIMIT_EXHAUSTED] Терминальная ошибка API HDRezka: {err}")
+            return True
+        if "Timeout" in err or "Client" in err or "Connection" in err or "HTTP" in err:
+            error_count += 1
+
+    if error_count >= 5:
+        logger.error(
+            f"[LIMIT_EXHAUSTED] Слишком много сетевых ошибок ({error_count}) в одном пакете HDRezka."
+        )
+        return True
+
+    return False
+
+
+async def _search_rezka_batch(items, db, conn, offset: int = 0, overall_total: int | None = None):
     total = len(items)
     logger.info(f"[rezka] concurrency={REZKA_CONCURRENCY}")
     semaphore = asyncio.Semaphore(REZKA_CONCURRENCY)
@@ -743,10 +772,14 @@ async def _search_rezka_batch(items, db, conn):
         for q, results in raw:
             with_year_results[q] = results
         _print_batch_errors("1a")
+
+        if _check_rezka_limits():
+            _reset_batch_errors()
+            return 0, 0, True
         _reset_batch_errors()
 
         if should_stop(STATUS_KEY):
-            return 0, 0
+            return 0, 0, False
 
         # ── PHASE 1b: Conditional "without year" searches ──
         item_no_year_queries = defaultdict(list)
@@ -785,10 +818,13 @@ async def _search_rezka_batch(items, db, conn):
             for q, results in raw:
                 no_year_results[q] = results
             _print_batch_errors("1b")
+            if _check_rezka_limits():
+                _reset_batch_errors()
+                return 0, 0, True
             _reset_batch_errors()
 
         if should_stop(STATUS_KEY):
-            return 0, 0
+            return 0, 0, False
 
         # ── PHASE 1c: Fallback searches ──
         fallback_queries = set()
@@ -823,6 +859,9 @@ async def _search_rezka_batch(items, db, conn):
             for q, results in raw:
                 fallback_results[q] = results
             _print_batch_errors("1c")
+            if _check_rezka_limits():
+                _reset_batch_errors()
+                return 0, 0, True
             _reset_batch_errors()
 
         # ── PHASE 1d: Collect & score ──
@@ -887,10 +926,13 @@ async def _search_rezka_batch(items, db, conn):
                 for url, soup in raw:
                     page_soup_cache[url] = soup
                 _print_batch_errors("Phase 2")
+                if _check_rezka_limits():
+                    _reset_batch_errors()
+                    return 0, 0, True
                 _reset_batch_errors()
 
             if should_stop(STATUS_KEY):
-                return 0, 0
+                return 0, 0, False
 
         for idx, candidates in item_candidates.items():
             row = item_infos[idx]["row"]
@@ -951,7 +993,7 @@ async def _search_rezka_batch(items, db, conn):
 
         for idx, row in enumerate(items):
             item_id = row["id"]
-            report_progress(idx + 1, total)
+            report_progress(offset + idx + 1, overall_total or total)
 
             if idx in item_results and item_results[idx]["found"]:
                 r = item_results[idx]
@@ -976,7 +1018,7 @@ async def _search_rezka_batch(items, db, conn):
         conn.commit()
         not_found_count = total - found_count
         logger.info(f"  Found: {found_count}, Not found: {not_found_count}")
-        return found_count, not_found_count
+        return found_count, not_found_count, False
 
 
 def search_rezka_metadata():
@@ -986,6 +1028,10 @@ def search_rezka_metadata():
     db = Database()
     conn = db.get_connection()
     cursor = conn.cursor()
+
+    checkpoint = load_checkpoint(STATUS_KEY)
+    if checkpoint and checkpoint.get("interrupted"):
+        logger.info("[RESUME] Обнаружен прерванный чекпоинт Rezka. Продолжаем поиск...")
 
     video_cats = "(1, 4, 5, 16, 7)"
     cursor.execute(f"""
@@ -1009,10 +1055,51 @@ def search_rezka_metadata():
     logger.info(f"=== REZKA SYNC (Total: {total_count}) ===")
 
     if total_count > 0:
-        found, not_found = asyncio.run(_search_rezka_batch(items, db, conn))
-        logger.info(f"\n=== RESULTS: Found={found}, Not found={not_found} ===")
+        batch_size = 30
+        overall_found = 0
+        overall_not_found = 0
+
+        for offset in range(0, total_count, batch_size):
+            if should_stop(STATUS_KEY):
+                logger.info("[STOP] Обнаружен флаг остановки. Сохраняем чекпоинт и выходим.")
+                save_checkpoint(STATUS_KEY, {"interrupted": True})
+                break
+
+            batch = items[offset : offset + batch_size]
+            logger.info(
+                f"\n--- Обработка пакета {offset // batch_size + 1} ({offset + 1} - {min(offset + batch_size, total_count)} из {total_count}) ---"
+            )
+
+            found, not_found, is_limited = asyncio.run(
+                _search_rezka_batch(batch, db, conn, offset=offset, overall_total=total_count)
+            )
+
+            overall_found += found
+            overall_not_found += not_found
+
+            if is_limited:
+                logger.error(
+                    "[LIMIT_EXHAUSTED] [rezka] Лимит запросов HDRezka или IP-блокировка обнаружена! Приостановка синхронизации..."
+                )
+                save_checkpoint(STATUS_KEY, {"interrupted": True})
+                conn.close()
+                import sys
+
+                sys.exit(2)
+
+            if should_stop(STATUS_KEY):
+                logger.info(
+                    "[STOP] Обнаружен флаг остановки во время выполнения пакета. Сохраняем чекпоинт и выходим."
+                )
+                save_checkpoint(STATUS_KEY, {"interrupted": True})
+                break
+        else:
+            clear_checkpoint(STATUS_KEY)
+
+        logger.info(f"\n=== RESULTS: Found={overall_found}, Not found={overall_not_found} ===")
     else:
         logger.info("No items to process.")
+        clear_checkpoint(STATUS_KEY)
 
     conn.close()
     logger.info("\n=== FINISHED ===")

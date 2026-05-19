@@ -131,7 +131,7 @@ describe('useLogsStore — autoFollow', () => {
   it('ignores process keys without a log mapping', () => {
     const logs = useLogsStore()
     logs.selectedType = 'reprocess'
-    logs.autoFollow(['full_pipeline'])
+    logs.autoFollow(['unknown_process_key' as any])
     expect(logs.selectedType).toBe('reprocess')
   })
 })
@@ -261,6 +261,7 @@ describe('LOG_TYPE_FILENAMES', () => {
         'cleanup',
         'fix',
         'fix_poiskkino',
+        'full_pipeline',
         'kinopub',
         'kinopub_collections',
         'other',

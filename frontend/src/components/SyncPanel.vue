@@ -87,7 +87,7 @@ const CONTROLS: ControlRow[] = [
     key: 'full_pipeline',
     label: 'Полный цикл',
     description: 'Запускает все sync-этапы по порядку.',
-    start: () => sync.startFullPipeline(),
+    start: () => sync.startFullPipeline(parsedFilters()),
     startLabel: 'Запустить',
   },
   {
@@ -239,6 +239,53 @@ function onClose(): void {
   emit('close')
 }
 
+const promptCheckpointKey = ref<ProcessKey | null>(null)
+const promptCheckpointLabel = ref<string>('')
+const promptCheckpointStartFn = ref<(() => Promise<boolean>) | null>(null)
+
+function handleStartClick(control: ControlRow): void {
+  if (sync.checkpoints[control.key]) {
+    promptCheckpointKey.value = control.key
+    promptCheckpointLabel.value = control.label
+    promptCheckpointStartFn.value = control.start
+  } else {
+    void runStart(control.key, control.start)
+  }
+}
+
+async function handleContinue(): Promise<void> {
+  const key = promptCheckpointKey.value
+  const startFn = promptCheckpointStartFn.value
+  if (key && startFn) {
+    promptCheckpointKey.value = null
+    promptCheckpointLabel.value = ''
+    promptCheckpointStartFn.value = null
+    await runStart(key, startFn)
+  }
+}
+
+async function handleStartNew(): Promise<void> {
+  const key = promptCheckpointKey.value
+  if (key) {
+    const ok = await sync.clearCheckpoint(key)
+    if (ok) {
+      const startFn = promptCheckpointStartFn.value
+      promptCheckpointKey.value = null
+      promptCheckpointLabel.value = ''
+      promptCheckpointStartFn.value = null
+      if (startFn) {
+        await runStart(key, startFn)
+      }
+    }
+  }
+}
+
+function handleCancelPrompt(): void {
+  promptCheckpointKey.value = null
+  promptCheckpointLabel.value = ''
+  promptCheckpointStartFn.value = null
+}
+
 watch(
   () => props.open,
   (isOpen, wasOpen) => {
@@ -258,7 +305,7 @@ watch(
     @click.self="onClose"
   >
     <div
-      class="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
+      class="relative flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
       data-testid="sync-panel"
       role="dialog"
       aria-modal="true"
@@ -413,7 +460,7 @@ watch(
                 class="rounded-md border border-slate-200 bg-slate-900 px-3 py-1 text-xs font-semibold text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
                 :disabled="sync.anyBusy"
                 :data-testid="`sync-start-${control.key}`"
-                @click="runStart(control.key, control.start)"
+                @click="handleStartClick(control)"
               >
                 {{ control.startLabel }}
               </button>
@@ -429,6 +476,65 @@ watch(
           {{ sync.lastError }}
         </p>
       </div>
+
+      <!-- Оверлей чекпоинта (Glassmorphism) -->
+      <transition
+        enter-active-class="transition duration-200 ease-out"
+        enter-from-class="opacity-0 scale-95"
+        enter-to-class="opacity-100 scale-100"
+        leave-active-class="transition duration-150 ease-in"
+        leave-from-class="opacity-100 scale-100"
+        leave-to-class="opacity-0 scale-95"
+      >
+        <div
+          v-if="promptCheckpointKey"
+          class="absolute inset-0 z-50 flex items-center justify-center backdrop-blur-md bg-slate-950/60 p-6 rounded-2xl"
+          data-testid="checkpoint-prompt-overlay"
+        >
+          <div class="w-full max-w-md transform rounded-2xl border border-slate-800 bg-slate-900/90 p-6 shadow-2xl text-center text-white ring-1 ring-white/10">
+            <!-- Иконка с градиентным свечением -->
+            <div class="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-amber-500/10 text-amber-400 ring-4 ring-amber-500/20 mb-4">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-7 h-7 animate-pulse">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+              </svg>
+            </div>
+
+            <h3 class="text-lg font-bold tracking-tight text-white mb-2">
+              Найден незавершенный поиск
+            </h3>
+            <p class="text-sm text-slate-400 mb-6 leading-relaxed">
+              Для процесса <span class="font-semibold text-amber-400">«{{ promptCheckpointLabel }}»</span> был сохранен чекпоинт. Вы можете продолжить с места остановки или очистить прогресс и начать сначала.
+            </p>
+
+            <div class="flex flex-col gap-2.5 sm:flex-row-reverse sm:justify-center">
+              <button
+                type="button"
+                class="inline-flex w-full sm:w-auto justify-center rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-amber-500/25 hover:from-amber-400 hover:to-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 focus:ring-offset-slate-900 transition-all active:scale-95 duration-150"
+                data-testid="checkpoint-continue-btn"
+                @click="handleContinue"
+              >
+                Продолжить
+              </button>
+              <button
+                type="button"
+                class="inline-flex w-full sm:w-auto justify-center rounded-xl border border-slate-700 bg-slate-800/80 px-5 py-2.5 text-sm font-semibold text-white hover:bg-slate-700/80 hover:border-slate-600 focus:outline-none focus:ring-2 focus:ring-slate-500 transition-all active:scale-95 duration-150"
+                data-testid="checkpoint-start-new-btn"
+                @click="handleStartNew"
+              >
+                Начать заново
+              </button>
+              <button
+                type="button"
+                class="inline-flex w-full sm:w-auto justify-center rounded-xl px-5 py-2.5 text-sm font-semibold text-slate-400 hover:text-white transition-colors duration-150"
+                data-testid="checkpoint-cancel-btn"
+                @click="handleCancelPrompt"
+              >
+                Отмена
+              </button>
+            </div>
+          </div>
+        </div>
+      </transition>
     </div>
   </div>
 </template>

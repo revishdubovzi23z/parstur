@@ -11,7 +11,7 @@ class BaseMovieClient:
     headers: dict = {}
     is_limited: bool = False
     rate_limit_codes: list = [429]
-    payment_limit_codes: list = [402]
+    payment_limit_codes: list = [401, 402, 403]
     request_delay: float = 0.3
 
     def __init__(self):

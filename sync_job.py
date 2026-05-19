@@ -401,52 +401,77 @@ def run_sync(mode="video", manual_min_date=None):
 
                 if use_tmdb:
                     if tmdb.is_limited:
-                        logger.warning("  ⚠️ Лимит TMDB исчерпан, пропускаю обогащение.")
-                        tmdb_data = None
-                    else:
-                        tmdb_data = None
-                        if imdb_id:
-                            logger.info(f"  🔍 TMDB (2.1 по ID): {imdb_id}")
-                            tmdb_data = tmdb.find_by_imdb_id(imdb_id)
-                        if not tmdb_data:
-                            t_parts = display_title.split(" / ")
-                            ru_part = re.sub(
-                                r"\s*\(\d{4}\)\s*", "", t_parts[0].split("/")[0]
+                        logger.error(
+                            "[LIMIT_EXHAUSTED] Лимит запросов TMDB исчерпан! Приостановка синхронизации..."
+                        )
+                        conn.commit()
+                        save_checkpoint(
+                            status_key,
+                            {
+                                "completed_categories": completed_cats,
+                                "current_category_id": cat_id,
+                                "current_page": page_start,
+                            },
+                        )
+                        conn.close()
+                        sys.exit(2)
+
+                    tmdb_data = None
+                    if imdb_id:
+                        logger.info(f"  🔍 TMDB (2.1 по ID): {imdb_id}")
+                        tmdb_data = tmdb.find_by_imdb_id(imdb_id)
+                    if not tmdb_data and not tmdb.is_limited:
+                        t_parts = display_title.split(" / ")
+                        ru_part = re.sub(r"\s*\(\d{4}\)\s*", "", t_parts[0].split("/")[0]).strip()
+                        en_part = None
+                        if len(t_parts) > 1:
+                            en_part = re.sub(
+                                r"\s*\(\d{4}\)\s*", "", t_parts[1].split("/")[0]
                             ).strip()
-                            en_part = None
-                            if len(t_parts) > 1:
-                                en_part = re.sub(
-                                    r"\s*\(\d{4}\)\s*", "", t_parts[1].split("/")[0]
-                                ).strip()
-                            search_primary = en_part or ru_part
-                            search_alt = ru_part if en_part else None
-                            logger.info(
-                                f"  🔍 TMDB (2.2 поиск): {search_primary}"
-                                + (f" / alt:{search_alt}" if search_alt else "")
-                                + f" ({year})"
-                            )
-                            tmdb_data = tmdb.search_movie(
-                                search_primary, year, alt_title=search_alt
-                            )
-                        if tmdb_data:
-                            poster = tmdb_data.get("poster_url", "")
-                            desc = tmdb_data.get("description", "")
-                            if tmdb_data.get("title") and tmdb_data.get("original_title"):
-                                new_ru = tmdb_data["title"]
-                                new_orig = tmdb_data["original_title"]
-                                if new_ru.lower() != new_orig.lower():
-                                    clean_display_title = f"{new_ru} / {new_orig}"
-                                else:
-                                    clean_display_title = new_ru
-                                if year and str(year) not in clean_display_title:
-                                    clean_display_title += f" ({year})"
-                            if not imdb_id:
-                                imdb_id = tmdb_data.get("imdb_id", "")
-                            logger.info(
-                                f"    🎯 TMDB: данные получены (Постер: {'✅' if poster else '❌'})"
-                            )
-                        else:
-                            logger.info("    ⚠️ TMDB: ничего не найдено.")
+                        search_primary = en_part or ru_part
+                        search_alt = ru_part if en_part else None
+                        logger.info(
+                            f"  🔍 TMDB (2.2 поиск): {search_primary}"
+                            + (f" / alt:{search_alt}" if search_alt else "")
+                            + f" ({year})"
+                        )
+                        tmdb_data = tmdb.search_movie(search_primary, year, alt_title=search_alt)
+
+                    if tmdb.is_limited:
+                        logger.error(
+                            "[LIMIT_EXHAUSTED] Лимит запросов TMDB исчерпан во время запроса! Приостановка синхронизации..."
+                        )
+                        conn.commit()
+                        save_checkpoint(
+                            status_key,
+                            {
+                                "completed_categories": completed_cats,
+                                "current_category_id": cat_id,
+                                "current_page": page_start,
+                            },
+                        )
+                        conn.close()
+                        sys.exit(2)
+
+                    if tmdb_data:
+                        poster = tmdb_data.get("poster_url", "")
+                        desc = tmdb_data.get("description", "")
+                        if tmdb_data.get("title") and tmdb_data.get("original_title"):
+                            new_ru = tmdb_data["title"]
+                            new_orig = tmdb_data["original_title"]
+                            if new_ru.lower() != new_orig.lower():
+                                clean_display_title = f"{new_ru} / {new_orig}"
+                            else:
+                                clean_display_title = new_ru
+                            if year and str(year) not in clean_display_title:
+                                clean_display_title += f" ({year})"
+                        if not imdb_id:
+                            imdb_id = tmdb_data.get("imdb_id", "")
+                        logger.info(
+                            f"    🎯 TMDB: данные получены (Постер: {'✅' if poster else '❌'})"
+                        )
+                    else:
+                        logger.info("    ⚠️ TMDB: ничего не найдено.")
 
                 title_norm = ""
                 search_names = []
@@ -596,8 +621,10 @@ if __name__ == "__main__":
             if "-" in val and len(val) > 5:
                 manual_min_date = val
             else:
-                MIN_YEAR = int(val)
-                logger.info(f"Переопределен MIN_YEAR: {MIN_YEAR}")
+                temp_year = int(val)
+                if temp_year > 0:
+                    MIN_YEAR = temp_year
+                    logger.info(f"Переопределен MIN_YEAR: {MIN_YEAR}")
         except Exception:
             pass
     if len(sys.argv) > 3:
@@ -606,8 +633,10 @@ if __name__ == "__main__":
             if "-" in val and len(val) > 5:
                 manual_min_date = val
             else:
-                MAX_YEAR = int(val)
-                logger.info(f"Переопределен MAX_YEAR: {MAX_YEAR}")
+                temp_year = int(val)
+                if temp_year > 0:
+                    MAX_YEAR = temp_year
+                    logger.info(f"Переопределен MAX_YEAR: {MAX_YEAR}")
         except Exception:
             pass
 

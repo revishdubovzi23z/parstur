@@ -9,7 +9,7 @@ KINOPOISK_API_KEY = settings.kinopoisk_api_key
 
 class KinopoiskClient(BaseMovieClient):
     rate_limit_codes = [429]
-    payment_limit_codes = [402]
+    payment_limit_codes = [401, 402, 403]
 
     def __init__(self):
         self.api_key = KINOPOISK_API_KEY

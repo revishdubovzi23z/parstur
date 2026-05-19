@@ -32,7 +32,7 @@ import time
 from typing import Any
 
 from db import Database
-from kinopub_client import KinopubAPIError, KinopubAuthError, KinopubClient
+from kinopub_client import KinopubAPIError, KinopubAuthError, KinopubClient, KinopubRateLimitError
 from logging_config import setup_logging
 from runtime.kinopub import (
     KinopubAuthError as RuntimeKinopubAuthError,
@@ -413,6 +413,14 @@ def run(
                     f"(title={cand.get('title')!r}, score={score})"
                 )
                 bound += 1
+        except KinopubRateLimitError as e:
+            logger.error(
+                f"[LIMIT_EXHAUSTED] [kinopub] Лимит запросов API исчерпан! Приостановка синхронизации... ({e})"
+            )
+            save_checkpoint(STATUS_KEY, {"last_id": item_id})
+            import sys
+
+            sys.exit(2)
         except (KinopubAuthError, RuntimeKinopubAuthError) as e:
             logger.error(f"[kinopub] auth failure mid-sweep, aborting: {e}")
             break

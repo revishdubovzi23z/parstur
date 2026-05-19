@@ -25,6 +25,7 @@ const sync = useSyncStore()
 const bodyEl = ref<HTMLDivElement | null>(null)
 
 const TAB_ORDER: LogType[] = [
+  'full_pipeline',
   'reprocess',
   'video',
   'other',
@@ -187,10 +188,15 @@ watch(
         class="min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap bg-black p-3 font-mono text-[11px] text-green-400"
         data-testid="logs-body"
       >
-        <span v-if="logs.error" class="text-red-400" data-testid="logs-error">
-          {{ logs.error }}
-        </span>
-        <template v-else>{{ logs.content || 'Пусто' }}</template>
+        <div
+          v-if="logs.error"
+          class="mb-2 rounded bg-red-950/40 border border-red-800/40 px-2.5 py-1.5 text-xs text-red-400 flex items-center gap-1.5 shrink-0"
+          data-testid="logs-error"
+        >
+          <span>⚠️ Ошибка получения логов: {{ logs.error }} (отображаются кэшированные данные)</span>
+        </div>
+        <template v-if="logs.content">{{ logs.content }}</template>
+        <span v-else class="text-slate-500 italic">Пусто</span>
       </div>
     </div>
   </div>

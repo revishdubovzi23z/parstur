@@ -24,9 +24,19 @@ router = APIRouter()
 
 
 @router.post("/api/start_full_pipeline")
-async def start_full_pipeline():
+async def start_full_pipeline(
+    min_year: int = None,
+    max_year: int = None,
+    min_date: str = None,
+):
     check_any_running()
-    await task_queue.add_task(run_pipeline_task, "full_pipeline")
+    await task_queue.add_task(
+        run_pipeline_task,
+        "full_pipeline",
+        min_year=min_year,
+        max_year=max_year,
+        min_date=min_date,
+    )
     return {"status": "started"}
 
 
@@ -290,12 +300,16 @@ async def start_reprocess(force: bool = False):
     return {"status": "started"}
 
 
+from settings import settings
+
+
 @router.get("/api/process_status")
 def get_process_status():
     """Возвращает статусы и прогресс всех процессов."""
     progress = {}
+    checkpoints = {}
     for key in process_status.keys():
-        p_file = f"progress_{key}.json"
+        p_file = os.path.join(settings.app_data_dir, f"progress_{key}.json")
         if os.path.exists(p_file):
             try:
                 with open(p_file) as f:
@@ -305,7 +319,47 @@ def get_process_status():
         else:
             progress[key] = {"current": 0, "total": 0}
 
-    return {"statuses": process_status, "progress": progress}
+        cp_file = os.path.join(settings.app_data_dir, f"checkpoint_{key}.json")
+        checkpoints[key] = os.path.exists(cp_file)
+
+    return {"statuses": process_status, "progress": progress, "checkpoints": checkpoints}
+
+
+@router.post("/api/clear_checkpoint/{key}")
+def clear_checkpoint_endpoint(key: str):
+    if not _is_valid_status_key(key):
+        raise HTTPException(status_code=400, detail="Unknown process key")
+
+    from script_utils import clear_checkpoint
+
+    clear_checkpoint(key)
+
+    p_file = os.path.join(settings.app_data_dir, f"progress_{key}.json")
+    if os.path.exists(p_file):
+        try:
+            os.remove(p_file)
+        except Exception:
+            pass
+
+    from db import Database
+
+    db = Database()
+    conn = db.get_connection()
+    try:
+        if key == "rezka":
+            conn.execute(
+                "UPDATE items SET checked_rezka = 0 WHERE rezka_url IS NULL OR rezka_url = ''"
+            )
+            conn.commit()
+        elif key == "kinopub":
+            conn.execute("UPDATE items SET checked_kinopub = 0 WHERE kinopub_id IS NULL")
+            conn.commit()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {e}") from e
+    finally:
+        conn.close()
+
+    return {"status": "success"}
 
 
 @router.get("/api/sync_log")

@@ -98,6 +98,7 @@ _LOG_FILES = {
     "kinopub_collections": "kinopub_collections_log.txt",
     "tmdb": "sync_tmdb_log.txt",
     "single_update": "single_update_log.txt",
+    "full_pipeline": "full_pipeline_log.txt",
 }
 
 
@@ -327,6 +328,21 @@ async def run_script_with_args(
                         }
                     )
 
+                    if is_pipeline_step:
+                        try:
+                            with open("full_pipeline_log.txt", "a", encoding="utf-8") as f_pipe:
+                                f_pipe.write(decoded_chunk)
+                                f_pipe.flush()
+                        except Exception:
+                            pass
+                        await ws_manager.broadcast(
+                            {
+                                "type": "log",
+                                "key": "full_pipeline",
+                                "data": decoded_chunk,
+                            }
+                        )
+
                     now = time.monotonic()
                     if now - last_progress_broadcast > 1.0:
                         last_progress_broadcast = now
@@ -416,7 +432,11 @@ async def run_script_with_args(
             logger.error(f"Ошибка записи истории: {e}", exc_info=True)
 
 
-async def run_pipeline_task() -> None:
+async def run_pipeline_task(
+    min_year: int = None,
+    max_year: int = None,
+    min_date: str = None,
+) -> None:
     """Run the canonical sync → reprocess → fix → rezka → cleanup chain.
 
     Drives `run_script_with_args` step-by-step. A step that ends in
@@ -427,9 +447,12 @@ async def run_pipeline_task() -> None:
     process_status["full_pipeline"] = "running"
     pipeline_stop_requested = False
 
+    sync_video_args = ["video", str(min_year or 0), str(max_year or 0)]
+    if min_date:
+        sync_video_args.append(min_date)
+
     steps = [
-        ("sync_job.py", ["video", "0", "0"], "sync_video", "sync_video_log.txt"),
-        ("reprocess_database.py", [], "reprocess", "reprocess_log.txt"),
+        ("sync_job.py", sync_video_args, "sync_video", "sync_video_log.txt"),
         (
             "fix_posters.py",
             ["poiskkino", "fix_poiskkino_log.txt"],
@@ -438,14 +461,57 @@ async def run_pipeline_task() -> None:
         ),
         ("fix_posters.py", ["tech", "fix_tech_log.txt"], "fix", "fix_tech_log.txt"),
         ("rezka_sync.py", [], "rezka", "sync_rezka_log.txt"),
-        ("cleanup_duplicates.py", [], "cleanup", "cleanup_log.txt"),
+        ("sync_kinopub.py", [], "kinopub", "sync_kinopub_log.txt"),
     ]
 
+    step_labels = {
+        "sync_video": "Sync · Видео",
+        "poiskkino": "Поиск (PoiskKino)",
+        "fix": "Поиск (Legacy API)",
+        "rezka": "Rezka · ссылки",
+        "kinopub": "kino.pub · матчер",
+    }
+
     try:
+        # Очистим или создадим full_pipeline_log.txt
+        with open("full_pipeline_log.txt", "w", encoding="utf-8") as f:
+            f.write(
+                f"=== ЗАПУСК ПОЛНОГО ЦИКЛА ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')}) ===\n\n"
+            )
+
+        await ws_manager.broadcast(
+            {
+                "type": "log",
+                "key": "full_pipeline",
+                "data": f"=== ЗАПУСК ПОЛНОГО ЦИКЛА ({datetime.now().strftime('%H:%M:%S')}) ===\n\n",
+            }
+        )
+
         for script, args, key, log in steps:
             if pipeline_stop_requested:
                 logger.info("ПАЙПЛАЙН ОСТАНОВЛЕН ПОЛЬЗОВАТЕЛЕМ")
+                with open("full_pipeline_log.txt", "a", encoding="utf-8") as f:
+                    f.write("\n=== ПАЙПЛАЙН ОСТАНОВЛЕН ПОЛЬЗОВАТЕЛЕМ ===\n")
+                await ws_manager.broadcast(
+                    {
+                        "type": "log",
+                        "key": "full_pipeline",
+                        "data": "\n=== ПАЙПЛАЙН ОСТАНОВЛЕН ПОЛЬЗОВАТЕЛЕМ ===\n",
+                    }
+                )
                 break
+
+            step_label = step_labels.get(key, key)
+            with open("full_pipeline_log.txt", "a", encoding="utf-8") as f:
+                f.write(f"\n--- СТАРТ ШАГА: {step_label} ---\n")
+
+            await ws_manager.broadcast(
+                {
+                    "type": "log",
+                    "key": "full_pipeline",
+                    "data": f"\n--- СТАРТ ШАГА: {step_label} ---\n",
+                }
+            )
 
             await run_script_with_args(script, args, key, log, is_pipeline_step=True)
 
@@ -453,16 +519,45 @@ async def run_pipeline_task() -> None:
                 logger.warning(
                     f"Шаг {key} завершился со статусом {process_status[key]}. Прерываю цикл."
                 )
+                with open("full_pipeline_log.txt", "a", encoding="utf-8") as f:
+                    f.write(
+                        f"\n[ВНИМАНИЕ] Шаг {step_label} завершился со статусом {process_status[key]}. Прерываю цикл.\n"
+                    )
+                await ws_manager.broadcast(
+                    {
+                        "type": "log",
+                        "key": "full_pipeline",
+                        "data": f"\n[ВНИМАНИЕ] Шаг {step_label} завершился со статусом {process_status[key]}. Прерываю цикл.\n",
+                    }
+                )
                 break
 
         if pipeline_stop_requested:
             process_status["full_pipeline"] = "stopped"
         else:
             process_status["full_pipeline"] = "completed"
+            with open("full_pipeline_log.txt", "a", encoding="utf-8") as f:
+                f.write("\n=== ПОЛНЫЙ ЦИКЛ УСПЕШНО ЗАВЕРШЕН ===\n")
+            await ws_manager.broadcast(
+                {
+                    "type": "log",
+                    "key": "full_pipeline",
+                    "data": "\n=== ПОЛНЫЙ ЦИКЛ УСПЕШНО ЗАВЕРШЕН ===\n",
+                }
+            )
 
     except Exception as e:
         logger.error(f"ОШИБКА В ПАЙПЛАЙНЕ: {e}", exc_info=True)
         process_status["full_pipeline"] = "error"
+        with open("full_pipeline_log.txt", "a", encoding="utf-8") as f:
+            f.write(f"\n[КРИТИЧЕСКАЯ ОШИБКА] Ошибка в пайплайне: {e}\n")
+        await ws_manager.broadcast(
+            {
+                "type": "log",
+                "key": "full_pipeline",
+                "data": f"\n[КРИТИЧЕСКАЯ ОШИБКА] Ошибка в пайплайне: {e}\n",
+            }
+        )
     finally:
         pipeline_stop_requested = False
 
