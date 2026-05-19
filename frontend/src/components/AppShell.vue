@@ -164,6 +164,16 @@ function onRestartTriggered(): void {
   }, 10000)
 }
 
+function onLogout(): void {
+  showAdmin.value = false
+  showStats.value = false
+  showSync.value = false
+  showLogs.value = false
+  showRules.value = false
+  showAudit.value = false
+  void session.logout()
+}
+
 const authBadge = computed(() => {
   switch (session.status) {
     case 'disabled':
@@ -261,6 +271,16 @@ const authBadge = computed(() => {
             @click="openAdmin"
           >
             ⚙ Админ
+          </button>
+          <button
+            v-if="session.status === 'authenticated'"
+            type="button"
+            class="rounded-full px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50 hover:text-red-700 transition-all shrink-0"
+            data-testid="logout-trigger"
+            aria-label="Выйти из аккаунта"
+            @click="onLogout"
+          >
+            🚪 Выйти
           </button>
         </div>
       </div>

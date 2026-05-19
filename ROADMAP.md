@@ -53,9 +53,9 @@ TLS-terminator.
 
 ### 12.1. Logout-кнопка в UI
 
-- [ ] Эндпойнт `/api/logout` уже есть (см. PR #24, persistent sessions).
-- [ ] Добавить кнопку в header / user-menu.
-- [ ] Очищать `sessionStorage` и WS.
+- [x] Эндпойнт `/api/logout` уже есть (см. PR #24, persistent sessions).
+- [x] Добавить кнопку в header / user-menu.
+- [x] Очищать `sessionStorage` и WS.
 
 ### 12.2. Webhook при завершении job'а
 

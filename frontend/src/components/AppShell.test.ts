@@ -127,4 +127,28 @@ describe('AppShell.vue', () => {
     const logsPanel = wrapper.findComponent({ name: 'LogsPanel' })
     expect(logsPanel.props('open')).toBe(false)
   })
+
+  it('shows logout button only when status is authenticated and triggers logout', async () => {
+    const session = useSessionStore()
+    const logoutSpy = vi.spyOn(session, 'logout').mockResolvedValue()
+
+    // Default status in beforeEach is 'disabled' (no logout button)
+    const wrapper = mount(AppShell)
+    await flushPromises()
+    expect(wrapper.find('[data-testid="logout-trigger"]').exists()).toBe(false)
+
+    // Patch to 'authenticated'
+    session.$patch({ status: 'authenticated' })
+    await flushPromises()
+
+    // Now the button should be rendered
+    const logoutBtn = wrapper.find('[data-testid="logout-trigger"]')
+    expect(logoutBtn.exists()).toBe(true)
+
+    // Trigger click on logout button
+    await logoutBtn.trigger('click')
+    await flushPromises()
+
+    expect(logoutSpy).toHaveBeenCalled()
+  })
 })
