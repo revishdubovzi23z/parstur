@@ -26,6 +26,8 @@ class RutorParser:
         }
 
     def clean_display_title(self, full_title):
+        from app_core import clean_title_year_duplicates
+
         # Очищаем заголовок от технического мусора
         t = full_title
         # Пытаемся сохранить год (ищем первые 4 цифры в диапазоне 1900-2100)
@@ -49,7 +51,8 @@ class RutorParser:
         # Возвращаем чистое имя + год
         clean = f"{t}{year_str}".strip().replace("  ", " ")
         # Унифицируем букву x
-        return clean.replace("x", "х").replace("X", "Х")
+        clean = clean.replace("x", "х").replace("X", "Х")
+        return clean_title_year_duplicates(clean)
 
     def get_category_releases(self, category_id=1, page=0, max_retries=None):
         url = f"{self.mirror}/browse/{page}/{category_id}/0/0"

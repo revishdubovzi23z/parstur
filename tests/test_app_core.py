@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import pytest
 
-from app_core import clean_title_for_search, normalize_title
+from app_core import clean_title_for_search, clean_title_year_duplicates, normalize_title
 
 CYRILLIC_X = "\u0445"  # 'х'
 
@@ -104,3 +104,24 @@ def test_normalize_title_handles_degenerate_input(title: str | None) -> None:
     out = normalize_title(title)  # type: ignore[arg-type]
     assert isinstance(out, str)
     assert out == "" or out.strip() == out
+
+
+class TestCleanTitleYearDuplicates:
+    def test_no_year_returns_as_is(self) -> None:
+        assert clean_title_year_duplicates("Inception") == "Inception"
+        assert clean_title_year_duplicates("Мумия / The Mummy") == "Мумия / The Mummy"
+
+    def test_single_year_returns_as_is(self) -> None:
+        assert clean_title_year_duplicates("Inception (2010)") == "Inception (2010)"
+        assert clean_title_year_duplicates("Мумия / The Mummy (2026)") == "Мумия / The Mummy (2026)"
+
+    def test_duplicate_years_collapsed(self) -> None:
+        assert clean_title_year_duplicates("Мумия (2026) (2026)") == "Мумия (2026)"
+        assert (
+            clean_title_year_duplicates("Мумия / Lee Cronin's The Mummy (2026) (2026)")
+            == "Мумия / Lee Cronin's The Mummy (2026)"
+        )
+        assert clean_title_year_duplicates("Мумия 2026 (2026)") == "Мумия (2026)"
+        assert clean_title_year_duplicates("Мумия (2026) 2026") == "Мумия (2026)"
+        assert clean_title_year_duplicates("Мумия 2026 2026") == "Мумия 2026"
+        assert clean_title_year_duplicates("Мумия (2026)   (2026)") == "Мумия (2026)"

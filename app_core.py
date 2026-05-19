@@ -28,6 +28,23 @@ def clean_title_for_search(title):
     return t.strip()
 
 
+def clean_title_year_duplicates(title: str) -> str:
+    """Collapses duplicate years in various formats like (YYYY) (YYYY), YYYY (YYYY), etc."""
+    if not title:
+        return ""
+    # Matches "(YYYY) (YYYY)" -> "(YYYY)"
+    title = re.sub(r"\((\d{4})\)\s*\(\1\)", r"(\1)", title)
+    # Matches "YYYY (YYYY)" -> "(YYYY)"
+    title = re.sub(r"\b(\d{4})\b\s*\(\1\)", r"(\1)", title)
+    # Matches "(YYYY) YYYY" -> "(YYYY)"
+    title = re.sub(r"\((\d{4})\)\s*\b\1\b", r"(\1)", title)
+    # Matches "YYYY YYYY" -> "YYYY"
+    title = re.sub(r"\b(\d{4})\b\s*\b\1\b", r"\1", title)
+    # Normalize spaces
+    title = re.sub(r"\s+", " ", title).strip()
+    return title
+
+
 RUTOR_CATEGORIES = {
     0: "Любая категория",
     -1: "Все видео",

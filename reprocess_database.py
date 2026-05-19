@@ -251,6 +251,9 @@ def reprocess_all(force_all=False, specific_id=None):
                                 new_title = new_ru
                             if year:
                                 new_title += f" ({year})"
+                            from app_core import clean_title_year_duplicates
+
+                            new_title = clean_title_year_duplicates(new_title)
                             if new_title != old_title:
                                 final_title = new_title
                                 changes.append(f"    ✨ Название обновлено: {final_title}")

@@ -465,6 +465,9 @@ def run_sync(mode="video", manual_min_date=None):
                                 clean_display_title = new_ru
                             if year and str(year) not in clean_display_title:
                                 clean_display_title += f" ({year})"
+                            from app_core import clean_title_year_duplicates
+
+                            clean_display_title = clean_title_year_duplicates(clean_display_title)
                         if not imdb_id:
                             imdb_id = tmdb_data.get("imdb_id", "")
                         logger.info(
