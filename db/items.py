@@ -920,34 +920,88 @@ class DbItemsMixin:
     def _resolve_item_id(self, c, ref: dict) -> int | None:
         """Best-effort match of an exported item-ref to a local item.id.
 
-        Tries kp_id first, then imdb_id, then rezka_url, then
-        (normalized title + year). Returns None if nothing matches —
-        caller decides whether to skip or report.
+        Tries kp_id first, then imdb_id, then rezka_url (exact and domain-agnostic),
+        then title+year (exact and normalized), then title-only (exact and normalized).
+        Returns None if nothing matches.
         """
-        # Order matters: kp_id and imdb_id are the most reliable
-        # external identifiers; rezka_url is durable but specific to
-        # rezka mirror; title+year is a last-resort fuzzy match.
+        # 1. External identifiers (kp_id and imdb_id) are the most reliable
         for col, val in (("kp_id", ref.get("kp_id")), ("imdb_id", ref.get("imdb_id"))):
             if val:
                 row = c.execute(f"SELECT id FROM items WHERE {col} = ? LIMIT 1", (val,)).fetchone()
                 if row:
                     return int(row["id"])
+
+        # 2. Rezka URL (Exact & Domain-agnostic)
         rezka_url = ref.get("rezka_url")
         if rezka_url:
+            # Exact match
             row = c.execute(
                 "SELECT id FROM items WHERE rezka_url = ? LIMIT 1", (rezka_url,)
             ).fetchone()
             if row:
                 return int(row["id"])
+
+            # Domain-agnostic match: extract path from rezka_url (e.g. /films/adventure/...)
+            from urllib.parse import urlparse
+
+            try:
+                parsed_ref = urlparse(rezka_url)
+                ref_path = parsed_ref.path
+                if ref_path and ref_path != "/":
+                    row = c.execute(
+                        "SELECT id FROM items WHERE rezka_url LIKE ? LIMIT 1",
+                        (f"%{ref_path}",),
+                    ).fetchone()
+                    if row:
+                        return int(row["id"])
+            except Exception:
+                pass
+
+        # 3. Title & Year matching
         title = (ref.get("title") or "").strip()
         year = ref.get("year")
-        if title and year:
+        if title:
+            # Exact title with year
+            if year:
+                row = c.execute(
+                    "SELECT id FROM items WHERE title = ? AND year = ? LIMIT 1",
+                    (title, year),
+                ).fetchone()
+                if row:
+                    return int(row["id"])
+
+            # Exact title only
             row = c.execute(
-                "SELECT id FROM items WHERE title = ? AND year = ? LIMIT 1",
-                (title, year),
+                "SELECT id FROM items WHERE title = ? LIMIT 1",
+                (title,),
             ).fetchone()
             if row:
                 return int(row["id"])
+
+            # Fallback to normalized title matching (ignores punctuation, case, parens)
+            from app_core import normalize_title
+
+            norm = normalize_title(title)
+            if norm:
+                # Normalized with year (+/- 1 year margin or 0)
+                if year:
+                    rows = c.execute(
+                        "SELECT id, year FROM items WHERE title_norm = ?",
+                        (norm,),
+                    ).fetchall()
+                    for r in rows:
+                        iy = r["year"] or 0
+                        if iy == year or iy == 0 or abs(iy - year) <= 1:
+                            return int(r["id"])
+
+                # Normalized title only
+                row = c.execute(
+                    "SELECT id FROM items WHERE title_norm = ? LIMIT 1",
+                    (norm,),
+                ).fetchone()
+                if row:
+                    return int(row["id"])
+
         return None
 
     def insert_search_name(self, item_id: int, name_norm: str, conn=None) -> None:

@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from app_core import normalize_title
 from db import Database
 
 
@@ -20,9 +21,10 @@ def _seed_items(d: Database, items: list[dict]) -> dict[str, int]:
     keys: dict[str, int] = {}
     with d._conn() as c:
         for it in items:
+            title_norm = normalize_title(it["title"])
             cur = c.execute(
                 "INSERT INTO items (category_id, title, year, kp_id, imdb_id, "
-                "rezka_url, original_title) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "rezka_url, original_title, title_norm) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     it.get("category_id", 1),
                     it["title"],
@@ -31,6 +33,7 @@ def _seed_items(d: Database, items: list[dict]) -> dict[str, int]:
                     it.get("imdb_id"),
                     it.get("rezka_url"),
                     it.get("original_title"),
+                    title_norm,
                 ),
             )
             keys[it["title"]] = int(cur.lastrowid)
@@ -225,6 +228,14 @@ def test_resolve_item_id_kp_then_imdb_then_url_then_title(tmp_path: Path) -> Non
             d._resolve_item_id(c, {"rezka_url": "https://rezka.ag/films/x/1-foo.html"})
             == keys["By URL"]
         )
+        # Test domain-agnostic match
+        assert (
+            d._resolve_item_id(c, {"rezka_url": "https://hdrzk.org/films/x/1-foo.html"})
+            == keys["By URL"]
+        )
+        # Test exact title + year match
         assert d._resolve_item_id(c, {"title": "By Title", "year": 2003}) == keys["By Title"]
+        # Test normalized title + year match
+        assert d._resolve_item_id(c, {"title": "By Title (2003)", "year": 2003}) == keys["By Title"]
         # Nothing matches.
         assert d._resolve_item_id(c, {"kp_id": "nope"}) is None
