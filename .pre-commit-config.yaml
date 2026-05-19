@@ -31,3 +31,18 @@ repos:
       - id: ruff
         args: ["--fix"]
       - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: pytest
+        name: Run Python tests (pytest)
+        entry: pytest -q
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: vitest
+        name: Run Frontend tests (vitest)
+        entry: npm --prefix frontend run test
+        language: system
+        pass_filenames: false
+        files: ^frontend/
