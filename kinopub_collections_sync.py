@@ -25,7 +25,7 @@ from typing import Any
 
 from app_core import normalize_title
 from db import Database
-from kinopub_client import KinopubAPIError, KinopubAuthError, KinopubClient
+from kinopub_client import KinopubAPIError, KinopubAuthError, KinopubClient, KinopubRateLimitError
 from logging_config import setup_logging
 from runtime.kinopub import (
     KinopubAuthError as RuntimeKinopubAuthError,
@@ -34,9 +34,11 @@ from runtime.kinopub import (
     _authenticated_client,
     _build_item_url,
     add_item_to_folder,
+    create_folder,
     list_bookmark_folders,
     list_folder_items,
 )
+from script_utils import should_stop
 from settings import settings
 from sync_kinopub import (
     CATEGORY_TYPE_HINT,
@@ -47,6 +49,8 @@ from sync_kinopub import (
 )
 
 logger = setup_logging("parsclode.kinopub_collections", settings.log_file_path)
+
+STATUS_KEY = "kinopub_collections"
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +126,23 @@ def _search_kinopub_id(
                 year=api_year,
                 limit=SEARCH_LIMIT,
             )
+        except KinopubRateLimitError as e:
+            logger.warning(
+                f"      [!] Rate limited during search for '{clean_q}': {e}. Sleeping 2s and retrying..."
+            )
+            import time
+
+            time.sleep(2)
+            try:
+                results = client.search(
+                    clean_q,
+                    type_=None,
+                    year=api_year,
+                    limit=SEARCH_LIMIT,
+                )
+            except Exception as e2:
+                logger.error(f"      [!] Failed to search after retry: {e2}")
+                continue
         except KinopubAPIError as e:
             logger.warning(f"      [!] kinopub search error for '{clean_q}': {e}")
             continue
@@ -175,6 +196,22 @@ def sync_kinopub_collections(
 
     try:
         folders = list_bookmark_folders(client=api)
+    except KinopubRateLimitError as e:
+        logger.warning(f"[!] Rate limited on start: {e}. Sleeping 10s and retrying...")
+        import time
+
+        time.sleep(10)
+        try:
+            folders = list_bookmark_folders(client=api)
+        except KinopubRateLimitError:
+            logger.error(
+                "[-] Still rate limited on start. Please wait a few minutes before running again."
+            )
+            return {
+                "kinopub_to_project": 0,
+                "project_to_kinopub": 0,
+                "new_kinopub_ids": 0,
+            }
     except (KinopubAuthError, KinopubAPIError) as e:
         logger.error(f"[-] Failed to list bookmark folders: {e}")
         return {
@@ -223,11 +260,31 @@ def sync_kinopub_collections(
                 "kinopub_id": row["kinopub_id"],
             }
 
+        # Reverse sync: create folders on kino.pub for local collections that don't exist there
+        for coll in collections:
+            coll_name = coll["name"]
+            matched = False
+            for folder in folders:
+                if normalize_title(_folder_title(folder)) == normalize_title(coll_name):
+                    matched = True
+                    break
+            if not matched:
+                logger.info(f"[+] Creating folder on kino.pub for collection '{coll_name}'")
+                try:
+                    new_folder = create_folder(coll_name, client=api)
+                    folders.append(new_folder)
+                except Exception as e:
+                    logger.error(f"    [!] Failed to create folder on kino.pub: {e}")
+
         total_kinopub_to_project = 0
         total_project_to_kinopub = 0
         total_new_kinopub_ids = 0
 
         for folder in folders:
+            if should_stop(STATUS_KEY):
+                logger.info("[kinopub_collections] stop flag detected — exiting")
+                break
+
             folder_name = _folder_title(folder)
             folder_id = _folder_id(folder)
             if not folder_name or folder_id is None:
@@ -294,6 +351,10 @@ def sync_kinopub_collections(
             pushed = 0
             searched = 0
             for item_id in only_on_project:
+                if should_stop(STATUS_KEY):
+                    logger.info("[kinopub_collections] stop flag detected — exiting item loop")
+                    break
+
                 info = all_items.get(item_id)
                 if not info:
                     continue
@@ -333,11 +394,34 @@ def sync_kinopub_collections(
                     add_item_to_folder(item=kp_id, folder=folder_id, client=api)
                     pushed += 1
                     folder_kp_ids.add(kp_id)
+                except KinopubRateLimitError as e:
+                    logger.warning(
+                        f"      [!] Rate limited by kino.pub: {e}. Sleeping 5s and retrying..."
+                    )
+                    import time
+
+                    time.sleep(5)
+                    try:
+                        add_item_to_folder(item=kp_id, folder=folder_id, client=api)
+                        pushed += 1
+                        folder_kp_ids.add(kp_id)
+                    except KinopubRateLimitError:
+                        logger.error(
+                            "      [!] Rate limited again after retry. Sleeping 10s and skipping remaining items in this folder."
+                        )
+                        time.sleep(10)
+                        break
+                    except Exception as e2:
+                        logger.error(f"      [!] Failed to push after retry: {e2}")
                 except (KinopubAuthError, RuntimeKinopubAuthError) as e:
                     logger.error(f"      [!] kino.pub auth failure: {e}")
                     break
                 except KinopubAPIError as e:
                     logger.error(f"      [!] Failed to push kinopub_id={kp_id} into folder: {e}")
+
+                import time
+
+                time.sleep(1.0)
 
             total_project_to_kinopub += pushed
             logger.info(

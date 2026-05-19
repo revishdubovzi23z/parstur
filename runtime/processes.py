@@ -95,6 +95,7 @@ _LOG_FILES = {
     "rezka": "sync_rezka_log.txt",
     "rezka_collections": "rezka_collections_log.txt",
     "kinopub": "sync_kinopub_log.txt",
+    "kinopub_collections": "kinopub_collections_log.txt",
     "tmdb": "sync_tmdb_log.txt",
     "single_update": "single_update_log.txt",
 }

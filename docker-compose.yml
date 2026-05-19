@@ -32,7 +32,7 @@ services:
       DB_PATH: /data/app_data.db
       API_CACHE_PATH: /data/api_cache.db
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
       - ./data:/data
     healthcheck:
@@ -43,3 +43,25 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      EXTERNAL_HOST: ${EXTERNAL_HOST:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      par2:
+        condition: service_healthy
+
+volumes:
+  caddy_data:
+  caddy_config:
+

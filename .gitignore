@@ -44,3 +44,9 @@ frontend/dist/
 frontend/node_modules/
 frontend/.vite/
 frontend/*.tsbuildinfo
+
+# SSL certificates
+cert.pem
+key.pem
+*.pem
+

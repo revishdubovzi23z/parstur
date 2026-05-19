@@ -415,6 +415,72 @@ def _sync_tmdb_list_wrapper(action, collection_id, item_id):
         logger.error(f"[TMDB SYNC WRAPPER ERROR] {e}", exc_info=True)
 
 
+def _sync_kinopub_folder(action, collection_id, item_id):
+    try:
+        from app_core import normalize_title
+        from runtime.kinopub import (
+            _authenticated_client,
+            add_item_to_folder,
+            create_folder,
+            list_bookmark_folders,
+        )
+
+        if action != "added":
+            return
+
+        try:
+            api = _authenticated_client()
+        except Exception:
+            return
+
+        with db._conn() as c:
+            row = c.execute(
+                "SELECT name FROM collections WHERE id = ?", (collection_id,)
+            ).fetchone()
+            coll_name = row[0] if row else None
+        if not coll_name:
+            return
+
+        folders = list_bookmark_folders(client=api)
+        folder_id = None
+        for f in folders:
+            if normalize_title(f.get("title") or "") == normalize_title(coll_name):
+                folder_id = int(f["id"])
+                break
+
+        if not folder_id:
+            logger.info(f"[KINOPUB SYNC] Creating folder '{coll_name}' on kino.pub")
+            new_folder = create_folder(coll_name, client=api)
+            folder_id = int(new_folder["id"])
+
+        item = db.get_item(item_id)
+        if not item:
+            return
+
+        kp_id_raw = item.get("kinopub_id")
+        try:
+            kp_id = int(kp_id_raw) if kp_id_raw else None
+        except (TypeError, ValueError):
+            kp_id = None
+
+        if not kp_id:
+            logger.info(f"[KINOPUB SYNC] Item {item_id} not bound to kino.pub, skipping auto-push.")
+            return
+
+        add_item_to_folder(item=kp_id, folder=folder_id, client=api)
+        logger.info(f"[KINOPUB SYNC] Added item {item_id} (kp_id={kp_id}) to folder {folder_id}")
+
+    except Exception as e:
+        logger.error(f"[KINOPUB SYNC ERROR] {e}", exc_info=True)
+
+
+def _sync_kinopub_folder_wrapper(action, collection_id, item_id):
+    try:
+        _sync_kinopub_folder(action, collection_id, item_id)
+    except Exception as e:
+        logger.error(f"[KINOPUB SYNC WRAPPER ERROR] {e}", exc_info=True)
+
+
 @router.post("/api/collections/{collection_id}/toggle")
 async def toggle_collection_item(collection_id: int, data: CollectionItemRequest):
     action = db.toggle_collection_item(collection_id, data.item_id)
@@ -432,6 +498,13 @@ async def toggle_collection_item(collection_id: int, data: CollectionItemRequest
         loop.run_in_executor(
             None,
             _sync_tmdb_list_wrapper,
+            action,
+            collection_id,
+            data.item_id,
+        )
+        loop.run_in_executor(
+            None,
+            _sync_kinopub_folder_wrapper,
             action,
             collection_id,
             data.item_id,

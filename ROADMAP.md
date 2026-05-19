@@ -38,13 +38,13 @@ TLS-terminator.
 
 Один PR:
 
-- [ ] `docker-compose.yml`: добавить сервис `caddy:` (
+- [x] `docker-compose.yml`: добавить сервис `caddy:` (
   `caddy:2-alpine`), volume на `./Caddyfile`.
-- [ ] `Caddyfile`: `localhost { reverse_proxy par2:8000 }`
+- [x] `Caddyfile`: `localhost { reverse_proxy par2:8000 }`
   с автоматическим self-signed для dev.
-- [ ] Обновить README инструкцию: «по умолчанию HTTPS на
+- [x] Обновить README инструкцию: «по умолчанию HTTPS на
   https://localhost; принять самоподписанный».
-- [ ] Опционально: ENV `EXTERNAL_HOST` для прод-сетапа с
+- [x] Опционально: ENV `EXTERNAL_HOST` для прод-сетапа с
   настоящим Let's Encrypt.
 
 ---

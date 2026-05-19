@@ -1,0 +1,3 @@
+{$EXTERNAL_HOST:localhost} {
+    reverse_proxy par2:8000
+}

@@ -45,9 +45,20 @@ if exist "frontend\package.json" (
 )
 
 REM ── 4. Launch the server ───────────────────────────────────────────
-echo [4/4] Starting uvicorn on http://0.0.0.0:8000 ...
-start "" http://127.0.0.1:8000
-python -m uvicorn main:app --host 0.0.0.0 --port 8000
+echo [4/4] Ensuring SSL certificates are present...
+python generate_certs.py
+if errorlevel 1 (
+    echo.
+    echo [run_app] Certificate generation failed. Falling back to HTTP...
+    echo Starting uvicorn on http://127.0.0.1:8000 ...
+    start "" http://127.0.0.1:8000
+    python -m uvicorn main:app --host 0.0.0.0 --port 8000
+) else (
+    echo.
+    echo Starting uvicorn on https://127.0.0.1:8000 ...
+    start "" https://127.0.0.1:8000
+    python -m uvicorn main:app --host 0.0.0.0 --port 8000 --ssl-keyfile=key.pem --ssl-certfile=cert.pem
+)
 
 echo.
 echo [run_app] uvicorn exited.
