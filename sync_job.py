@@ -317,11 +317,12 @@ def run_sync(mode="video", manual_min_date=None):
 
                                 if not rutor_kp_id:
                                     kp_match = re.search(
-                                        r"kinopoisk\.ru/rating/(\d+)\.gif", resp.text
+                                        r"(?:rating\.)?kinopoisk\.ru/(?:rating/)?(\d+)\.gif",
+                                        resp.text,
                                     )
                                     if not kp_match:
                                         kp_match = re.search(
-                                            r"kinopoisk\.ru/(?:film|series)/(\d+)",
+                                            r"kinopoisk\.ru/(?:level/1/)?(?:film/|series/)+(\d+)",
                                             resp.text,
                                         )
                                     if kp_match:
@@ -369,9 +370,14 @@ def run_sync(mode="video", manual_min_date=None):
                                     if resp.status_code == 200:
                                         if not rutor_kp_id:
                                             m_kp = re.search(
-                                                r"kinopoisk\.ru/rating/(\d+)\.gif",
+                                                r"(?:rating\.)?kinopoisk\.ru/(?:rating/)?(\d+)\.gif",
                                                 resp.text,
                                             )
+                                            if not m_kp:
+                                                m_kp = re.search(
+                                                    r"kinopoisk\.ru/(?:level/1/)?(?:film/|series/)+(\d+)",
+                                                    resp.text,
+                                                )
                                             if not m_kp:
                                                 m_kp = re.search(r"film/(\d+)", resp.text)
                                             if m_kp:

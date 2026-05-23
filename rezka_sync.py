@@ -154,6 +154,13 @@ def _score_candidates(all_results, clean_parts, year):
                 ):
                     score += 50
                     match_found = True
+                else:
+                    import difflib
+
+                    ratio = difflib.SequenceMatcher(None, db_norm, res_norm).ratio()
+                    if ratio >= 0.85 and len(db_norm) > 6:
+                        score += int(ratio * 90)
+                        match_found = True
             if match_found:
                 break
 

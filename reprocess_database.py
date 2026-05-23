@@ -194,10 +194,12 @@ def reprocess_all(force_all=False, specific_id=None):
                         resp = requests.get(f"{MIRROR}/torrent/{rel_rutor_id}", timeout=20)
                         if resp.status_code == 200:
                             if not kp_id:
-                                m = re.search(r"kinopoisk\.ru/rating/(\d+)\.gif", resp.text)
+                                m = re.search(
+                                    r"(?:rating\.)?kinopoisk\.ru/(?:rating/)?(\d+)\.gif", resp.text
+                                )
                                 if not m:
                                     m = re.search(
-                                        r"kinopoisk\.ru/(?:level/1/)?(?:film|series)/(\d+)",
+                                        r"kinopoisk\.ru/(?:level/1/)?(?:film/|series/)+(\d+)",
                                         resp.text,
                                     )
                                 if not m:

@@ -43,6 +43,7 @@ def update_single_item(item_id):
 
     if not kp_id or not imdb_id:
         rels = db.get_rutor_ids_for_item(item_id, conn=conn)
+        rutor_updated = False
         for rutor_id in rels:
             if kp_id and imdb_id:
                 break
@@ -52,19 +53,28 @@ def update_single_item(item_id):
                 resp = requests.get(url, timeout=15)
                 if resp.status_code == 200:
                     if not kp_id:
-                        m = re.search(r"kinopoisk\.ru/rating/(\d+)\.gif", resp.text)
+                        m = re.search(
+                            r"(?:rating\.)?kinopoisk\.ru/(?:rating/)?(\d+)\.gif", resp.text
+                        )
                         if not m:
-                            m = re.search(r"kinopoisk\.ru/(?:film|series)/(\d+)", resp.text)
+                            m = re.search(
+                                r"kinopoisk\.ru/(?:level/1/)?(?:film/|series/)+(\d+)", resp.text
+                            )
                         if m:
                             kp_id = m.group(1)
                             logger.info(f"    ✅ Нашел KP ID: {kp_id}")
+                            rutor_updated = True
                     if not imdb_id:
                         m = re.search(r"imdb\.com/title/(tt\d+)", resp.text)
                         if m:
                             imdb_id = m.group(1)
                             logger.info(f"    ✅ Нашел IMDb ID: {imdb_id}")
+                            rutor_updated = True
             except Exception:
                 pass
+        if rutor_updated:
+            db.fill_item_metadata(item_id, conn=conn, kp_id=kp_id, imdb_id=imdb_id)
+            conn.commit()
 
     tmdb = TMDBClient()
     tmdb_data = None
