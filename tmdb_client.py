@@ -272,6 +272,41 @@ class TMDBClient:
             "media_type": best["media_type"],
         }
 
+    def get_user_lists(self, account_id):
+        """Get all custom lists created by the user (API v4).
+        Requires self.api_token (v4).
+        """
+        if not self.api_token or not account_id:
+            return []
+        url = f"https://api.themoviedb.org/4/account/{account_id}/lists"
+        all_lists = []
+        page = 1
+        while True:
+            try:
+                resp = self.session.get(
+                    url, headers=self.headers, params={"page": page}, timeout=10
+                )
+                if resp.status_code != 200:
+                    logger.warning(
+                        f"TMDB get_user_lists failed: HTTP {resp.status_code} on page {page}"
+                    )
+                    break
+                data = resp.json()
+                results = data.get("results", [])
+                all_lists.extend(results)
+
+                total_pages = data.get("total_pages", 1)
+                if page >= total_pages:
+                    break
+                page += 1
+            except Exception as e:
+                logger.error(
+                    f"TMDB get_user_lists failed on page {page}: {e}",
+                    exc_info=True,
+                )
+                break
+        return all_lists
+
     def create_list(self, name, description=""):
         """Create a new list on TMDB (API v4).
         Requires self.api_token (v4).

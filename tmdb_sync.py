@@ -32,6 +32,15 @@ def sync_tmdb_collections():
 
     logger.info(f"[*] Найдено локальных коллекций: {len(collections)}")
 
+    with db._conn() as c:
+        row = c.execute("SELECT value FROM app_state WHERE key = 'tmdb_account_id'").fetchone()
+        account_id = row[0] if row else None
+
+    existing_tmdb_lists = []
+    if account_id:
+        existing_tmdb_lists = client.get_user_lists(account_id)
+        logger.info(f"[*] Найдено существующих списков на TMDB: {len(existing_tmdb_lists)}")
+
     for coll in collections:
         coll_id = coll["id"]
         coll_name = coll["name"]
@@ -45,20 +54,37 @@ def sync_tmdb_collections():
             list_id = row[0] if row else None
 
         if not list_id:
-            logger.info(f"  [+] Создаем новый список на TMDB для '{coll_name}'")
-            list_id = client.create_list(
-                coll_name, f"Синхронизировано из Antigravity Tracker (Коллекция ID {coll_id})"
-            )
-            if list_id:
-                logger.info(f"  [✓] Создан список на TMDB с ID {list_id}")
+            matched_list = None
+            for lst in existing_tmdb_lists:
+                if (lst.get("name") or "").strip().lower() == coll_name.strip().lower():
+                    matched_list = lst
+                    break
+
+            if matched_list:
+                list_id = str(matched_list["id"])
+                logger.info(
+                    f"  [✓] Найден существующий список на TMDB с именем '{coll_name}' (ID: {list_id}). Привязываем к базе."
+                )
                 with db._conn() as c:
                     c.execute(
                         "INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)",
                         (f"tmdb_list_id_{coll_id}", list_id),
                     )
             else:
-                logger.error(f"  [-] Не удалось создать список на TMDB для '{coll_name}'")
-                continue
+                logger.info(f"  [+] Создаем новый список на TMDB для '{coll_name}'")
+                list_id = client.create_list(
+                    coll_name, f"Синхронизировано из Antigravity Tracker (Коллекция ID {coll_id})"
+                )
+                if list_id:
+                    logger.info(f"  [✓] Создан список на TMDB с ID {list_id}")
+                    with db._conn() as c:
+                        c.execute(
+                            "INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)",
+                            (f"tmdb_list_id_{coll_id}", list_id),
+                        )
+                else:
+                    logger.error(f"  [-] Не удалось создать список на TMDB для '{coll_name}'")
+                    continue
 
         logger.info(f"  [*] Используем список TMDB ID {list_id}")
 

@@ -351,18 +351,41 @@ def _sync_tmdb_list(action, collection_id, item_id):
                 coll_name = row[0] if row else None
             if not coll_name:
                 return
-            list_id = client.create_list(
-                coll_name,
-                f"Синхронизировано из Antigravity Tracker (Коллекция ID {collection_id})",
-            )
-            if list_id:
+
+            with db._conn() as c:
+                row = c.execute(
+                    "SELECT value FROM app_state WHERE key = 'tmdb_account_id'"
+                ).fetchone()
+                account_id = row[0] if row else None
+
+            matched_list = None
+            if account_id:
+                existing_tmdb_lists = client.get_user_lists(account_id)
+                for lst in existing_tmdb_lists:
+                    if (lst.get("name") or "").strip().lower() == coll_name.strip().lower():
+                        matched_list = lst
+                        break
+
+            if matched_list:
+                list_id = str(matched_list["id"])
                 with db._conn() as c:
                     c.execute(
                         "INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)",
                         (f"tmdb_list_id_{collection_id}", list_id),
                     )
             else:
-                return
+                list_id = client.create_list(
+                    coll_name,
+                    f"Синхронизировано из Antigravity Tracker (Коллекция ID {collection_id})",
+                )
+                if list_id:
+                    with db._conn() as c:
+                        c.execute(
+                            "INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)",
+                            (f"tmdb_list_id_{collection_id}", list_id),
+                        )
+                else:
+                    return
 
         item = db.get_item(item_id)
         if not item:

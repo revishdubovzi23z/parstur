@@ -14,6 +14,9 @@ class FakeTMDBClient:
         self.removed_items = {}
         self.list_items = {}
 
+    def get_user_lists(self, account_id):
+        return self.created_lists
+
     def create_list(self, name, description=""):
         list_id = f"list_{len(self.created_lists) + 1}"
         self.created_lists.append({"id": list_id, "name": name, "description": description})
