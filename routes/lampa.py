@@ -449,8 +449,8 @@ def get_lampa_collections(request: Request):
             cover_poster_url = ""
 
             if items:
-                # Select a random item
-                valid_items = [it for it in items if it.get("poster_url") or it.get("tmdb_id")]
+                # Select a random item that actually has a poster_url
+                valid_items = [it for it in items if it.get("poster_url")]
                 chosen = random.choice(valid_items) if valid_items else random.choice(items)
 
                 cover_media_type = get_media_type(chosen.get("category_id"))
