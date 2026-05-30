@@ -28,6 +28,8 @@ const ratings = computed(() => {
   const list: Array<{ key: string; label: string }> = []
   const kp = props.item.kp_rating ?? 0
   const imdb = props.item.imdb_rating ?? 0
+  const user = props.item.user_rating ?? 0
+  if (user > 0) list.push({ key: 'user', label: `★ ${user}` })
   if (kp > 0) list.push({ key: 'kp', label: `KP ${kp.toFixed(1)}` })
   if (imdb > 0) list.push({ key: 'imdb', label: `IMDB ${imdb.toFixed(1)}` })
   return list
@@ -104,6 +106,7 @@ function onHoverReset(): void {
           v-for="r in ratings"
           :key="r.key"
           class="bg-white/90 px-2 py-0.5 rounded text-[10px] font-bold border border-slate-200"
+          :class="r.key === 'user' ? 'text-amber-600 bg-amber-50 border-amber-200 shadow-sm' : 'text-slate-800'"
           :data-testid="`feed-item-rating-${r.key}`"
         >
           {{ r.label }}
@@ -126,6 +129,17 @@ function onHoverReset(): void {
         class="absolute bottom-2 left-2 z-10 flex flex-col gap-1.5 opacity-0 translate-y-2 transition-all duration-300 group-hover:opacity-100 group-hover:translate-y-0 group-focus-within:opacity-100 group-focus-within:translate-y-0"
         data-testid="feed-item-hover-actions"
       >
+        <button
+          type="button"
+          class="flex items-center justify-center w-7 h-7 rounded-lg bg-white/90 text-sm font-bold shadow hover:bg-white"
+          :class="item.is_watched === 1 ? 'text-emerald-600' : 'text-slate-400'"
+          :title="item.is_watched === 1 ? 'Отметить как непросмотренное' : 'Отметить как просмотренное'"
+          :aria-label="item.is_watched === 1 ? 'Не просмотрено' : 'Просмотрено'"
+          data-testid="feed-item-hover-watched"
+          @click.stop="items.toggleWatchedById(item.id)"
+        >
+          ✓
+        </button>
         <button
           type="button"
           class="flex items-center justify-center w-7 h-7 rounded-lg bg-white/90 text-sm font-bold shadow hover:bg-white disabled:opacity-50"

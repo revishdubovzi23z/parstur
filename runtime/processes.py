@@ -65,6 +65,7 @@ PROCESS_KEYS: tuple[str, ...] = (
     "kinopub",
     "kinopub_collections",
     "tmdb",
+    "trakt_collections",
     "full_pipeline",
     "single_update",
 )
@@ -97,6 +98,7 @@ _LOG_FILES = {
     "kinopub": "sync_kinopub_log.txt",
     "kinopub_collections": "kinopub_collections_log.txt",
     "tmdb": "sync_tmdb_log.txt",
+    "trakt_collections": "trakt_collections_log.txt",
     "single_update": "single_update_log.txt",
     "full_pipeline": "full_pipeline_log.txt",
 }

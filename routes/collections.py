@@ -343,6 +343,8 @@ def _sync_tmdb_list(action, collection_id, item_id):
             ).fetchone()
             list_id = row[0] if row else None
 
+        # Removed isdigit check since v4 lists have integer IDs
+
         if not list_id:
             with db._conn() as c:
                 row = c.execute(
@@ -363,8 +365,9 @@ def _sync_tmdb_list(action, collection_id, item_id):
                 existing_tmdb_lists = client.get_user_lists(account_id)
                 for lst in existing_tmdb_lists:
                     if (lst.get("name") or "").strip().lower() == coll_name.strip().lower():
-                        matched_list = lst
-                        break
+                        if client.is_list_alive(lst["id"]):
+                            matched_list = lst
+                            break
 
             if matched_list:
                 list_id = str(matched_list["id"])
@@ -374,11 +377,13 @@ def _sync_tmdb_list(action, collection_id, item_id):
                         (f"tmdb_list_id_{collection_id}", list_id),
                     )
             else:
-                list_id = client.create_list(
-                    coll_name,
-                    f"Синхронизировано из Antigravity Tracker (Коллекция ID {collection_id})",
-                )
-                if list_id:
+                list_id = client.create_list(coll_name)
+                if list_id == "SPAM_ERROR":
+                    logger.warning(
+                        f"[TMDB SYNC] Не удалось создать список '{coll_name}' из-за спам-фильтра."
+                    )
+                    return
+                elif list_id:
                     with db._conn() as c:
                         c.execute(
                             "INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)",
@@ -446,9 +451,10 @@ def _sync_kinopub_folder(action, collection_id, item_id):
             add_item_to_folder,
             create_folder,
             list_bookmark_folders,
+            remove_item_from_folder,
         )
 
-        if action != "added":
+        if action not in ("added", "removed"):
             return
 
         try:
@@ -472,6 +478,8 @@ def _sync_kinopub_folder(action, collection_id, item_id):
                 break
 
         if not folder_id:
+            if action == "removed":
+                return
             logger.info(f"[KINOPUB SYNC] Creating folder '{coll_name}' on kino.pub")
             new_folder = create_folder(coll_name, client=api)
             folder_id = int(new_folder["id"])
@@ -490,8 +498,16 @@ def _sync_kinopub_folder(action, collection_id, item_id):
             logger.info(f"[KINOPUB SYNC] Item {item_id} not bound to kino.pub, skipping auto-push.")
             return
 
-        add_item_to_folder(item=kp_id, folder=folder_id, client=api)
-        logger.info(f"[KINOPUB SYNC] Added item {item_id} (kp_id={kp_id}) to folder {folder_id}")
+        if action == "added":
+            add_item_to_folder(item=kp_id, folder=folder_id, client=api)
+            logger.info(
+                f"[KINOPUB SYNC] Added item {item_id} (kp_id={kp_id}) to folder {folder_id}"
+            )
+        elif action == "removed":
+            remove_item_from_folder(item=kp_id, folder=folder_id, client=api)
+            logger.info(
+                f"[KINOPUB SYNC] Removed item {item_id} (kp_id={kp_id}) from folder {folder_id}"
+            )
 
     except Exception as e:
         logger.error(f"[KINOPUB SYNC ERROR] {e}", exc_info=True)
@@ -502,6 +518,103 @@ def _sync_kinopub_folder_wrapper(action, collection_id, item_id):
         _sync_kinopub_folder(action, collection_id, item_id)
     except Exception as e:
         logger.error(f"[KINOPUB SYNC WRAPPER ERROR] {e}", exc_info=True)
+
+
+def _sync_trakt_list(action, collection_id, item_id):
+    try:
+        from trakt_client import TraktClient
+
+        client = TraktClient()
+        if not client.access_token:
+            return
+
+        with db._conn() as c:
+            row = c.execute(
+                "SELECT name FROM collections WHERE id = ?", (collection_id,)
+            ).fetchone()
+            coll_name = row[0] if row else None
+        if not coll_name:
+            return
+
+        from app_core import normalize_title
+
+        trakt_lists = client.get_custom_lists()
+
+        list_id = None
+        for lst in trakt_lists:
+            if normalize_title(lst["name"]) == normalize_title(coll_name):
+                list_id = lst["ids"]["trakt"]
+                break
+
+        if not list_id:
+            logger.info(f"[TRAKT SYNC] Creating new custom list: {coll_name}")
+            new_list = client.create_custom_list(
+                coll_name, description="Синхронизировано из проекта Antigravity Tracker"
+            )
+            if new_list:
+                list_id = new_list["ids"]["trakt"]
+            else:
+                return
+
+        item = db.get_item(item_id)
+        if not item:
+            return
+
+        category_id = item.get("category_id")
+        imdb_id = item.get("imdb_id")
+
+        resolved_imdb = imdb_id
+        resolved_tmdb = None
+
+        if not resolved_imdb:
+            from tmdb_client import TMDBClient
+
+            tmdb_cli = TMDBClient()
+            title = item.get("title")
+            year = item.get("year")
+            if title:
+                clean_t = title.split(" / ")[0].split("/")[0].strip()
+                meta = tmdb_cli.search_movie(clean_t, year)
+                if meta:
+                    resolved_imdb = meta.get("imdb_id")
+                    resolved_tmdb = meta.get("tmdb_id")
+                    db.fill_item_metadata(
+                        item_id,
+                        imdb_id=resolved_imdb,
+                        poster_url=meta.get("poster_url"),
+                    )
+
+        item_payload = {}
+        if resolved_imdb:
+            item_payload["ids"] = {"imdb": resolved_imdb}
+        elif resolved_tmdb:
+            item_payload["ids"] = {"tmdb": int(resolved_tmdb)}
+        else:
+            logger.warning(f"[TRAKT SYNC] Could not resolve TMDB/IMDb ID for element {item_id}")
+            return
+
+        is_tv = category_id in (4, 6, 10)
+        movies = [item_payload] if not is_tv else []
+        shows = [item_payload] if is_tv else []
+
+        if action == "added":
+            res = client.add_items_to_custom_list(list_id, movies=movies, shows=shows)
+            logger.info(f"[TRAKT SYNC] Added item {item_id} to Trakt list {list_id}. Result: {res}")
+        elif action == "removed":
+            res = client.remove_items_from_custom_list(list_id, movies=movies, shows=shows)
+            logger.info(
+                f"[TRAKT SYNC] Removed item {item_id} from Trakt list {list_id}. Result: {res}"
+            )
+
+    except Exception as e:
+        logger.error(f"[TRAKT SYNC ERROR] {e}", exc_info=True)
+
+
+def _sync_trakt_list_wrapper(action, collection_id, item_id):
+    try:
+        _sync_trakt_list(action, collection_id, item_id)
+    except Exception as e:
+        logger.error(f"[TRAKT SYNC WRAPPER ERROR] {e}", exc_info=True)
 
 
 @router.post("/api/collections/{collection_id}/toggle")
@@ -528,6 +641,13 @@ async def toggle_collection_item(collection_id: int, data: CollectionItemRequest
         loop.run_in_executor(
             None,
             _sync_kinopub_folder_wrapper,
+            action,
+            collection_id,
+            data.item_id,
+        )
+        loop.run_in_executor(
+            None,
+            _sync_trakt_list_wrapper,
             action,
             collection_id,
             data.item_id,

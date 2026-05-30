@@ -352,5 +352,73 @@ export const useItemsStore = defineStore('items', {
       this.pendingResetDialog = true
       await this.open(itemId, seed)
     },
+
+    async rate(rating: number | null): Promise<boolean> {
+      const id = this.item?.id
+      if (id === undefined) return false
+      const ok = await this._post(`/api/item/${id}/rate`, { rating }, 'Оценка')
+      if (ok) {
+        if (this.item) {
+          this.item.user_rating = rating
+        }
+        const feed = useFeedStore()
+        const cached = feed.items.find((it) => it.id === id)
+        if (cached) cached.user_rating = rating
+        useToastStore().success(rating ? `Поставлена оценка: ${rating}/10` : 'Оценка удалена')
+      }
+      return ok
+    },
+
+    async setWatched(watched: boolean): Promise<boolean> {
+      const id = this.item?.id
+      if (id === undefined) return false
+      const ok = await this._post(`/api/item/${id}/watched`, { watched }, 'Просмотр')
+      if (ok) {
+        const watchedVal = watched ? 1 : 0
+        const watchedAt = watched ? new Date().toISOString() : null
+        if (this.item) {
+          this.item.is_watched = watchedVal
+          this.item.watched_at = watchedAt
+        }
+        const feed = useFeedStore()
+        const cached = feed.items.find((it) => it.id === id)
+        if (cached) {
+          cached.is_watched = watchedVal
+          cached.watched_at = watchedAt
+          // If we are hiding rated items or in a special view, remove from current view
+          if (feed.filters.hideRated && watched) {
+            feed.items = feed.items.filter((it) => it.id !== id)
+            feed.onItemRemoved()
+          }
+        }
+        useToastStore().success(watched ? 'Отмечено как просмотренное' : 'Отмечено как непросмотренное')
+      }
+      return ok
+    },
+
+    async toggleWatchedById(id: number): Promise<void> {
+      const feed = useFeedStore()
+      const cached = feed.items.find((it) => it.id === id)
+      if (!cached) return
+      const nextWatched = !(cached.is_watched === 1)
+      const ok = await this._post(`/api/item/${id}/watched`, { watched: nextWatched }, 'Просмотр')
+      if (ok) {
+        const watchedVal = nextWatched ? 1 : 0
+        const watchedAt = nextWatched ? new Date().toISOString() : null
+        cached.is_watched = watchedVal
+        cached.watched_at = watchedAt
+
+        if (this.item && this.item.id === id) {
+          this.item.is_watched = watchedVal
+          this.item.watched_at = watchedAt
+        }
+
+        if (feed.filters.hideRated && nextWatched) {
+          feed.items = feed.items.filter((it) => it.id !== id)
+          feed.onItemRemoved()
+        }
+        useToastStore().success(nextWatched ? 'Отмечено как просмотренное' : 'Отмечено как непросмотренное')
+      }
+    },
   },
 })

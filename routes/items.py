@@ -151,3 +151,25 @@ def rebind_item(item_id: int, data: RebindRequest):
         new_value=_json.dumps(after, ensure_ascii=False),
     )
     return {"status": "success", "before": before, "after": after}
+
+
+class RateRequest(BaseModel):
+    rating: int | None = None  # 1–10 or None
+
+
+class WatchedRequest(BaseModel):
+    watched: bool
+
+
+@router.post("/api/item/{item_id}/rate")
+def rate_item_endpoint(item_id: int, data: RateRequest):
+    if data.rating is not None and (data.rating < 1 or data.rating > 10):
+        return JSONResponse({"error": "rating must be between 1 and 10"}, status_code=400)
+    db.rate_item(item_id, data.rating)
+    return {"status": "success"}
+
+
+@router.post("/api/item/{item_id}/watched")
+def mark_watched_endpoint(item_id: int, data: WatchedRequest):
+    db.mark_watched(item_id, data.watched)
+    return {"status": "success"}

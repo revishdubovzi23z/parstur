@@ -338,3 +338,13 @@ class KinopubClient:
             "/v1/bookmarks/add",
             data={"item": int(item), "folder": int(folder)},
         )
+
+    def remove_from_bookmark_folder(self, *, item: int, folder: int) -> None:
+        """`POST /v1/bookmarks/remove-item` — remove a catalog item from a folder.
+        Returns silently on success; raises `KinopubAPIError` otherwise.
+        """
+        self._request(
+            "POST",
+            "/v1/bookmarks/remove-item",
+            data={"item": int(item), "folder": int(folder)},
+        )

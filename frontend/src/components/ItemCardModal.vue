@@ -52,6 +52,16 @@ const open = computed(() => items.isOpen)
 const showResetDialog = ref(false)
 const showEditIds = ref(false)
 
+const hoveredRating = ref<number | null>(null)
+async function onRate(val: number | null): Promise<void> {
+  await items.rate(val)
+}
+async function onToggleWatched(): Promise<void> {
+  const cur = items.item
+  if (!cur) return
+  await items.setWatched(!(cur.is_watched === 1))
+}
+
 // Edit-IDs draft state. Re-seeded from store whenever the open item
 // changes so navigating between items doesn't carry over half-edited
 // values.
@@ -537,6 +547,34 @@ function onToggleEditIds(): void {
               </span>
             </div>
 
+            <!-- User Rating Star selector -->
+            <div class="flex items-center gap-1.5 py-1 text-xs" data-testid="item-modal-user-rating">
+              <span class="font-medium text-slate-500">Ваша оценка:</span>
+              <div class="flex items-center gap-0.5">
+                <button
+                  v-for="star in 10"
+                  :key="star"
+                  type="button"
+                  class="text-base transition-all duration-150 focus:outline-none leading-none select-none"
+                  :class="star <= (hoveredRating || items.item?.user_rating || 0) ? 'text-amber-400 scale-110' : 'text-slate-300 hover:text-amber-200'"
+                  :title="`Оценить на ${star}/10`"
+                  @mouseenter="hoveredRating = star"
+                  @mouseleave="hoveredRating = null"
+                  @click="onRate(star)"
+                >
+                  ★
+                </button>
+              </div>
+              <button
+                v-if="items.item?.user_rating"
+                type="button"
+                class="ml-1 text-[10px] text-red-500 hover:underline"
+                @click="onRate(null)"
+              >
+                удалить
+              </button>
+            </div>
+
             <p
               v-if="items.item.description"
               class="whitespace-pre-line text-sm text-slate-600"
@@ -612,7 +650,7 @@ function onToggleEditIds(): void {
 
             <!-- 10.7g — primary playback actions, always visible -->
             <div
-              class="grid grid-cols-2 gap-2"
+              class="grid grid-cols-3 gap-2"
               data-testid="item-modal-play-actions"
             >
               <button
@@ -633,7 +671,21 @@ function onToggleEditIds(): void {
               >
                 🎬 Трейлер
               </button>
+              <button
+                type="button"
+                class="rounded-md px-3 py-2 text-xs font-medium border transition-colors"
+                :class="items.item?.is_watched === 1
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100'
+                  : 'bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200'"
+                data-testid="item-modal-watched-toggle"
+                @click="onToggleWatched"
+              >
+                {{ items.item?.is_watched === 1 ? '✓ Просмотрено' : '👁 Просмотрено' }}
+              </button>
             </div>
+            <p v-if="items.item?.is_watched === 1 && items.item?.watched_at" class="text-[10px] text-slate-400 italic mt-1">
+              Просмотрено: {{ formatReleaseDate(items.item.watched_at) }}
+            </p>
             <!-- PR 5: kino.pub playback. Only shown when the row is
                  bound + auth is healthy, so the button doesn't sit
                  there permanently disabled for non-kino.pub users. -->

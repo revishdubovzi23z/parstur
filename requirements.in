@@ -45,3 +45,18 @@ python-dotenv==1.2.2
 # --- Domain libraries ------------------------------------------------------
 parse-torrent-name==1.1.1
 HdRezkaApi==11.2.3
+
+# --- Optional integrations (Stage 13 / 14) ---------------------------------
+# These power optional features and are intentionally left commented so the
+# default lockfile stays slim. Uncomment the ones you need, then re-run
+# pip-compile (or just `pip install <pkg>`) before enabling the feature.
+#
+# Cloud sync (Stage 13): whole-DB mirror to a Turso / libSQL database.
+# Required only when CLOUD_PROVIDER=turso.
+# libsql>=0.1.0
+#
+# Per-service proxies (Stage 14): SOCKS5 support for requests. Required only
+# when any PROXY_* entry uses a socks5:// (or vless://-bridged) endpoint.
+# Note: vless:// links also need an external xray / sing-box binary, which is
+# NOT a Python package (set XRAY_BINARY in .env).
+# PySocks>=1.7.1

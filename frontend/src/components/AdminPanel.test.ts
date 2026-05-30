@@ -30,7 +30,17 @@ function setup(): { admin: ReturnType<typeof useAdminStore> } {
 function mountPanel(open = true) {
   return mount(AdminPanel, {
     props: { open },
-    global: { stubs: { KinopubAuthPanel: true, CredentialSettingsPanel: true, TmdbAuthPanel: true } },
+    global: {
+      stubs: {
+        KinopubAuthPanel: true,
+        CredentialSettingsPanel: true,
+        TmdbAuthPanel: true,
+        TraktAuthPanel: true,
+        LampaPanel: true,
+        CloudPanel: true,
+        ProxyPanel: true,
+      },
+    },
   })
 }
 
@@ -183,7 +193,7 @@ describe('AdminPanel.vue', () => {
     const spy = vi
       .spyOn(admin, 'exportItems')
       .mockResolvedValue({ tone: 'success', message: 'ok', willRestart: false })
-    const wrapper = mount(AdminPanel, { props: { open: true } })
+    const wrapper = mountPanel()
 
     await wrapper
       .find('[data-testid="admin-items-export-fmt"]')
@@ -202,7 +212,7 @@ describe('AdminPanel.vue', () => {
     const spy = vi
       .spyOn(admin, 'rebuildFts')
       .mockResolvedValue({ tone: 'success', message: 'ok', willRestart: false })
-    const wrapper = mount(AdminPanel, { props: { open: true } })
+    const wrapper = mountPanel()
 
     await wrapper.find('[data-testid="admin-rebuild-fts"]').trigger('click')
     await flushPromises()
@@ -215,7 +225,7 @@ describe('AdminPanel.vue', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(false)
     const { admin } = setup()
     const spy = vi.spyOn(admin, 'rebuildFts')
-    const wrapper = mount(AdminPanel, { props: { open: true } })
+    const wrapper = mountPanel()
     await wrapper.find('[data-testid="admin-rebuild-fts"]').trigger('click')
     await flushPromises()
     expect(spy).not.toHaveBeenCalled()

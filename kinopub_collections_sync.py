@@ -53,20 +53,33 @@ logger = setup_logging("parsclode.kinopub_collections", settings.log_file_path)
 STATUS_KEY = "kinopub_collections"
 
 
+def _is_ignored_folder(folder_name: str) -> bool:
+    """Return True when `folder_name` matches one of the
+    operator-configured ignored folders (case-insensitive)."""
+    ignored = settings.kinopub_ignored_folders
+    if not ignored:
+        return False
+    folder_lower = folder_name.strip().lower()
+    return any(folder_lower == name.lower() for name in ignored)
+
+
 # ---------------------------------------------------------------------------
 # Pure helpers — easy to unit-test without hitting the API.
 
 
 def _match_folder_to_collection(folder_name: str, collections: list[dict]) -> dict | None:
     """Find a par2 collection whose normalised name matches the given
-    kino.pub folder. Falls back to a >=70% character-overlap fuzzy
-    match, identical to the rezka collections sync."""
+    kino.pub folder. Falls back to a >=85% character-overlap fuzzy
+    match using SequenceMatcher to prevent false positives while catching typos."""
     folder_norm = normalize_title(folder_name)
     if not folder_norm:
         return None
     for coll in collections:
         if normalize_title(coll["name"]) == folder_norm:
             return coll
+
+    import difflib
+
     best: dict | None = None
     best_ratio = 0.0
     for coll in collections:
@@ -74,9 +87,8 @@ def _match_folder_to_collection(folder_name: str, collections: list[dict]) -> di
         shorter = min(len(folder_norm), len(coll_norm))
         if shorter < 3:
             continue
-        overlap = sum(1 for a, b in zip(folder_norm, coll_norm, strict=False) if a == b)
-        ratio = overlap / max(len(folder_norm), len(coll_norm))
-        if ratio > best_ratio and ratio >= 0.7:
+        ratio = difflib.SequenceMatcher(None, folder_norm, coll_norm).ratio()
+        if ratio > best_ratio and ratio >= 0.85:
             best_ratio = ratio
             best = coll
     return best
@@ -220,15 +232,24 @@ def sync_kinopub_collections(
             "new_kinopub_ids": 0,
         }
 
-    if not folders:
-        logger.warning("[-] No bookmark folders found on kino.pub")
-        return {
-            "kinopub_to_project": 0,
-            "project_to_kinopub": 0,
-            "new_kinopub_ids": 0,
-        }
+    if folders is None:
+        folders = []
+    elif not folders:
+        logger.warning(
+            "[-] No bookmark folders found on kino.pub on start, proceeding with empty folders list"
+        )
 
-    logger.info(f"[*] Found {len(folders)} kino.pub folders:")
+    # --- Filter out ignored folders ------------------------------------
+    before_filter = len(folders)
+    folders = [f for f in folders if not _is_ignored_folder(_folder_title(f))]
+    ignored_count = before_filter - len(folders)
+    if ignored_count:
+        logger.info(
+            f"[*] Skipped {ignored_count} ignored folder(s) "
+            f"(configured: {settings.kinopub_ignored_folders})"
+        )
+
+    logger.info(f"[*] Found {len(folders)} kino.pub folders (after filtering):")
     for f in folders:
         logger.info(f"    {_folder_title(f)} ({f.get('count', '?')}) [id={f.get('id')}]")
 
@@ -263,18 +284,37 @@ def sync_kinopub_collections(
         # Reverse sync: create folders on kino.pub for local collections that don't exist there
         for coll in collections:
             coll_name = coll["name"]
-            matched = False
-            for folder in folders:
-                if normalize_title(_folder_title(folder)) == normalize_title(coll_name):
-                    matched = True
+            # Don't push ignored collections back to kino.pub
+            if _is_ignored_folder(coll_name):
+                continue
+            coll_norm = normalize_title(coll_name)
+
+            # Check if this collection already has a folder on KinoPub (exact or fuzzy)
+            matched_folder = None
+            for f in folders:
+                f_title = _folder_title(f)
+                f_norm = normalize_title(f_title)
+                if f_norm == coll_norm:
+                    matched_folder = f
                     break
-            if not matched:
-                logger.info(f"[+] Creating folder on kino.pub for collection '{coll_name}'")
-                try:
-                    new_folder = create_folder(coll_name, client=api)
-                    folders.append(new_folder)
-                except Exception as e:
-                    logger.error(f"    [!] Failed to create folder on kino.pub: {e}")
+
+                # Loose/fuzzy check using difflib to catch typos/duplicates (similarity >= 0.85)
+                import difflib
+
+                ratio = difflib.SequenceMatcher(None, coll_norm, f_norm).ratio()
+                if ratio >= 0.85:
+                    matched_folder = f
+                    break
+
+            if matched_folder:
+                continue
+
+            logger.info(f"[+] Creating folder on kino.pub for collection '{coll_name}'")
+            try:
+                new_folder = create_folder(coll_name, client=api)
+                folders.append(new_folder)
+            except Exception as e:
+                logger.error(f"    [!] Failed to create folder on kino.pub: {e}")
 
         total_kinopub_to_project = 0
         total_project_to_kinopub = 0
@@ -293,8 +333,12 @@ def sync_kinopub_collections(
             coll = _match_folder_to_collection(folder_name, collections)
             if not coll:
                 logger.info(f"\n  [+] Creating new collection '{folder_name}'")
-                db.create_collection(folder_name)
-                conn.commit()
+                try:
+                    db.create_collection(folder_name)
+                    conn.commit()
+                except Exception:
+                    # Collection already exists (UNIQUE constraint) — just refresh.
+                    pass
                 collections = db.get_collections()
                 coll = _match_folder_to_collection(folder_name, collections)
 
@@ -331,6 +375,145 @@ def sync_kinopub_collections(
 
             c.execute("SELECT item_id FROM collection_items WHERE collection_id = ?", (coll_id,))
             project_item_ids = {int(r[0]) for r in c.fetchall()}
+
+            # New logic: Create local items for items that exist on kino.pub but aren't in the project at all
+            unbound_kp_ids = folder_kp_ids - set(kp_to_item.keys())
+            if unbound_kp_ids:
+                from tmdb_client import TMDBClient
+
+                tmdb = TMDBClient()
+
+                # Build mapping for unbound items
+                kp_items_by_id = {}
+                for entry in kp_items:
+                    if isinstance(entry, dict) and entry.get("id") is not None:
+                        try:
+                            val = int(entry["id"])
+                            kp_items_by_id[val] = entry
+                        except ValueError:
+                            pass
+
+                for kp_id in unbound_kp_ids:
+                    entry = kp_items_by_id.get(kp_id)
+                    if not entry:
+                        continue
+
+                    title = str(entry.get("title") or "").strip()
+                    year = entry.get("year")
+                    try:
+                        year = int(year) if year else None
+                    except ValueError:
+                        year = None
+
+                    kp_type = str(entry.get("type") or "")
+                    category_id = 1 if kp_type in ("movie", "docum", "4k") else 4
+
+                    imdb_id = str(entry.get("imdb") or "").strip()
+                    if imdb_id and not imdb_id.startswith("tt"):
+                        imdb_id = "tt" + imdb_id
+
+                    posters = entry.get("posters")
+                    poster = None
+                    if isinstance(posters, dict):
+                        poster = posters.get("medium") or posters.get("small") or posters.get("big")
+                    if not poster:
+                        poster = entry.get("poster")
+
+                    # Check existing by IMDB or Title+Year
+                    existing_id = None
+                    if imdb_id:
+                        row = c.execute(
+                            "SELECT id FROM items WHERE imdb_id = ?", (imdb_id,)
+                        ).fetchone()
+                        if row:
+                            existing_id = row[0]
+                    if not existing_id and title and year:
+                        row = c.execute(
+                            "SELECT id FROM items WHERE title_norm = ? AND year = ?",
+                            (normalize_title(title), year),
+                        ).fetchone()
+                        if row:
+                            existing_id = row[0]
+
+                    if existing_id:
+                        db.kinopub_bind(
+                            existing_id,
+                            kinopub_id=kp_id,
+                            kinopub_type=kp_type,
+                            kinopub_url=_build_item_url(kp_id),
+                        )
+                        kp_to_item[kp_id] = existing_id
+                        folder_local_item_ids.add(existing_id)
+                        logger.info(
+                            f"    [+] Bound existing local item {existing_id} to kino.pub ID {kp_id}"
+                        )
+                        continue
+
+                    logger.info(f"    [new] Creating card for '{title}' ({year}) from kino.pub")
+                    tmdb_data = None
+                    if imdb_id:
+                        tmdb_data = tmdb.find_by_imdb_id(imdb_id)
+                    if not tmdb_data and title and year:
+                        tmdb_data = tmdb.search_movie(title, year)
+
+                    if tmdb_data:
+                        display_title = tmdb_data.get("title") or title
+                        original_title = tmdb_data.get("original_title") or ""
+                        if original_title and original_title.lower() != display_title.lower():
+                            display_title = f"{display_title} / {original_title}"
+                        year_val = year
+                        if not year_val and tmdb_data.get("release_date"):
+                            try:
+                                year_val = int(tmdb_data["release_date"][:4])
+                            except Exception:
+                                pass
+                        if year_val:
+                            display_title += f" ({year_val})"
+
+                        parsed = {
+                            "title": display_title,
+                            "original_title": original_title,
+                            "year": year_val,
+                            "category_id": category_id,
+                            "poster_url": tmdb_data.get("poster_url") or poster or "",
+                            "description": tmdb_data.get("description") or "",
+                            "imdb_id": imdb_id or tmdb_data.get("imdb_id") or "",
+                            "kp_id": None,
+                            "kinopub_id": kp_id,
+                            "imdb_rating": 0.0,
+                            "kp_rating": 0.0,
+                            "is_metadata_fixed": 0,
+                            "title_norm": normalize_title(tmdb_data.get("title") or title),
+                        }
+                    else:
+                        parsed = {
+                            "title": f"{title} ({year})" if year else title,
+                            "original_title": "",
+                            "year": year,
+                            "category_id": category_id,
+                            "poster_url": poster or "",
+                            "description": "Синхронизировано из kino.pub",
+                            "imdb_id": imdb_id or "",
+                            "kp_id": None,
+                            "kinopub_id": kp_id,
+                            "imdb_rating": 0.0,
+                            "kp_rating": 0.0,
+                            "is_metadata_fixed": 0,
+                            "title_norm": normalize_title(title),
+                        }
+
+                    new_item_id = db.insert_item(parsed, conn=conn)
+                    if new_item_id:
+                        conn.commit()
+                        db.kinopub_bind(
+                            new_item_id,
+                            kinopub_id=kp_id,
+                            kinopub_type=kp_type,
+                            kinopub_url=_build_item_url(kp_id),
+                        )
+                        kp_to_item[kp_id] = new_item_id
+                        folder_local_item_ids.add(new_item_id)
+                        logger.info(f"      [+] Created card id={new_item_id}")
 
             # kinopub -> project: add bound items present on kinopub but
             # missing from the local collection.

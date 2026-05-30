@@ -322,3 +322,124 @@ def test_search_kinopub_id_returns_none_when_no_match(fake_client) -> None:
         "category_id": 1,
     }
     assert kcs._search_kinopub_id(item_info, client=fake_client) is None
+
+
+# ---------------------------------------------------------------------------
+# Ignored folders
+
+
+def test_is_ignored_folder_matches_case_insensitive(monkeypatch) -> None:
+    monkeypatch.setattr(kcs.settings, "kinopub_ignored_folders_csv", "Max,Lena")
+    assert kcs._is_ignored_folder("max") is True
+    assert kcs._is_ignored_folder("MAX") is True
+    assert kcs._is_ignored_folder("Lena") is True
+    assert kcs._is_ignored_folder("  max  ") is True
+    assert kcs._is_ignored_folder("other") is False
+
+
+def test_is_ignored_folder_empty_list(monkeypatch) -> None:
+    monkeypatch.setattr(kcs.settings, "kinopub_ignored_folders_csv", "")
+    assert kcs._is_ignored_folder("max") is False
+
+
+def test_ignored_folders_are_skipped(tmp_db, fake_client, monkeypatch) -> None:
+    monkeypatch.setattr(kcs.settings, "kinopub_ignored_folders_csv", "max,lena")
+    item_id = _seed_item(tmp_db, title="Foo", year=2020, kinopub_id=4242)
+
+    fake_client.folders = [
+        {"id": 1, "title": "max", "count": 1},
+        {"id": 2, "title": "lena", "count": 1},
+        {"id": 3, "title": "Боевики", "count": 1},
+    ]
+    fake_client.folder_items[1] = [{"id": 4242, "title": "Foo", "year": 2020}]
+    fake_client.folder_items[2] = [{"id": 4242, "title": "Foo", "year": 2020}]
+    fake_client.folder_items[3] = [{"id": 4242, "title": "Foo", "year": 2020}]
+
+    summary = kcs.sync_kinopub_collections(db=tmp_db, client=fake_client)
+
+    # max and lena should be ignored — only "Боевики" collection should be created
+    names = [c["name"] for c in tmp_db.get_collections()]
+    assert "max" not in names
+    assert "lena" not in names
+    assert "Боевики" in names
+    # Only the Боевики item should sync
+    assert summary["kinopub_to_project"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Dedup on repeated sync
+
+
+def test_repeated_sync_does_not_duplicate(tmp_db, fake_client) -> None:
+    """Running sync twice with the same data must not create duplicate
+    collections or duplicate collection-items."""
+    coll_id = _seed_collection(tmp_db, name="Боевики")
+    item_id = _seed_item(tmp_db, title="Foo", year=2020, kinopub_id=4242)
+
+    fake_client.folders = [{"id": 7, "title": "Боевики", "count": 1}]
+    fake_client.folder_items[7] = [{"id": 4242, "title": "Foo", "year": 2020}]
+
+    # First sync
+    kcs.sync_kinopub_collections(db=tmp_db, client=fake_client)
+    # Second sync — same data
+    summary2 = kcs.sync_kinopub_collections(db=tmp_db, client=fake_client)
+
+    # No new items should be added on the second run
+    assert summary2["kinopub_to_project"] == 0
+    assert summary2["project_to_kinopub"] == 0
+
+    # Verify no duplicate collections
+    names = [c["name"] for c in tmp_db.get_collections()]
+    assert names.count("Боевики") == 1
+
+    # Verify no duplicate collection items
+    with tmp_db._conn() as c:
+        count = c.execute(
+            "SELECT COUNT(*) FROM collection_items WHERE collection_id = ? AND item_id = ?",
+            (coll_id, item_id),
+        ).fetchone()[0]
+    assert count == 1
+
+
+# ---------------------------------------------------------------------------
+# Improved fuzzy matching and start-up tests
+
+
+def test_match_folder_fuzzy_sequence_matcher() -> None:
+    # "Топ сериалы завершённые" and "Топ сериалы с завершённые" match (ratio 0.97)
+    collections = [{"id": 123, "name": "Топ сериалы завершённые"}]
+    coll = kcs._match_folder_to_collection("Топ сериалы с завершённые", collections)
+    assert coll is not None
+    assert coll["id"] == 123
+
+    # But "Проходняк сериал завершенные" and "Проходняк сериал с продолжением" do not match (ratio 0.70)
+    collections = [{"id": 456, "name": "Проходняк сериал с продолжением"}]
+    coll = kcs._match_folder_to_collection("Проходняк сериал завершенные", collections)
+    assert coll is None
+
+
+def test_empty_folders_on_start_does_not_abort_reverse_sync(tmp_db, fake_client) -> None:
+    # Seed a local collection
+    _seed_collection(tmp_db, name="Боевики")
+
+    # Client has absolutely no folders
+    fake_client.folders = []
+
+    summary = kcs.sync_kinopub_collections(db=tmp_db, client=fake_client)
+
+    # It should NOT abort, but rather create "Боевики" folder on KinoPub
+    assert "Боевики" in fake_client.create_calls
+
+
+def test_reverse_sync_prevents_fuzzy_duplicates(tmp_db, fake_client) -> None:
+    # Seed two fuzzy-duplicate local collections
+    _seed_collection(tmp_db, name="Топ сериалы завершённые")
+    _seed_collection(tmp_db, name="Топ сериалы с завершённые")
+
+    fake_client.folders = []
+
+    kcs.sync_kinopub_collections(db=tmp_db, client=fake_client)
+
+    # Only one of them should be created on KinoPub because they fuzzy-match
+    assert len(fake_client.create_calls) == 1
+    assert fake_client.create_calls[0] == "Топ сериалы завершённые"

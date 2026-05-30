@@ -553,3 +553,15 @@ def add_item_to_folder(
     API side — adding twice is a no-op."""
     c = client or _authenticated_client()
     c.add_to_bookmark_folder(item=int(item), folder=int(folder))
+
+
+def remove_item_from_folder(
+    *,
+    item: int,
+    folder: int,
+    client: KinopubClient | None = None,
+) -> None:
+    """Remove a kino.pub catalog item from a folder. Idempotent on the
+    API side."""
+    c = client or _authenticated_client()
+    c.remove_from_bookmark_folder(item=int(item), folder=int(folder))

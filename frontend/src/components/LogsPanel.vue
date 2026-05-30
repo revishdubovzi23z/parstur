@@ -34,6 +34,7 @@ const TAB_ORDER: LogType[] = [
   'rezka',
   'rezka_collections',
   'tmdb',
+  'trakt_collections',
   'kinopub',
   'kinopub_collections',
   'user',

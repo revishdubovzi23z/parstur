@@ -42,6 +42,18 @@ class TMDBClient:
             self.headers["Authorization"] = f"Bearer {self.api_token}"
         self.is_limited = False
         self.session = get_cached_session()
+        # Stage 14 — route TMDB traffic through its per-service proxy.
+        self.service_name = "tmdb"
+
+    def _get_proxies(self):
+        """Stage 14 — return a requests-style proxies dict for TMDB, or None."""
+        try:
+            from proxy_manager import proxy_manager
+
+            return proxy_manager.get_requests_proxies(self.service_name)
+        except Exception as e:
+            logger.debug(f"[PROXY] lookup skipped for tmdb: {e}")
+            return None
 
     def get_external_ids(self, media_type, tmdb_id):
         if self.is_limited:
@@ -52,7 +64,13 @@ class TMDBClient:
             params["api_key"] = self.api_key
         try:
             time.sleep(0.1)
-            resp = self.session.get(url, params=params, headers=self.headers, timeout=5)
+            resp = self.session.get(
+                url,
+                params=params,
+                headers=self.headers,
+                timeout=5,
+                proxies=self._get_proxies(),
+            )
             if resp.status_code == 200:
                 return resp.json().get("imdb_id")
             logger.warning(f"TMDB external_ids({media_type}, {tmdb_id}) -> HTTP {resp.status_code}")
@@ -83,7 +101,13 @@ class TMDBClient:
                 params["language"] = lang
             try:
                 time.sleep(0.1)
-                resp = self.session.get(url, params=params, headers=self.headers, timeout=5)
+                resp = self.session.get(
+                    url,
+                    params=params,
+                    headers=self.headers,
+                    timeout=5,
+                    proxies=self._get_proxies(),
+                )
                 if resp.status_code in (401, 403):
                     self.is_limited = True
                     return []
@@ -116,7 +140,13 @@ class TMDBClient:
             params["api_key"] = self.api_key
         try:
             time.sleep(0.1)
-            response = self.session.get(url, params=params, headers=self.headers, timeout=10)
+            response = self.session.get(
+                url,
+                params=params,
+                headers=self.headers,
+                timeout=10,
+                proxies=self._get_proxies(),
+            )
             if response.status_code in [401, 403]:
                 self.is_limited = True
                 return None
@@ -175,7 +205,11 @@ class TMDBClient:
                 try:
                     time.sleep(0.3)
                     response = self.session.get(
-                        url, params=params, headers=self.headers, timeout=10
+                        url,
+                        params=params,
+                        headers=self.headers,
+                        timeout=10,
+                        proxies=self._get_proxies(),
                     )
                     if response.status_code == 429:
                         time.sleep(5)
@@ -284,7 +318,11 @@ class TMDBClient:
         while True:
             try:
                 resp = self.session.get(
-                    url, headers=self.headers, params={"page": page}, timeout=10
+                    url,
+                    headers=self.headers,
+                    params={"page": page},
+                    timeout=10,
+                    proxies=self._get_proxies(),
                 )
                 if resp.status_code != 200:
                     logger.warning(
@@ -322,10 +360,22 @@ class TMDBClient:
             "iso_639_1": "ru",
         }
         try:
-            resp = self.session.post(url, json=payload, headers=self.headers, timeout=10)
+            resp = self.session.post(
+                url,
+                json=payload,
+                headers=self.headers,
+                timeout=10,
+                proxies=self._get_proxies(),
+            )
             if resp.status_code == 201:
                 return str(resp.json().get("id"))
-            logger.warning(f"TMDB create_list failed: HTTP {resp.status_code} - {resp.text}")
+
+            resp_text = resp.text
+            if resp.status_code == 400 and "spam" in resp_text.lower():
+                logger.warning(f"TMDB create_list blocked by spam filter: {resp_text}")
+                return "SPAM_ERROR"
+
+            logger.warning(f"TMDB create_list failed: HTTP {resp.status_code} - {resp_text}")
         except Exception as e:
             logger.error(f"TMDB create_list failed: {e}", exc_info=True)
         return None
@@ -341,7 +391,13 @@ class TMDBClient:
         if description is not None:
             payload["description"] = description
         try:
-            resp = self.session.put(url, json=payload, headers=self.headers, timeout=10)
+            resp = self.session.put(
+                url,
+                json=payload,
+                headers=self.headers,
+                timeout=10,
+                proxies=self._get_proxies(),
+            )
             if resp.status_code == 200:
                 return True
             logger.warning(f"TMDB update_list failed: HTTP {resp.status_code} - {resp.text}")
@@ -357,7 +413,12 @@ class TMDBClient:
             return False
         url = f"https://api.themoviedb.org/4/list/{list_id}"
         try:
-            resp = self.session.delete(url, headers=self.headers, timeout=10)
+            resp = self.session.delete(
+                url,
+                headers=self.headers,
+                timeout=10,
+                proxies=self._get_proxies(),
+            )
             if resp.status_code == 200:
                 return True
             logger.warning(f"TMDB delete_list failed: HTTP {resp.status_code} - {resp.text}")
@@ -375,9 +436,16 @@ class TMDBClient:
         while True:
             try:
                 resp = self.session.get(
-                    url, headers=self.headers, params={"page": page}, timeout=10
+                    url,
+                    headers=self.headers,
+                    params={"page": page},
+                    timeout=10,
+                    proxies=self._get_proxies(),
                 )
-                if resp.status_code != 200:
+                if resp.status_code == 404:
+                    logger.warning("TMDB get_list_items failed: HTTP 404 (List not found)")
+                    return None
+                elif resp.status_code != 200:
                     logger.warning(
                         f"TMDB get_list_items failed: HTTP {resp.status_code} on page {page}"
                     )
@@ -407,7 +475,13 @@ class TMDBClient:
         url = f"https://api.themoviedb.org/4/list/{list_id}/items"
         payload = {"items": items}
         try:
-            resp = self.session.post(url, json=payload, headers=self.headers, timeout=10)
+            resp = self.session.post(
+                url,
+                json=payload,
+                headers=self.headers,
+                timeout=10,
+                proxies=self._get_proxies(),
+            )
             if resp.status_code in (200, 201):
                 return True
             logger.warning(f"TMDB add_items_to_list failed: HTTP {resp.status_code} - {resp.text}")
@@ -424,7 +498,13 @@ class TMDBClient:
         url = f"https://api.themoviedb.org/4/list/{list_id}/items"
         payload = {"items": items}
         try:
-            resp = self.session.delete(url, json=payload, headers=self.headers, timeout=10)
+            resp = self.session.delete(
+                url,
+                json=payload,
+                headers=self.headers,
+                timeout=10,
+                proxies=self._get_proxies(),
+            )
             if resp.status_code == 200:
                 return True
             logger.warning(
@@ -433,6 +513,24 @@ class TMDBClient:
         except Exception as e:
             logger.error(f"TMDB remove_items_from_list failed: {e}", exc_info=True)
         return False
+
+    def is_list_alive(self, list_id):
+        """Check if list exists, bypassing ?page=1 cache bugs in TMDB API."""
+        if not self.api_token:
+            return False
+        url = f"https://api.themoviedb.org/4/list/{list_id}"
+        try:
+            resp = self.session.get(
+                url,
+                headers=self.headers,
+                timeout=10,
+                proxies=self._get_proxies(),
+            )
+            if resp.status_code == 404:
+                return False
+            return True
+        except Exception:
+            return True
 
 
 if __name__ == "__main__":

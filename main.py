@@ -21,9 +21,25 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
+from cloud_sync import cloud_sync
 from db import db
 from logging_config import setup_logging
-from routes import admin, auth, collections, feed, items, kinopub, process, streams, tmdb
+from routes import (
+    admin,
+    auth,
+    cloud,
+    collections,
+    export,
+    feed,
+    items,
+    kinopub,
+    lampa,
+    process,
+    proxy,
+    streams,
+    tmdb,
+    trakt,
+)
 from routes.auth import (
     _auth_enabled,
     _check_auth,
@@ -81,15 +97,61 @@ async def lifespan(_app):
         await asyncio.to_thread(db.wal_checkpoint, "TRUNCATE")
     except Exception as e:
         logger.warning(f"[WAL] startup checkpoint skipped: {type(e).__name__}: {e}")
-    global _wal_checkpoint_task, _session_gc_task, _rezka_retry_task
+    # Stage 13 — pull remote DB, then arm the periodic push loop. Both
+    # are no-ops unless cloud sync is enabled.
+    #
+    # The startup pull now runs as a DETACHED background task instead of
+    # blocking boot. A remote-only libSQL connection has no socket
+    # timeout, so a slow or misconfigured Turso endpoint used to wedge
+    # the whole startup (and with it the entire site) until the network
+    # call finally errored. Running it detached lets the server come up
+    # and serve requests immediately; cloud_sync itself now bounds the
+    # pull with its own timeout watchdog.
+    global \
+        _wal_checkpoint_task, \
+        _session_gc_task, \
+        _rezka_retry_task, \
+        _cloud_sync_task, \
+        _startup_pull_task
+
+    async def _startup_pull() -> None:
+        try:
+            result = await asyncio.to_thread(cloud_sync.pull)
+            logger.info(f"[CLOUD] startup pull: {result.get('detail', result.get('status'))}")
+            # The local DB file may have been replaced — make sure schema +
+            # FTS are consistent with whatever the remote shipped.
+            try:
+                db.init_schema()
+                db.ensure_fts_indexed()
+            except Exception as e:
+                logger.warning(f"[CLOUD] post-pull schema/FTS refresh skipped: {e}")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"[CLOUD] startup pull failed: {type(e).__name__}: {e}")
+
+    if cloud_sync.enabled and settings.cloud_sync_on_startup:
+        _startup_pull_task = asyncio.create_task(_startup_pull())
     _wal_checkpoint_task = asyncio.create_task(_wal_checkpoint_loop())
     _session_gc_task = asyncio.create_task(_session_gc_loop())
     _rezka_retry_task = asyncio.create_task(_rezka_session_retry_loop())
+    if cloud_sync.enabled:
+        _cloud_sync_task = asyncio.create_task(_cloud_sync_loop())
 
     yield
 
     # ── shutdown ───────────────────────────────────────────────────
     logger.info("[SERVER] Shutdown event triggered")
+    # Cancel an in-flight background startup pull so a wedged Turso
+    # connection can't hold shutdown open.
+    if _startup_pull_task is not None:
+        _startup_pull_task.cancel()
+        try:
+            await _startup_pull_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        _startup_pull_task = None
+
     if _wal_checkpoint_task is not None:
         _wal_checkpoint_task.cancel()
         try:
@@ -113,6 +175,28 @@ async def lifespan(_app):
         except (asyncio.CancelledError, Exception):
             pass
         _rezka_retry_task = None
+
+    if _cloud_sync_task is not None:
+        _cloud_sync_task.cancel()
+        try:
+            await _cloud_sync_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        _cloud_sync_task = None
+        # Best-effort final push so the freshest local state reaches the cloud.
+        if cloud_sync.enabled:
+            try:
+                await asyncio.to_thread(cloud_sync.push)
+            except Exception as e:
+                logger.warning(f"[CLOUD] shutdown push skipped: {type(e).__name__}: {e}")
+
+    # Stage 14 — tear down any spawned vless:// proxy bridges.
+    try:
+        from proxy_manager import proxy_manager
+
+        proxy_manager.stop_all()
+    except Exception as e:
+        logger.warning(f"[PROXY] shutdown stop_all skipped: {type(e).__name__}: {e}")
     config = load_config()
     graceful_timeout = config.get("shutdown", {}).get("graceful_timeout", 5)
     for key, proc in running_processes.items():
@@ -148,6 +232,12 @@ app.include_router(admin.router)
 app.include_router(items.router)
 app.include_router(kinopub.router)
 app.include_router(tmdb.router)
+app.include_router(trakt.router)
+app.include_router(export.router)
+app.include_router(lampa.router)
+app.include_router(cloud.router)
+app.include_router(proxy.router)
+
 
 # ROADMAP Stage 10.7z — the Vite/Vue 3/TS SPA in `frontend/dist` is now
 # THE frontend; the legacy CDN-driven `index.html` at the repo root is
@@ -349,6 +439,26 @@ async def security_headers_middleware(request: Request, call_next):
 
 
 @app.middleware("http")
+async def lampa_cors_middleware(request: Request, call_next):
+    from fastapi import Response
+
+    if request.url.path.startswith("/api/lampa/"):
+        if request.method == "OPTIONS":
+            response = Response(status_code=204)
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+            response.headers["Access-Control-Allow-Headers"] = "X-API-Key, Content-Type"
+            return response
+
+        response = await call_next(request)
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "X-API-Key, Content-Type"
+        return response
+    return await call_next(request)
+
+
+@app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     if not _auth_enabled:
         return await call_next(request)
@@ -375,6 +485,8 @@ async def auth_middleware(request: Request, call_next):
     # form). Auth-gate only the API surface here; static assets are
     # public by construction.
     if path.startswith("/api/"):
+        if path.startswith("/api/lampa/"):
+            return await call_next(request)
         if not _check_auth(request):
             return HTMLResponse(content="Unauthorized", status_code=401)
     return await call_next(request)
@@ -397,6 +509,32 @@ _session_gc_task: asyncio.Task | None = None
 
 # 5.8 — Rezka retry loop
 _rezka_retry_task: asyncio.Task | None = None
+
+# Stage 13 — periodic cloud push loop.
+_cloud_sync_task: asyncio.Task | None = None
+_startup_pull_task: asyncio.Task | None = None
+
+
+async def _cloud_sync_loop() -> None:
+    """Periodically push the local DB to the cloud when sync is enabled.
+
+    The interval is operator-configurable (CLOUD_SYNC_INTERVAL_MINUTES).
+    Errors are swallowed and logged so a transient network blip never
+    kills the loop.
+    """
+    while True:
+        interval = max(1, settings.cloud_sync_interval_minutes) * 60
+        await asyncio.sleep(interval)
+        if not cloud_sync.enabled:
+            continue
+        try:
+            result = await asyncio.to_thread(cloud_sync.push)
+            if result.get("status") not in ("success", "disabled"):
+                logger.warning(f"[CLOUD] periodic push: {result.get('detail')}")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"[CLOUD] periodic push error: {type(e).__name__}: {e}")
 
 
 async def _rezka_session_retry_loop():

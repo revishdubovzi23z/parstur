@@ -5,14 +5,33 @@ logger = logging.getLogger("parsclode.db")
 
 
 class DbCollectionsMixin:
-    def get_collections(self) -> list[dict]:
+    def get_collections(self, include_system: bool = False) -> list[dict]:
         with self._conn() as c:
-            return [
-                dict(r)
-                for r in c.execute(
-                    "SELECT c.*, COUNT(ci.item_id) as count FROM collections c LEFT JOIN collection_items ci ON c.id = ci.collection_id GROUP BY c.id ORDER BY c.sort_order ASC, c.name ASC"
-                ).fetchall()
-            ]
+            # Check if columns includes is_system (in case migrations haven't run in test contexts yet)
+            cursor = c.cursor()
+            cursor.execute("PRAGMA table_info(collections)")
+            columns = [col[1] for col in cursor.fetchall()]
+            has_is_system = "is_system" in columns
+
+            if has_is_system and not include_system:
+                query = (
+                    "SELECT c.*, COUNT(ci.item_id) as count "
+                    "FROM collections c "
+                    "LEFT JOIN collection_items ci ON c.id = ci.collection_id "
+                    "WHERE c.is_system = 0 "
+                    "GROUP BY c.id "
+                    "ORDER BY c.sort_order ASC, c.name ASC"
+                )
+            else:
+                query = (
+                    "SELECT c.*, COUNT(ci.item_id) as count "
+                    "FROM collections c "
+                    "LEFT JOIN collection_items ci ON c.id = ci.collection_id "
+                    "GROUP BY c.id "
+                    "ORDER BY c.sort_order ASC, c.name ASC"
+                )
+
+            return [dict(r) for r in c.execute(query).fetchall()]
 
     def create_collection(self, name: str) -> None:
         with self._conn() as c:
@@ -20,10 +39,16 @@ class DbCollectionsMixin:
 
     def delete_collection(self, id: int) -> None:
         with self._conn() as c:
+            is_sys = c.execute("SELECT is_system FROM collections WHERE id = ?", (id,)).fetchone()
+            if is_sys and is_sys[0]:
+                raise ValueError("Cannot delete system collection")
             c.execute("DELETE FROM collections WHERE id = ?", (id,))
 
     def rename_collection(self, id: int, name: str) -> None:
         with self._conn() as c:
+            is_sys = c.execute("SELECT is_system FROM collections WHERE id = ?", (id,)).fetchone()
+            if is_sys and is_sys[0]:
+                raise ValueError("Cannot rename system collection")
             c.execute("UPDATE collections SET name = ? WHERE id = ?", (name, id))
 
     def toggle_collection_item(self, collection_id: int, item_id: int) -> str:

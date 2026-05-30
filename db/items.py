@@ -1076,3 +1076,65 @@ class DbItemsMixin:
                 [*VIDEO_CATEGORY_IDS, int(batch_size)],
             ).fetchall()
             return [dict(r) for r in rows]
+
+    def rate_item(self, item_id: int, rating: int | None, conn=None) -> None:
+        with self._conn(conn) as c:
+            c.execute("UPDATE items SET user_rating = ? WHERE id = ?", (rating, item_id))
+            item = c.execute(
+                "SELECT title, original_title, year, imdb_id, kp_id, title_norm FROM items WHERE id = ?",
+                (item_id,),
+            ).fetchone()
+            if item:
+                if rating is None:
+                    c.execute(
+                        "DELETE FROM user_ratings WHERE (imdb_id IS NOT NULL AND imdb_id = ?) OR (kp_id IS NOT NULL AND kp_id = ?) OR (title_norm = ? AND item_year = ?)",
+                        (item["imdb_id"], item["kp_id"], item["title_norm"], item["year"]),
+                    )
+                else:
+                    from app_core import normalize_title
+
+                    orig_norm = (
+                        normalize_title(item["original_title"]) if item["original_title"] else None
+                    )
+                    rating_item = {
+                        "title": item["title"],
+                        "orig_title": item["original_title"],
+                        "year": item["year"],
+                        "rating": rating,
+                        "imdb_id": item["imdb_id"],
+                        "kp_id": item["kp_id"],
+                        "title_norm": item["title_norm"],
+                        "orig_norm": orig_norm,
+                    }
+                    self.upsert_user_rating(rating_item, conn=c)
+
+    def mark_watched(self, item_id: int, watched: bool, conn=None) -> None:
+        watched_val = 1 if watched else 0
+        watched_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S") if watched else None
+        with self._conn(conn) as c:
+            c.execute(
+                "UPDATE items SET is_watched = ?, watched_at = ? WHERE id = ?",
+                (watched_val, watched_at, item_id),
+            )
+            sys_col = c.execute(
+                "SELECT id FROM collections WHERE is_system = 1 AND name = 'Просмотренное'"
+            ).fetchone()
+            if not sys_col:
+                c.execute(
+                    "INSERT OR IGNORE INTO collections (name, sort_order, is_system) VALUES ('Просмотренное', 9999, 1)"
+                )
+                sys_col = c.execute(
+                    "SELECT id FROM collections WHERE is_system = 1 AND name = 'Просмотренное'"
+                ).fetchone()
+            if sys_col:
+                sys_col_id = sys_col[0]
+                if watched:
+                    c.execute(
+                        "INSERT OR IGNORE INTO collection_items (collection_id, item_id, added_at) VALUES (?, ?, ?)",
+                        (sys_col_id, item_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+                    )
+                else:
+                    c.execute(
+                        "DELETE FROM collection_items WHERE collection_id = ? AND item_id = ?",
+                        (sys_col_id, item_id),
+                    )

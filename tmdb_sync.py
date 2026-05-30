@@ -38,8 +38,14 @@ def sync_tmdb_collections():
 
     existing_tmdb_lists = []
     if account_id:
-        existing_tmdb_lists = client.get_user_lists(account_id)
-        logger.info(f"[*] Найдено существующих списков на TMDB: {len(existing_tmdb_lists)}")
+        raw_lists = client.get_user_lists(account_id)
+        # Filter out ghost lists (deleted but cached)
+        for lst in raw_lists:
+            if client.is_list_alive(lst["id"]):
+                existing_tmdb_lists.append(lst)
+        logger.info(
+            f"[*] Найдено существующих активных списков на TMDB: {len(existing_tmdb_lists)}"
+        )
 
     for coll in collections:
         coll_id = coll["id"]
@@ -53,10 +59,35 @@ def sync_tmdb_collections():
             ).fetchone()
             list_id = row[0] if row else None
 
+        if list_id:
+            # Verify the list still exists on TMDB (not a cached ghost)
+            if not client.is_list_alive(list_id):
+                logger.warning(f"  [!] Привязанный список {list_id} удален на TMDB. Отвязываем.")
+                list_id = None
+                with db._conn() as c:
+                    c.execute("DELETE FROM app_state WHERE key = ?", (f"tmdb_list_id_{coll_id}",))
+
         if not list_id:
+            from app_core import normalize_title
+
+            coll_norm = normalize_title(coll_name)
+
             matched_list = None
             for lst in existing_tmdb_lists:
-                if (lst.get("name") or "").strip().lower() == coll_name.strip().lower():
+                lst_name = lst.get("name") or ""
+                lst_norm = normalize_title(lst_name)
+
+                is_match = False
+                if lst_norm == coll_norm:
+                    is_match = True
+                else:
+                    import difflib
+
+                    ratio = difflib.SequenceMatcher(None, coll_norm, lst_norm).ratio()
+                    if ratio >= 0.85:
+                        is_match = True
+
+                if is_match:
                     matched_list = lst
                     break
 
@@ -71,11 +102,25 @@ def sync_tmdb_collections():
                         (f"tmdb_list_id_{coll_id}", list_id),
                     )
             else:
+                if getattr(client, "spam_blocked", False):
+                    logger.warning(
+                        f"  [-] Пропуск создания списка '{coll_name}' из-за активного спам-фильтра TMDB."
+                    )
+                    continue
+
                 logger.info(f"  [+] Создаем новый список на TMDB для '{coll_name}'")
-                list_id = client.create_list(
-                    coll_name, f"Синхронизировано из Antigravity Tracker (Коллекция ID {coll_id})"
-                )
-                if list_id:
+                import time
+
+                time.sleep(2.0)  # Rate limit/spam prevention delay
+                list_id = client.create_list(coll_name)
+
+                if list_id == "SPAM_ERROR":
+                    logger.error(
+                        "  [!] Сработал спам-фильтр TMDB. Автоматическое создание списков в текущем сеансе приостановлено."
+                    )
+                    client.spam_blocked = True
+                    continue
+                elif list_id:
                     logger.info(f"  [✓] Создан список на TMDB с ID {list_id}")
                     with db._conn() as c:
                         c.execute(
@@ -132,7 +177,7 @@ def sync_tmdb_collections():
                 logger.warning(f"  [?] Не удалось сопоставить с TMDB: {item.get('title')}")
 
         # Get items currently on TMDB list
-        tmdb_list_items = client.get_list_items(list_id)
+        tmdb_list_items = client.get_list_items(list_id) or []
 
         tmdb_item_set = {
             (item.get("media_type", "movie"), item.get("id"))

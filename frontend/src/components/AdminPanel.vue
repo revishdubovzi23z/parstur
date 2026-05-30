@@ -14,10 +14,14 @@
 
 import { computed, ref, watch } from 'vue'
 
+import CloudPanel from './CloudPanel.vue'
 import CollectionsIO from './CollectionsIO.vue'
 import CredentialSettingsPanel from './CredentialSettingsPanel.vue'
 import KinopubAuthPanel from './KinopubAuthPanel.vue'
+import LampaPanel from './LampaPanel.vue'
+import ProxyPanel from './ProxyPanel.vue'
 import TmdbAuthPanel from './TmdbAuthPanel.vue'
+import TraktAuthPanel from './TraktAuthPanel.vue'
 import { useAdminStore } from '../stores/admin'
 
 const props = defineProps<{ open: boolean }>()
@@ -348,13 +352,64 @@ async function onRebuild(): Promise<void> {
           </div>
         </section>
 
+        <section class="rounded-lg border border-slate-200 p-4">
+          <h3 class="text-sm font-semibold text-slate-900">Экспорт оценок и просмотров</h3>
+          <p class="mt-1 text-xs text-slate-500">
+            Выгружает списки просмотренных фильмов и личные оценки в форматах для внешних сервисов (IMDb, Кинопоиск, Trakt/TMDB).
+          </p>
+          <div class="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              class="inline-flex items-center justify-center rounded-md bg-yellow-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-yellow-700 disabled:opacity-50"
+              :disabled="anyBusy"
+              data-testid="export-watched-imdb"
+              @click="admin.exportWatchedOrRatings('/api/export/watched/imdb', 'watched_imdb.csv')"
+            >
+              ↓ IMDb Просмотрено (CSV)
+            </button>
+            <button
+              type="button"
+              class="inline-flex items-center justify-center rounded-md bg-yellow-500 px-3 py-1.5 text-xs font-semibold text-slate-950 hover:bg-yellow-600 disabled:opacity-50"
+              :disabled="anyBusy"
+              data-testid="export-ratings-imdb"
+              @click="admin.exportWatchedOrRatings('/api/export/ratings/imdb', 'ratings_imdb.csv')"
+            >
+              ↓ IMDb Оценки (CSV)
+            </button>
+            <button
+              type="button"
+              class="inline-flex items-center justify-center rounded-md bg-orange-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-700 disabled:opacity-50"
+              :disabled="anyBusy"
+              data-testid="export-watched-kp"
+              @click="admin.exportWatchedOrRatings('/api/export/watched/kp', 'watched_kp.csv')"
+            >
+              ↓ Кинопоиск (CSV)
+            </button>
+            <button
+              type="button"
+              class="inline-flex items-center justify-center rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+              :disabled="anyBusy"
+              data-testid="export-watched-trakt"
+              @click="admin.exportWatchedOrRatings('/api/export/watched/trakt', 'watched_trakt.json')"
+            >
+              ↓ Trakt/TMDB (JSON)
+            </button>
+          </div>
+        </section>
+
         <CollectionsIO />
 
         <KinopubAuthPanel :visible="open" />
 
         <TmdbAuthPanel :visible="open" />
 
+        <TraktAuthPanel :visible="open" />
+
         <CredentialSettingsPanel :visible="open" />
+
+        <LampaPanel :visible="open" />
+        <CloudPanel :visible="open" />
+        <ProxyPanel :visible="open" />
 
         <section class="rounded-lg border border-slate-200 p-4">
           <h3 class="text-sm font-semibold text-slate-900">

@@ -188,6 +188,24 @@ async def start_kinopub_collections():
     return {"status": "started"}
 
 
+@router.post("/api/start_trakt_collections")
+async def start_trakt_collections():
+    """Bi-directional sync between par2 collections and Trakt.tv custom lists."""
+    check_any_running()
+    log_file = "trakt_collections_log.txt"
+    with open(log_file, "w", encoding="utf-8") as f:
+        f.write("=== Синхронизация коллекций Trakt.tv ===\n")
+    await task_queue.add_task(
+        run_script_with_args,
+        "trakt_collections",
+        "trakt_collections_sync.py",
+        [],
+        "trakt_collections",
+        log_file,
+    )
+    return {"status": "started"}
+
+
 @router.post("/api/start_sync_tmdb")
 async def start_sync_tmdb():
     check_any_running()

@@ -9,6 +9,7 @@ def normalize_title(title):
     if not title:
         return ""
     t = str(title).lower()
+    t = t.replace("ё", "е")
     t = t.replace("x", "х")
     t = re.sub(r"\(.*?\)", "", t)
     t = re.sub(r"\[.*?\]", "", t)

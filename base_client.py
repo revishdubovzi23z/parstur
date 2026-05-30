@@ -13,6 +13,25 @@ class BaseMovieClient:
     rate_limit_codes: list = [429]
     payment_limit_codes: list = [401, 402, 403]
     request_delay: float = 0.3
+    # Stage 14 — name used to look up a per-service outbound proxy
+    # (settings.proxy_<service_name>). None disables proxying.
+    service_name: str | None = None
+
+    def _get_proxies(self):
+        """Return a requests-style proxies dict for this client, or None.
+
+        Imported lazily so the proxy manager (and its optional PySocks
+        dependency) never block client construction when unused.
+        """
+        if not self.service_name:
+            return None
+        try:
+            from proxy_manager import proxy_manager
+
+            return proxy_manager.get_requests_proxies(self.service_name)
+        except Exception as e:
+            self.logger.debug(f"[PROXY] lookup skipped for {self.service_name}: {e}")
+            return None
 
     def __init__(self):
         self.logger = logging.getLogger(f"parsclode.client.{self.__class__.__name__.lower()}")
@@ -59,7 +78,13 @@ class BaseMovieClient:
         self.not_found = False
 
         try:
-            response = self.session.get(url, headers=self.headers, params=params, timeout=timeout)
+            response = self.session.get(
+                url,
+                headers=self.headers,
+                params=params,
+                timeout=timeout,
+                proxies=self._get_proxies(),
+            )
         except (requests.Timeout, requests.ConnectionError) as e:
             # Treat transport-level failures as transient. Callers
             # check self.network_error before flipping checked_* = 1.

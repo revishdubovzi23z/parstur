@@ -712,5 +712,68 @@ export const useAdminStore = defineStore('admin', {
         this.restartBusy = false
       }
     },
+
+    async exportWatchedOrRatings(
+      path: string,
+      defaultFilename: string,
+    ): Promise<AdminActionResult> {
+      const session = useSessionStore()
+      if (!session.canCallApi) {
+        return {
+          tone: 'error',
+          message: 'Сессия не авторизована',
+          willRestart: false,
+        }
+      }
+      this.itemsExportBusy = true
+      this.lastResult = null
+      try {
+        const res = await apiFetch(path)
+        if (!res.ok) {
+          const result: AdminActionResult = {
+            tone: 'error',
+            message: `HTTP ${res.status}`,
+            willRestart: false,
+          }
+          this.lastResult = result
+          return result
+        }
+        const blob = await res.blob()
+        const cd = res.headers.get('Content-Disposition') ?? ''
+        const m = /filename="?([^";]+)"?/i.exec(cd)
+        const filename = m?.[1]?.trim() || defaultFilename
+        const url = URL.createObjectURL(blob)
+        try {
+          const a = document.createElement('a')
+          a.href = url
+          a.download = filename
+          document.body.appendChild(a)
+          a.click()
+          a.remove()
+        } finally {
+          URL.revokeObjectURL(url)
+        }
+        const result: AdminActionResult = {
+          tone: 'success',
+          message: `Экспорт готов (${filename}).`,
+          willRestart: false,
+        }
+        this.lastResult = result
+        return result
+      } catch (err) {
+        if (err instanceof UnauthorizedError) {
+          session.handleUnauthorized(err)
+        }
+        const result: AdminActionResult = {
+          tone: 'error',
+          message: `Сбой запроса: ${describe(err)}`,
+          willRestart: false,
+        }
+        this.lastResult = result
+        return result
+      } finally {
+        this.itemsExportBusy = false
+      }
+    },
   },
 })

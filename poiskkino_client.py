@@ -10,6 +10,7 @@ POISKKINO_API_KEY = settings.poiskkino_api_key
 class PoiskKinoClient(BaseMovieClient):
     rate_limit_codes = [429]
     payment_limit_codes = [401, 403]
+    service_name = "poiskkino"
 
     def __init__(self):
         self.api_key = POISKKINO_API_KEY

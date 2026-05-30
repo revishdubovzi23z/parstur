@@ -46,6 +46,7 @@ export const PROCESS_KEYS = [
   'kinopub',
   'kinopub_collections',
   'tmdb',
+  'trakt_collections',
   'full_pipeline',
   'single_update',
 ] as const
@@ -572,6 +573,10 @@ export const useSyncStore = defineStore('sync', {
 
     startSyncTmdb(): Promise<boolean> {
       return this._post('/api/start_sync_tmdb', 'Синхронизация TMDB')
+    },
+
+    startTraktCollections(): Promise<boolean> {
+      return this._post('/api/start_trakt_collections', 'Синхронизация Trakt')
     },
 
     stop(key: ProcessKey): Promise<boolean> {

@@ -46,6 +46,9 @@ export interface FeedItem {
   kinopub_type?: string | null
   original_title: string | null
   is_ignored?: number | null
+  user_rating?: number | null
+  is_watched?: number | null
+  watched_at?: string | null
   latest_release?: string | null
   releases?: FeedRelease[]
   has_new_release?: boolean

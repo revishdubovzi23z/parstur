@@ -96,6 +96,8 @@ class _ApiKeysSettings(BaseSettings):
     tmdb_api_key: str | None = Field(default=None)
     tmdb_api_token: str | None = Field(default=None)
     poiskkino_api_key: str | None = Field(default=None)
+    trakt_client_id: str | None = Field(default=None)
+    trakt_client_secret: str | None = Field(default=None)
 
 
 class _KinopubSettings(BaseSettings):
@@ -154,6 +156,22 @@ class _KinopubSettings(BaseSettings):
             "than this many seconds. 300 = refresh 5 minutes early."
         ),
     )
+    kinopub_ignored_folders_csv: str = Field(
+        default="max,lena",
+        validation_alias="kinopub_ignored_folders",
+        description=(
+            "Comma-separated list of kino.pub folder names to skip during "
+            "collections sync.  Matching is case-insensitive.  "
+            "Example: KINOPUB_IGNORED_FOLDERS=max,lena"
+        ),
+    )
+
+    @property
+    def kinopub_ignored_folders(self) -> list[str]:
+        raw = self.kinopub_ignored_folders_csv
+        if not raw or not raw.strip():
+            return []
+        return [v.strip() for v in raw.split(",") if v.strip()]
 
     @field_validator("kinopub_client_id", mode="before")
     @classmethod
@@ -232,6 +250,84 @@ class _StorageSettings(BaseSettings):
         return os.path.join(self.app_data_dir, self.api_cache_path)
 
 
+class _LampaSettings(BaseSettings):
+    """Lampa.mx integration settings."""
+
+    lampa_enabled: bool = Field(
+        default=True,
+        description="Master switch for Lampa.mx integration.",
+    )
+    lampa_api_key: str | None = Field(
+        default=None,
+        description="Optional API key to protect Lampa endpoints. If empty, access is public.",
+    )
+
+
+class _CloudSettings(BaseSettings):
+    """Stage 13 — cloud sync (Turso/libsql) settings.
+
+    When `cloud_provider` is "turso" the local SQLite DB is mirrored to a
+    remote libsql database. Pushes happen after sync jobs / on a timer;
+    a pull can run at startup to seed a fresh container from the cloud.
+    """
+
+    cloud_provider: Literal["none", "turso"] = Field(
+        default="none",
+        description="Cloud sync backend. 'none' disables cloud sync entirely.",
+    )
+    cloud_turso_url: str | None = Field(
+        default=None,
+        description="libsql:// or https:// URL of the Turso database.",
+    )
+    cloud_turso_token: str | None = Field(
+        default=None,
+        description="Auth token for the Turso database (sensitive).",
+    )
+    cloud_sync_on_startup: bool = Field(
+        default=True,
+        description="Pull remote changes into the local DB on app startup.",
+    )
+    cloud_sync_after_job: bool = Field(
+        default=True,
+        description="Push local changes to the cloud after each sync job completes.",
+    )
+    cloud_sync_interval_minutes: int = Field(
+        default=15,
+        ge=1,
+        description="Background push interval in minutes when cloud sync is enabled.",
+    )
+
+
+class _ProxySettings(BaseSettings):
+    """Stage 14 — per-service outbound proxy settings.
+
+    Each upstream source can be routed through its own proxy. Values are
+    proxy URLs: socks5://host:port, http://host:port, or vless://... links
+    (the latter spun up locally through Xray/sing-box). Empty = direct.
+    """
+
+    proxy_rezka: str | None = Field(default=None, description="Proxy URL for HDRezka requests.")
+    proxy_kinopub: str | None = Field(default=None, description="Proxy URL for kino.pub requests.")
+    proxy_rutor: str | None = Field(default=None, description="Proxy URL for Rutor requests.")
+    proxy_tmdb: str | None = Field(default=None, description="Proxy URL for TMDB requests.")
+    proxy_kinopoisk: str | None = Field(
+        default=None, description="Proxy URL for Kinopoisk requests."
+    )
+    proxy_poiskkino: str | None = Field(
+        default=None, description="Proxy URL for PoiskKino requests."
+    )
+    xray_binary: str = Field(
+        default="xray",
+        description="Path to the xray / sing-box binary used to bridge vless:// links.",
+    )
+    xray_port_base: int = Field(
+        default=10800,
+        ge=1024,
+        le=65000,
+        description="Base local port for spawned vless:// SOCKS bridges; each service gets an offset.",
+    )
+
+
 class Settings(
     _AuthSettings,
     _RezkaSettings,
@@ -240,6 +336,9 @@ class Settings(
     _KinopubSettings,
     _KinohubSettings,
     _StorageSettings,
+    _LampaSettings,
+    _CloudSettings,
+    _ProxySettings,
 ):
     """Top-level merged settings.
 

@@ -164,6 +164,13 @@ const CONTROLS: ControlRow[] = [
     startLabel: 'Старт',
   },
   {
+    key: 'trakt_collections',
+    label: 'Trakt · папки',
+    description: 'Двунаправленная синхронизация коллекций с кастомными списками Trakt.tv.',
+    start: () => sync.startTraktCollections(),
+    startLabel: 'Старт',
+  },
+  {
     key: 'cleanup',
     label: 'Очистка дубликатов',
     description: 'Сворачивает повторы из items / releases.',
