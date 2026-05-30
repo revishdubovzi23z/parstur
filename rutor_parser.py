@@ -60,9 +60,13 @@ class RutorParser:
         if max_retries is None:
             max_retries = RUTOR_MAX_RETRIES
 
+        from proxy_manager import proxy_manager
+
+        proxies = proxy_manager.get_requests_proxies("rutor") or {}
+
         for attempt in range(1, max_retries + 1):
             try:
-                response = requests.get(url, headers=self.headers, timeout=20)
+                response = requests.get(url, headers=self.headers, timeout=20, proxies=proxies)
                 response.raise_for_status()
                 break
             except Exception:
@@ -138,9 +142,13 @@ class RutorParser:
         encoded_query = urllib.parse.quote(query)
         url = f"{self.mirror}/search/{page}/{category_id}/0/0/{encoded_query}"
 
+        from proxy_manager import proxy_manager
+
+        proxies = proxy_manager.get_requests_proxies("rutor") or {}
+
         for attempt in range(1, max_retries + 1):
             try:
-                response = requests.get(url, headers=self.headers, timeout=20)
+                response = requests.get(url, headers=self.headers, timeout=20, proxies=proxies)
                 response.raise_for_status()
                 break
             except Exception:

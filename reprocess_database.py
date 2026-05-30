@@ -191,7 +191,12 @@ def reprocess_all(force_all=False, specific_id=None):
                         time.sleep(0.3)
                         MIRROR = RUTOR_MIRROR
                         logger.info(f"  🔍 Рутор (1.1): {MIRROR}/torrent/{rel_rutor_id}")
-                        resp = requests.get(f"{MIRROR}/torrent/{rel_rutor_id}", timeout=20)
+                        from proxy_manager import proxy_manager
+
+                        proxies = proxy_manager.get_requests_proxies("rutor") or {}
+                        resp = requests.get(
+                            f"{MIRROR}/torrent/{rel_rutor_id}", timeout=20, proxies=proxies
+                        )
                         if resp.status_code == 200:
                             if not kp_id:
                                 m = re.search(

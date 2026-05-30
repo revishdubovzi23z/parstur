@@ -301,9 +301,12 @@ def run_sync(mode="video", manual_min_date=None):
                         if rutor_kp_id and rutor_imdb_id:
                             break
                         try:
+                            from proxy_manager import proxy_manager
+
+                            proxies = proxy_manager.get_requests_proxies("rutor") or {}
                             rel_url = f"{parser.mirror}/torrent/{rel['rutor_id']}"
                             logger.info(f"  🔍 Рутор (1.1): {rel_url}")
-                            resp = requests.get(rel_url, timeout=20)
+                            resp = requests.get(rel_url, timeout=20, proxies=proxies)
                             if resp.status_code == 200:
                                 from bs4 import BeautifulSoup
 
@@ -364,8 +367,13 @@ def run_sync(mode="video", manual_min_date=None):
                                         break
                                     rid = m["rutor_id"]
                                     time.sleep(0.4)
+                                    from proxy_manager import proxy_manager
+
+                                    proxies = proxy_manager.get_requests_proxies("rutor") or {}
                                     resp = requests.get(
-                                        f"{parser.mirror}/torrent/{rid}", timeout=20
+                                        f"{parser.mirror}/torrent/{rid}",
+                                        timeout=20,
+                                        proxies=proxies,
                                     )
                                     if resp.status_code == 200:
                                         if not rutor_kp_id:

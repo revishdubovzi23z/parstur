@@ -50,7 +50,10 @@ def update_single_item(item_id):
             try:
                 url = f"{RUTOR_MIRROR}/torrent/{rutor_id}"
                 logger.info(f"  🔍 Проверка Rutor: {url}")
-                resp = requests.get(url, timeout=15)
+                from proxy_manager import proxy_manager
+
+                proxies = proxy_manager.get_requests_proxies("rutor") or {}
+                resp = requests.get(url, timeout=15, proxies=proxies)
                 if resp.status_code == 200:
                     if not kp_id:
                         m = re.search(
