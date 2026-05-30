@@ -160,7 +160,116 @@ def get_lampa_plugin(request: Request, key: str | None = None):
         }});
     }});
 
-    // 4. Настройки плагина
+    // 4. Добавляем в основное левое меню Lampa
+    if (window.Lampa && Lampa.Menu) {{
+        Lampa.Menu.add({{
+            id: 'antigravity',
+            title: 'Мои коллекции',
+            icon: `<svg height="36" viewBox="0 0 24 24" width="36" xmlns="http://www.w3.org/2000/svg"><path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H8V4h12v12z" fill="currentColor"/></svg>`,
+            onSelect: function () {{
+                Lampa.Activity.push({{
+                    title: '📚 Мои коллекции',
+                    component: 'antigravity_collections',
+                    page: 1
+                }});
+            }}
+        }});
+    }}
+
+    // 5. Регистрируем кастомный компонент antigravity_collections
+    Lampa.Component.add('antigravity_collections', function (object) {{
+        var network = new Lampa.Reguest();
+        var scroll  = new Lampa.Scroll({{
+            mask: true,
+            over: true,
+            parent: object.div
+        }});
+        var items   = [];
+        var active  = 0;
+
+        this.create = function () {{
+            var self = this;
+            this.activity.loader(true);
+
+            var url = buildUrl('/api/lampa/collections');
+            network.silent(url, function (data) {{
+                self.activity.loader(false);
+                if (data && data.collections && data.collections.length) {{
+                    self.build(data.collections);
+                }} else {{
+                    self.empty();
+                }}
+            }}, function () {{
+                self.activity.loader(false);
+                self.empty('Ошибка загрузки данных');
+            }});
+        }};
+
+        this.empty = function (title) {{
+            var empty = new Lampa.Empty({{
+                title: title || 'Нет коллекций',
+                descr: 'Добавьте фильмы или сериалы в коллекции на сайте Antigravity Tracker.'
+            }});
+            scroll.append(empty.render());
+            this.enable();
+        }};
+
+        this.build = function (collections) {{
+            var self = this;
+            var container = $('<div class="category-full"></div>');
+
+            collections.forEach(function (c) {{
+                var card = Lampa.Template.get('card', {{
+                    title: c.name,
+                    release_date: c.count + ' шт.'
+                }});
+
+                if (c.cover_poster_url) {{
+                    card.find('img').attr('src', c.cover_poster_url);
+                }} else {{
+                    card.find('.card__img').addClass('card__img--no');
+                }}
+
+                card.on('hover:focus', function () {{
+                    active = items.indexOf(card);
+                }});
+
+                card.on('hover:enter', function () {{
+                    Lampa.Activity.push({{
+                        title: c.name,
+                        component: 'category',
+                        source: 'antigravity',
+                        url: buildUrl('/api/lampa/collection/' + c.id),
+                        page: 1
+                    }});
+                }});
+
+                container.append(card);
+                items.push(card);
+            }});
+
+            scroll.append(container);
+            this.enable();
+        }};
+
+        this.enable = function () {{
+            Lampa.Controller.enable('content');
+        }};
+
+        this.destroy = function () {{
+            network.clear();
+            scroll.destroy();
+            if (items.length) {{
+                items.forEach(function (item) {{ item.remove(); }});
+            }}
+        }};
+
+        this.render = function () {{
+            return scroll.render();
+        }};
+    }});
+
+    // 6. Настройки плагина
     Lampa.SettingsApi.addParam({{
         component: 'antigravity',
         param: {{
@@ -190,7 +299,7 @@ def get_lampa_plugin(request: Request, key: str | None = None):
     Lampa.Manifest.plugins = Lampa.Manifest.plugins || [];
     Lampa.Manifest.plugins.push({{
         name: 'Antigravity Tracker',
-        version: '1.0.0',
+        version: '1.1.0',
         description: 'Ваши коллекции из Antigravity Tracker'
     }});
 }})();
