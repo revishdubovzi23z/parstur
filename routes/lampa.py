@@ -161,6 +161,9 @@ def get_lampa_plugin(request: Request, key: str | None = None):
 
             this.img = this.card.querySelector('.card__img');
 
+            var ageEl = this.card.querySelector('.card__age');
+            if (ageEl) ageEl.remove();
+
             var titleEl = this.card.querySelector('.card__title');
             if (titleEl) titleEl.innerText = data.title || data.name || '';
 
@@ -239,6 +242,7 @@ def get_lampa_plugin(request: Request, key: str | None = None):
                     total_pages: 1,
                     cardClass: function (elem) { return new PosterCard(elem); }
                 });
+                that.render().find('.category-full').addClass('mapping--grid cols--3');
             }, function () { that.empty(); });
         };
 
@@ -277,7 +281,11 @@ def get_lampa_plugin(request: Request, key: str | None = None):
         }
 
         comp.create = function () {
-            load(1, this.build.bind(this), this.empty.bind(this));
+            var that = this;
+            load(1, function (data) {
+                that.build(data);
+                that.render().find('.category-full').addClass('mapping--grid cols--3');
+            }, this.empty.bind(this));
         };
 
         comp.nextPageReuest = function (object, resolve, reject) {
