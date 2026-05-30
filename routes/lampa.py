@@ -36,10 +36,19 @@ def item_to_tmdb(item: dict, base_url: str = "") -> dict:
     # Clean Russian/English multi-title splits
     clean_title = title.split(" / ")[0].split("/")[0].strip()
 
-    poster = item.get("poster_url") or ""
-    if poster:
-        if "image.tmdb.org" in poster:
-            parts = poster.split("/t/p/")
+    # Poster handling (hybrid):
+    #  - TMDB posters: keep a relative poster_path (native TMDB path) AND expose a
+    #    full CDN url in "img" so the card can load it directly.
+    #  - Non-TMDB posters: proxy through our server (CORS/referer) and expose the
+    #    proxy url in "img"; leave poster_path empty so Lampa does not prepend the
+    #    TMDB base to an absolute url.
+    raw_poster = item.get("poster_url") or ""
+    poster = raw_poster
+    img = ""
+    if raw_poster:
+        if "image.tmdb.org" in raw_poster:
+            img = raw_poster
+            parts = raw_poster.split("/t/p/")
             if len(parts) > 1:
                 subparts = parts[1].split("/")
                 if len(subparts) > 1:
@@ -47,7 +56,11 @@ def item_to_tmdb(item: dict, base_url: str = "") -> dict:
         elif base_url:
             import urllib.parse
 
-            poster = f"{base_url}/api/lampa/poster?url={urllib.parse.quote(poster)}"
+            img = f"{base_url}/api/lampa/poster?url={urllib.parse.quote(raw_poster)}"
+            poster = ""
+        else:
+            img = raw_poster
+            poster = ""
 
     vote_avg = 0.0
     if item.get("user_rating"):
@@ -85,6 +98,7 @@ def item_to_tmdb(item: dict, base_url: str = "") -> dict:
         "original_name": orig_title or clean_title,
         "poster_path": poster,
         "backdrop_path": poster,  # fallback to poster
+        "img": img,
         "overview": item.get("description") or "",
         "vote_average": vote_avg,
         "release_date": date_str,
@@ -106,300 +120,268 @@ def get_lampa_plugin(request: Request, key: str | None = None):
     api_key = key or settings.lampa_api_key or ""
     base_url = str(request.base_url).rstrip("/")
 
-    # JavaScript plugin content
-    js_content = f"""(function () {{
+    # Plugin source. Written as a plain template (no f-string) to avoid brace
+    # escaping; connection params are injected via str.replace below.
+    js_template = """(function () {
     'use strict';
 
-    var BASE = '{base_url}';
-    var KEY  = '{api_key}';
+    var BASE = '__BASE__';
+    var KEY  = '__KEY__';
 
     if (!BASE) BASE = Lampa.Storage.get('antigravity_base', '');
-    if (!KEY)  KEY  = Lampa.Storage.get('antigravity_key',  '');
+    if (!KEY)  KEY  = Lampa.Storage.get('antigravity_key', '');
 
-    function headers() {{
-        return KEY ? {{ 'X-API-Key': KEY }} : {{}};
-    }}
+    function reqHeaders() {
+        return KEY ? { 'X-API-Key': KEY } : {};
+    }
 
-    function buildUrl(path) {{
-        var url = BASE + path;
-        if (KEY) {{
-            url += (url.indexOf('?') >= 0 ? '&' : '?') + 'key=' + encodeURIComponent(KEY);
-        }}
+    function buildUrl(path) {
+        var url = (BASE || '') + path;
+        if (KEY) url += (url.indexOf('?') >= 0 ? '&' : '?') + 'key=' + encodeURIComponent(KEY);
         return url;
-    }}
+    }
 
-    // 1. Регистрируем «Мои коллекции» в главном каталоге
-    Lampa.Listener.follow('catalog', function (e) {{
-        e.object.push({{
-            title: '📚 Мои коллекции',
-            source: 'antigravity',
-            onMore: function (params, oncomplite, onerror) {{
-                fetch(buildUrl('/api/lampa/collections'), {{ headers: headers() }})
-                    .then(function (r) {{ return r.json(); }})
-                    .then(function (data) {{
-                        oncomplite((data.collections || []).map(function (c) {{
-                            return {{
-                                id: c.id,
-                                title: c.name,
-                                url: buildUrl('/api/lampa/collection/' + c.id)
-                            }};
-                        }}));
-                    }})
-                    .catch(onerror);
-            }}
-        }});
-    }});
+    function api(path, onok, onerr) {
+        var full = /^https?:/.test(path) ? path : buildUrl(path);
+        fetch(full, { headers: reqHeaders() })
+            .then(function (r) { return r.json(); })
+            .then(function (json) { onok(json); })
+            .catch(function (e) { if (onerr) onerr(e); });
+    }
 
-    // 2. Обработка запроса конкретной коллекции
-    Lampa.Listener.follow('source', function (e) {{
-        if (e.object.source !== 'antigravity') return;
-        var page = e.object.page || 1;
-        var url = e.object.url;
-        url += (url.indexOf('?') >= 0 ? '&' : '?') + 'page=' + page;
+    // Custom poster card based on the native 'card' template. We set the image
+    // src directly from element.img (a full URL), which works for both native
+    // TMDB CDN urls and our proxy urls, and gives the native poster grid (3/row).
+    function PosterCard(data) {
+        var self = this;
 
-        fetch(url, {{ headers: headers() }})
-            .then(function (r) {{ return r.json(); }})
-            .then(function (data) {{
-                e.object.oncomplite(data);
-            }})
-            .catch(e.object.onerror);
-    }});
+        this.build = function () {
+            var node = Lampa.Template.js('card');
+            this.card = (node && node.querySelector) ? node : (node && node[0]) ? node[0] : node;
 
-    // 3. Добавление раздела поиска
-    Lampa.Listener.follow('search', function (e) {{
-        e.object.push({{
-            title: '📚 Мои коллекции',
-            source: 'antigravity',
-            onMore: function (params, oncomplite, onerror) {{
-                var query = encodeURIComponent(params.query || '');
-                fetch(buildUrl('/api/lampa/search?q=' + query), {{ headers: headers() }})
-                    .then(function (r) {{ return r.json(); }})
-                    .then(oncomplite)
-                    .catch(onerror);
-            }}
-        }});
-    }});
+            this.img = this.card.querySelector('.card__img');
 
-    // 4. Добавляем в основное левое меню Lampa через DOM-инъекцию (как в проверенном TMDB плагине)
-    function addMenuButton() {{
-        if ($('.menu .menu__list li[data-action="antigravity_collections"]').length) return;
+            var titleEl = this.card.querySelector('.card__title');
+            if (titleEl) titleEl.innerText = data.title || data.name || '';
 
-        var $button = $(
-            '<li class="menu__item selector" data-action="antigravity_collections">' +
-            '<div class="menu__ico">' +
-            '<svg height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg"><path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2z" fill="currentColor"/></svg>' +
-            '</div>' +
-            '<div class="menu__text">Мои коллекции</div>' +
-            '</li>'
-        );
+            var typeEl = this.card.querySelector('.card__type');
+            if (typeEl) {
+                if (data.is_folder) {
+                    typeEl.style.display = '';
+                    typeEl.innerText = (data.items_count != null ? ('' + data.items_count) : '');
+                } else if (data.media_type === 'tv') {
+                    typeEl.style.display = '';
+                    typeEl.innerText = 'TV';
+                }
+            }
 
-        $button.on('hover:enter', function () {{
-            Lampa.Activity.push({{
-                url: '',
-                title: '📚 Мои коллекции',
-                component: 'antigravity_collections',
-                page: 1
-            }});
-        }});
+            var voteEl = this.card.querySelector('.card__vote');
+            if (voteEl) {
+                if (!data.is_folder && data.vote_average) {
+                    voteEl.innerText = parseFloat(data.vote_average).toFixed(1);
+                } else {
+                    voteEl.style.display = 'none';
+                }
+            }
 
-        var $list = $('.menu .menu__list').eq(0);
-        if ($list.length) $list.append($button);
-    }}
+            this.card.addEventListener('visible', this.visible.bind(this));
+        };
 
-    // Вспомогательный адаптер для папок-коллекций
-    function adaptFolderToCard(folder) {{
-        var name = folder.name;
-        var count = folder.count != null ? folder.count : '';
-        return {{
-            source: 'antigravity',
-            type: 'movie',
-            id: 'antigravity_folder_' + folder.id,
-            title: name,
-            original_title: name,
-            name: name,
-            original_name: name,
-            overview: count ? (count + ' шт.') : '',
-            release_date: '',
-            first_air_date: '',
-            poster_path: folder.cover_poster_url || '',
-            backdrop_path: folder.cover_poster_url || '',
-            vote_average: 0,
-            vote_count: 0,
-            adult: false,
-            genre_ids: [],
-            popularity: 0,
-            media_type: 'movie',
-            _list_id: folder.id,
-            _list_name: name
-        }};
-    }}
+        this.visible = function () {
+            var im = this.img;
+            if (im) {
+                im.onload = function () { if (self.card) self.card.classList.add('card--loaded'); };
+                im.onerror = function () { im.src = './img/img_broken.svg'; };
+                im.src = data.img || './img/img_broken.svg';
+            }
+            if (this.onVisible) this.onVisible(this.card, data);
+        };
 
-    // 5. Регистрируем кастомный компонент antigravity_collections (первый уровень — список папок)
-    function foldersComponent(object) {{
+        this.create = function () {
+            this.build();
+
+            this.card.addEventListener('hover:focus', function () { if (self.onFocus) self.onFocus(self.card, data); });
+            this.card.addEventListener('hover:hover', function () { if (self.onHover) self.onHover(self.card, data); });
+            this.card.addEventListener('hover:long',  function () { if (self.onLong)  self.onLong(self.card, data); });
+            this.card.addEventListener('hover:enter', function () { if (self.onEnter) self.onEnter(self.card, data); });
+        };
+
+        this.render = function (js) { return js ? this.card : $(this.card); };
+
+        this.destroy = function () {
+            if (this.img) { this.img.onload = null; this.img.onerror = null; this.img.src = ''; }
+            if (this.card && this.card.remove) this.card.remove();
+            this.img = null;
+            this.card = null;
+        };
+    }
+
+    // Level 1: list of collections (folders).
+    function collectionsComponent(object) {
         var comp = new Lampa.InteractionCategory(object);
 
-        comp.create = function () {{
-            var self = this;
-            this.activity.loader(true);
+        comp.create = function () {
+            var that = this;
+            api('/api/lampa/collections', function (data) {
+                var cols = (data && data.collections) || [];
+                var results = cols.map(function (c) {
+                    return {
+                        id: c.id,
+                        title: c.name,
+                        name: c.name,
+                        items_count: c.count,
+                        img: c.cover_img || '',
+                        is_folder: true
+                    };
+                });
+                that.build({
+                    results: results,
+                    total_pages: 1,
+                    cardClass: function (elem) { return new PosterCard(elem); }
+                });
+            }, function () { that.empty(); });
+        };
 
-            fetch(buildUrl('/api/lampa/collections'), {{ headers: headers() }})
-                .then(function (r) {{ return r.json(); }})
-                .then(function (data) {{
-                    self.activity.loader(false);
-                    var collections = (data && data.collections) || [];
-                    if (collections.length) {{
-                        var cards = collections.map(adaptFolderToCard);
-                        self.build({{
-                            results: cards,
-                            total_pages: 1,
-                            page: 1
-                        }});
-                    }} else {{
-                        self.empty();
-                    }}
-                }})
-                .catch(function (err) {{
-                    self.activity.loader(false);
-                    self.empty('Не удалось загрузить коллекции');
-                }});
-        }};
-
-        comp.nextPageReuest = function (obj, resolve, reject) {{
-            resolve.call(comp, {{ results: [], total_pages: 1, page: 1 }});
-        }};
+        comp.nextPageReuest = function (object, resolve, reject) {
+            resolve({ results: [], total_pages: 1 });
+        };
         comp.nextPageRequest = comp.nextPageReuest;
 
-        comp.cardRender = function (obj, element, card) {{
+        comp.cardRender = function (object, element, card) {
             card.onMenu = false;
-            card.onEnter = function () {{
-                Lampa.Activity.push({{
+            card.onEnter = function () {
+                Lampa.Activity.push({
                     url: '',
-                    title: element._list_name || element.title,
+                    title: element.title,
                     component: 'antigravity_collection_content',
-                    list_id: element._list_id,
+                    list_id: element.id,
                     page: 1
-                }});
-            }};
-        }};
+                });
+            };
+        };
 
         return comp;
-    }}
+    }
 
-    // Кастомный компонент для содержимого папки (второй уровень)
-    function folderContentComponent(object) {{
+    // Level 2: items inside a collection.
+    function collectionContentComponent(object) {
         var comp = new Lampa.InteractionCategory(object);
 
-        function loadPage(page, resolve, reject) {{
-            if (!object.list_id) {{
-                reject.call(comp);
-                return;
-            }}
+        function load(page, resolve, reject) {
+            api('/api/lampa/collection/' + object.list_id + '?page=' + page, function (data) {
+                data = data || {};
+                data.results = data.results || [];
+                data.cardClass = function (elem) { return new PosterCard(elem); };
+                resolve(data);
+            }, function () { reject(); });
+        }
 
-            var url = buildUrl('/api/lampa/collection/' + object.list_id);
-            url += (url.indexOf('?') >= 0 ? '&' : '?') + 'page=' + page;
+        comp.create = function () {
+            load(1, this.build.bind(this), this.empty.bind(this));
+        };
 
-            fetch(url, {{ headers: headers() }})
-                .then(function (r) {{ return r.json(); }})
-                .then(function (data) {{
-                    var items = ((data && data.results) || [])
-                        .filter(function (c) {{ return c && c.id != null; }});
-
-                    resolve.call(comp, {{
-                        results: items,
-                        page: page,
-                        total_pages: (data && data.total_pages) || 1
-                    }});
-                }})
-                .catch(function (err) {{
-                    reject.call(comp);
-                }});
-        }}
-
-        comp.create = function () {{
-            loadPage(object.page || 1, this.build.bind(this), this.empty.bind(this));
-        }};
-
-        comp.nextPageReuest = function (obj, resolve, reject) {{
-            loadPage(obj.page, resolve, reject);
-        }};
+        comp.nextPageReuest = function (object, resolve, reject) {
+            load(object.page, function (data) { resolve(data); }, function () { reject(); });
+        };
         comp.nextPageRequest = comp.nextPageReuest;
 
-        comp.cardRender = function (obj, element, card) {{
+        comp.cardRender = function (object, element, card) {
             card.onMenu = false;
-            card.onEnter = function () {{
-                // Критично: используем TMDB id только если он реально существует.
-                // Если _tmdb_id_valid === false, element.id — это наш внутренний ID,
-                // и открытие через source:'tmdb' откроет СОВСЕМ ДРУГОЙ фильм с тем же номером.
-                if (element._tmdb_id_valid) {{
-                    Lampa.Activity.push({{
+            card.onEnter = function () {
+                if (element._tmdb_id_valid) {
+                    Lampa.Activity.push({
                         url: '',
                         component: 'full',
                         id: element.id,
-                        method: element.media_type === 'tv' ? 'tv' : 'movie',
-                        source: 'tmdb',
-                        card: element
-                    }});
-                }} else {{
-                    // Нет TMDB ID — показываем предупреждение вместо открытия неверного фильма
-                    Lampa.Noty.show('Для "' + (element.title || element.name) + '" нет ID TMDB — синхронизируйте библиотеку');
-                }}
-            }};
-        }};
+                        method: element.media_type,
+                        card: element,
+                        source: 'tmdb'
+                    });
+                } else {
+                    Lampa.Noty.show('\"' + (element.title || '') + '\" - net TMDB ID');
+                }
+            };
+        };
 
         return comp;
-    }}
+    }
 
-    // Инициализация плагина
-    function bootstrap() {{
-        Lampa.Component.add('antigravity_collections', foldersComponent);
-        Lampa.Component.add('antigravity_collection_content', folderContentComponent);
+    function addMenuButton() {
+        if (document.querySelector('.menu .menu__list [data-action=\"antigravity_collections\"]')) return;
 
-        if (window.appready) {{
+        var html =
+            '<li class=\"menu__item selector\" data-action=\"antigravity_collections\">' +
+                '<div class=\"menu__ico\">' +
+                    '<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\">' +
+                        '<path d=\"M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linejoin=\"round\"/>' +
+                    '</svg>' +
+                '</div>' +
+                '<div class=\"menu__text\">📚 Мои коллекции</div>' +
+            '</li>';
+
+        var button = $(html);
+
+        button.on('hover:enter', function () {
+            Lampa.Activity.push({
+                url: '',
+                title: 'Мои коллекции',
+                component: 'antigravity_collections',
+                page: 1
+            });
+        });
+
+        $('.menu .menu__list').eq(0).append(button);
+    }
+
+    function addSettings() {
+        if (!Lampa.SettingsApi) return;
+
+        Lampa.SettingsApi.addParam({
+            component: 'antigravity',
+            param: { name: 'antigravity_base', type: 'input', default: BASE },
+            field: { name: 'Адрес сервера', description: 'URL вашего Antigravity Tracker' },
+            onChange: function (value) { Lampa.Storage.set('antigravity_base', value); }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: 'antigravity',
+            param: { name: 'antigravity_key', type: 'input', default: KEY },
+            field: { name: 'API ключ', description: 'Ключ доступа, если задан на сервере' },
+            onChange: function (value) { Lampa.Storage.set('antigravity_key', value); }
+        });
+    }
+
+    function startPlugin() {
+        if (window.antigravity_plugin_ready) return;
+        window.antigravity_plugin_ready = true;
+
+        Lampa.Component.add('antigravity_collections', collectionsComponent);
+        Lampa.Component.add('antigravity_collection_content', collectionContentComponent);
+
+        addSettings();
+
+        if (window.appready) {
             addMenuButton();
-        }} else {{
-            Lampa.Listener.follow('app', function (e) {{
+        } else {
+            Lampa.Listener.follow('app', function (e) {
                 if (e.type === 'ready') addMenuButton();
-            }});
-        }}
-    }}
+            });
+        }
+    }
 
-    bootstrap();
+    if (window.Lampa) {
+        startPlugin();
+    } else {
+        var waiter = setInterval(function () {
+            if (window.Lampa) {
+                clearInterval(waiter);
+                startPlugin();
+            }
+        }, 200);
+    }
+})();"""
 
-    // 6. Настройки плагина
-    Lampa.SettingsApi.addParam({{
-        component: 'antigravity',
-        param: {{
-            name: 'antigravity_base',
-            type: 'input',
-            default: BASE,
-            placeholder: 'http://your-vps:8000'
-        }},
-        field: {{
-            name: 'Antigravity: URL сервера'
-        }}
-    }});
-
-    Lampa.SettingsApi.addParam({{
-        component: 'antigravity',
-        param: {{
-            name: 'antigravity_key',
-            type: 'input',
-            default: KEY,
-            placeholder: 'API Key'
-        }},
-        field: {{
-            name: 'Antigravity: API Ключ'
-        }}
-    }});
-
-    Lampa.Manifest.plugins = Lampa.Manifest.plugins || [];
-    Lampa.Manifest.plugins.push({{
-        name: 'Antigravity Tracker',
-        version: '1.1.0',
-        description: 'Ваши коллекции из Antigravity Tracker'
-    }});
-}})();
-"""
+    js_content = js_template.replace("__BASE__", base_url).replace("__KEY__", api_key)
     return Response(content=js_content, media_type="application/javascript")
 
 
@@ -447,6 +429,7 @@ def get_lampa_collections(request: Request):
             cover_tmdb_id = None
             cover_media_type = "movie"
             cover_poster_url = ""
+            cover_img = ""
 
             if items:
                 # Select a random item that actually has a poster_url
@@ -462,6 +445,7 @@ def get_lampa_collections(request: Request):
                 poster_url = chosen.get("poster_url") or ""
                 if poster_url:
                     if "image.tmdb.org" in poster_url:
+                        cover_img = poster_url
                         parts = poster_url.split("/t/p/")
                         if len(parts) > 1:
                             subparts = parts[1].split("/")
@@ -474,6 +458,7 @@ def get_lampa_collections(request: Request):
                         cover_poster_url = (
                             f"{base_url}/api/lampa/poster?url={urllib.parse.quote(poster_url)}"
                         )
+                        cover_img = cover_poster_url
 
             res_cols.append(
                 {
@@ -483,6 +468,7 @@ def get_lampa_collections(request: Request):
                     "cover_tmdb_id": cover_tmdb_id,
                     "cover_media_type": cover_media_type,
                     "cover_poster_url": cover_poster_url,
+                    "cover_img": cover_img,
                 }
             )
 
