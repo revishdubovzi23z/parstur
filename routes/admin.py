@@ -73,6 +73,8 @@ def _has_value(value: str | None) -> bool:
 
 def _credential_value(key: str) -> str:
     value = getattr(settings_module.settings, key.lower())
+    if isinstance(value, bool):
+        return "true" if value else "false"
     return "" if value is None else str(value)
 
 
