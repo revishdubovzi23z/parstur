@@ -53,10 +53,17 @@ def item_to_tmdb(item: dict) -> dict:
     date_str = f"{year}-01-01" if year else ""
 
     tmdb_id = item.get("tmdb_id")
+    tmdb_id_valid = False
     try:
-        display_id = int(tmdb_id) if tmdb_id else int(item["id"])
+        if tmdb_id:
+            display_id = int(tmdb_id)
+            tmdb_id_valid = True
+        else:
+            display_id = int(item["id"])
     except (ValueError, TypeError):
         display_id = int(item["id"])
+
+    internal_id = int(item["id"])
 
     return {
         "id": display_id,
@@ -71,7 +78,9 @@ def item_to_tmdb(item: dict) -> dict:
         "vote_average": vote_avg,
         "release_date": date_str,
         "first_air_date": date_str,
-        "antigravity_id": item["id"],
+        "antigravity_id": internal_id,
+        "_antigravity_id": internal_id,
+        "_tmdb_id_valid": tmdb_id_valid,
         "is_watched": bool(item.get("is_watched")),
         "user_rating": item.get("user_rating"),
     }
@@ -305,14 +314,22 @@ def get_lampa_plugin(request: Request, key: str | None = None):
         comp.cardRender = function (obj, element, card) {{
             card.onMenu = false;
             card.onEnter = function () {{
-                Lampa.Activity.push({{
-                    url: '',
-                    component: 'full',
-                    id: element.id,
-                    method: element.media_type === 'tv' ? 'tv' : 'movie',
-                    source: 'tmdb',
-                    card: element
-                }});
+                // Критично: используем TMDB id только если он реально существует.
+                // Если _tmdb_id_valid === false, element.id — это наш внутренний ID,
+                // и открытие через source:'tmdb' откроет СОВСЕМ ДРУГОЙ фильм с тем же номером.
+                if (element._tmdb_id_valid) {{
+                    Lampa.Activity.push({{
+                        url: '',
+                        component: 'full',
+                        id: element.id,
+                        method: element.media_type === 'tv' ? 'tv' : 'movie',
+                        source: 'tmdb',
+                        card: element
+                    }});
+                }} else {{
+                    // Нет TMDB ID — показываем предупреждение вместо открытия неверного фильма
+                    Lampa.Noty.show('Для "' + (element.title || element.name) + '" нет ID TMDB — синхронизируйте библиотеку');
+                }}
             }};
         }};
 
