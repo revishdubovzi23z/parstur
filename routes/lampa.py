@@ -27,7 +27,7 @@ def get_media_type(category_id: int | None) -> str:
     return "movie"
 
 
-def item_to_tmdb(item: dict) -> dict:
+def item_to_tmdb(item: dict, base_url: str = "") -> dict:
     """Format our database item dict to TMDB-compatible catalog card."""
     media_type = get_media_type(item.get("category_id"))
     title = item.get("title") or ""
@@ -37,6 +37,17 @@ def item_to_tmdb(item: dict) -> dict:
     clean_title = title.split(" / ")[0].split("/")[0].strip()
 
     poster = item.get("poster_url") or ""
+    if poster:
+        if "image.tmdb.org" in poster:
+            parts = poster.split("/t/p/")
+            if len(parts) > 1:
+                subparts = parts[1].split("/")
+                if len(subparts) > 1:
+                    poster = "/" + "/".join(subparts[1:])
+        elif base_url:
+            import urllib.parse
+
+            poster = f"{base_url}/api/lampa/poster?url={urllib.parse.quote(poster)}"
 
     vote_avg = 0.0
     if item.get("user_rating"):
@@ -392,6 +403,24 @@ def get_lampa_plugin(request: Request, key: str | None = None):
     return Response(content=js_content, media_type="application/javascript")
 
 
+@router.get("/api/lampa/poster")
+async def proxy_lampa_poster(url: str):
+    """Proxy external images (like Rezka) to bypass CORS and referer locks on TVs."""
+    import httpx
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(url, timeout=10.0, headers={"User-Agent": "Mozilla/5.0"})
+            if resp.status_code == 200:
+                return Response(
+                    content=resp.content,
+                    media_type=resp.headers.get("content-type", "image/jpeg"),
+                )
+    except Exception:
+        pass
+    return Response(content=b"", status_code=404)
+
+
 @router.get("/api/lampa/collections")
 def get_lampa_collections(request: Request):
     """Get list of collections with count and a random movie's cover info."""
@@ -430,7 +459,21 @@ def get_lampa_collections(request: Request):
                         cover_tmdb_id = int(chosen["tmdb_id"])
                     except (ValueError, TypeError):
                         pass
-                cover_poster_url = chosen.get("poster_url") or ""
+                poster_url = chosen.get("poster_url") or ""
+                if poster_url:
+                    if "image.tmdb.org" in poster_url:
+                        parts = poster_url.split("/t/p/")
+                        if len(parts) > 1:
+                            subparts = parts[1].split("/")
+                            if len(subparts) > 1:
+                                cover_poster_url = "/" + "/".join(subparts[1:])
+                    else:
+                        base_url = str(request.base_url).rstrip("/")
+                        import urllib.parse
+
+                        cover_poster_url = (
+                            f"{base_url}/api/lampa/poster?url={urllib.parse.quote(poster_url)}"
+                        )
 
             res_cols.append(
                 {
@@ -477,7 +520,8 @@ def get_lampa_collection_items(collection_id: int, request: Request, page: int =
             (collection_id, limit, offset),
         ).fetchall()
 
-        results = [item_to_tmdb(dict(row)) for row in rows]
+        base_url = str(request.base_url).rstrip("/")
+        results = [item_to_tmdb(dict(row), base_url) for row in rows]
 
     total_pages = math.ceil(total / limit) if total > 0 else 1
 
@@ -505,7 +549,8 @@ def search_lampa(q: str, request: Request, page: int = 1):
     total = len(items)
 
     paginated_items = items[offset : offset + limit]
-    results = [item_to_tmdb(it) for it in paginated_items]
+    base_url = str(request.base_url).rstrip("/")
+    results = [item_to_tmdb(it, base_url) for it in paginated_items]
 
     total_pages = math.ceil(total / limit) if total > 0 else 1
 
@@ -526,4 +571,5 @@ def get_lampa_item(item_id: int, request: Request):
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
 
-    return item_to_tmdb(item)
+    base_url = str(request.base_url).rstrip("/")
+    return item_to_tmdb(item, base_url)
