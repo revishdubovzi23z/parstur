@@ -256,6 +256,7 @@ def get_lampa_plugin(request: Request, key: str | None = None):
         comp.nextPageReuest = function (obj, resolve, reject) {{
             resolve.call(comp, {{ results: [], total_pages: 1, page: 1 }});
         }};
+        comp.nextPageRequest = comp.nextPageReuest;
 
         comp.cardRender = function (obj, element, card) {{
             card.onMenu = false;
@@ -310,6 +311,7 @@ def get_lampa_plugin(request: Request, key: str | None = None):
         comp.nextPageReuest = function (obj, resolve, reject) {{
             loadPage(obj.page, resolve, reject);
         }};
+        comp.nextPageRequest = comp.nextPageReuest;
 
         comp.cardRender = function (obj, element, card) {{
             card.onMenu = false;
@@ -395,7 +397,7 @@ def get_lampa_collections(request: Request):
     """Get list of collections with count and a random movie's cover info."""
     check_lampa_auth(request)
 
-    collections = db.get_collections(include_system=True)
+    collections = db.get_collections(include_system=False)
     res_cols = []
 
     with db._conn() as conn:

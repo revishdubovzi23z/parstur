@@ -170,6 +170,12 @@ def sync_tmdb_collections():
                         media_type = meta.get("media_type") or media_type
 
             if tmdb_id:
+                if not item.get("tmdb_id"):
+                    with db._conn() as c:
+                        c.execute(
+                            "UPDATE items SET tmdb_id = ? WHERE id = ?",
+                            (str(tmdb_id), item_id),
+                        )
                 local_tmdb_items.append(
                     {"media_type": media_type, "media_id": int(tmdb_id), "local_id": item_id}
                 )

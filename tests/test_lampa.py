@@ -114,13 +114,11 @@ def test_lampa_collections_endpoint(client: TestClient, monkeypatch) -> None:
     data = r.json()
     assert "collections" in data
     cols = data["collections"]
-    assert len(cols) == 2
+    assert len(cols) == 1
 
-    # Sort order: Хочу посмотреть (1), Просмотренное (9999)
+    # Sort order: Хочу посмотреть (1)
     assert cols[0]["name"] == "Хочу посмотреть"
     assert cols[0]["count"] == 2
-    assert cols[1]["name"] == "Просмотренное"
-    assert cols[1]["count"] == 1
 
 
 def test_lampa_collection_items_endpoint(client: TestClient, monkeypatch) -> None:

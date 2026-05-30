@@ -404,6 +404,7 @@ def run_sync(mode="video", manual_min_date=None):
                 imdb_id = rutor_imdb_id
                 imdb_rating = 0.0
                 clean_display_title = display_title
+                tmdb_id = None
 
                 if use_tmdb:
                     if tmdb.is_limited:
@@ -462,6 +463,7 @@ def run_sync(mode="video", manual_min_date=None):
                     if tmdb_data:
                         poster = tmdb_data.get("poster_url", "")
                         desc = tmdb_data.get("description", "")
+                        tmdb_id = tmdb_data.get("tmdb_id")
                         if tmdb_data.get("title") and tmdb_data.get("original_title"):
                             new_ru = tmdb_data["title"]
                             new_orig = tmdb_data["original_title"]
@@ -522,6 +524,7 @@ def run_sync(mode="video", manual_min_date=None):
                         kp_id=rutor_kp_id,
                         imdb_rating=imdb_rating,
                         title=title_norm if title_norm else None,
+                        tmdb_id=tmdb_id,
                     )
                     logger.info(f"  🔗 НАЙДЕН ДУБЛЬ: {display_title} ({year}) -> id={item_id}")
                 else:
@@ -538,6 +541,7 @@ def run_sync(mode="video", manual_min_date=None):
                             "kp_rating": 0,
                             "is_metadata_fixed": 0,
                             "title_norm": title_norm,
+                            "tmdb_id": tmdb_id,
                         },
                         conn=conn,
                     )
