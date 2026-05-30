@@ -765,9 +765,12 @@ async def _search_rezka_batch(items, db, conn, offset: int = 0, overall_total: i
         try:
             from aiohttp_socks import ProxyConnector
 
+            proxy_url = proxy_url.replace("socks5h://", "socks5://")
             connector = ProxyConnector.from_url(proxy_url)
         except ImportError:
             logger.warning("[rezka] aiohttp_socks is not installed! Cannot use proxy.")
+        except Exception as e:
+            logger.warning(f"[rezka] failed to configure ProxyConnector: {e}")
 
     # 3.15: prefer cookies from a logged-in HdRezka session — anonymous
     # access is rate-limited and often returns empty search payloads.
