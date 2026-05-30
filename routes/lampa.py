@@ -131,6 +131,17 @@ def get_lampa_plugin(request: Request, key: str | None = None):
     if (!BASE) BASE = Lampa.Storage.get('antigravity_base', '');
     if (!KEY)  KEY  = Lampa.Storage.get('antigravity_key', '');
 
+    (function () {
+        if (document.getElementById('antigravity-grid-style')) return;
+        var st = document.createElement('style');
+        st.id = 'antigravity-grid-style';
+        st.textContent = '.antigravity-grid{display:flex !important;flex-wrap:wrap !important;align-content:flex-start;}'
+            + '.antigravity-grid .card{width:33.333% !important;box-sizing:border-box !important;}'
+            + '.antigravity-grid .card .card__view{height:auto !important;}'
+            + '.antigravity-grid .card .card__img{width:100% !important;height:auto !important;min-height:0 !important;display:block;}';
+        (document.head || document.body || document.documentElement).appendChild(st);
+    })();
+
     function reqHeaders() {
         return KEY ? { 'X-API-Key': KEY } : {};
     }
@@ -242,7 +253,7 @@ def get_lampa_plugin(request: Request, key: str | None = None):
                     total_pages: 1,
                     cardClass: function (elem) { return new PosterCard(elem); }
                 });
-                that.render().find('.category-full').addClass('mapping--grid cols--3');
+                that.render().find('.category-full').addClass('antigravity-grid');
             }, function () { that.empty(); });
         };
 
@@ -284,7 +295,7 @@ def get_lampa_plugin(request: Request, key: str | None = None):
             var that = this;
             load(1, function (data) {
                 that.build(data);
-                that.render().find('.category-full').addClass('mapping--grid cols--3');
+                that.render().find('.category-full').addClass('antigravity-grid');
             }, this.empty.bind(this));
         };
 
