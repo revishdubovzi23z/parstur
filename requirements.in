@@ -60,3 +60,5 @@ libsql>=0.1.0
 # Note: vless:// links also need an external xray / sing-box binary, which is
 # NOT a Python package (set XRAY_BINARY in .env).
 # PySocks>=1.7.1
+
+PySocks
