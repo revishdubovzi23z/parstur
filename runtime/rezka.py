@@ -75,9 +75,13 @@ def _init_rezka_session() -> bool:
     broadcast_threadsafe({"type": "rezka_session", "state": "connecting"})
 
     try:
+        from proxy_manager import proxy_manager
+
+        proxies = proxy_manager.get_requests_proxies("rezka") or {}
+
         from HdRezkaApi import HdRezkaSession as _Session
 
-        rezka_session = _Session("https://rezka.ag/")
+        rezka_session = _Session("https://rezka.ag/", proxy=proxies)
         rezka_session.login(rezka_email, rezka_password)
         _refresh_rezka_folders_cache()
         logger.info(f"[REZKA] Session initialized, cookies: {list(rezka_session.cookies.keys())}")
@@ -127,6 +131,12 @@ def _rezka_request(method: str, url: str, **kwargs):
     if rezka_session is None:
         return None
     import requests as _req
+
+    from proxy_manager import proxy_manager
+
+    proxies = proxy_manager.get_requests_proxies("rezka")
+    if proxies:
+        kwargs["proxies"] = proxies
 
     resp = _req.request(method, url, **kwargs)
     if not _rezka_session_dead(resp):
@@ -216,7 +226,10 @@ def _recover_rezka_url(item_id: int, old_url: str) -> str | None:
     if not clean:
         return None
     try:
-        results = HdRezkaSearch("https://rezka.ag")(f"{clean} {year}")
+        from proxy_manager import proxy_manager
+
+        proxies = proxy_manager.get_requests_proxies("rezka") or {}
+        results = HdRezkaSearch("https://rezka.ag", proxy=proxies)(f"{clean} {year}")
     except Exception:
         return None
     old_num = re.search(r"/(\d+)-", old_url)
@@ -248,9 +261,12 @@ def _get_rezka_obj(item_id: int, rezka_url: str):
     """
     from HdRezkaApi import HdRezkaApi
 
+    from proxy_manager import proxy_manager
+
     cookies = rezka_session.cookies if rezka_session else {"hdmbbs": "1"}
+    proxies = proxy_manager.get_requests_proxies("rezka") or {}
     try:
-        rezka = HdRezkaApi(rezka_url, cookies=cookies)
+        rezka = HdRezkaApi(rezka_url, cookies=cookies, proxy=proxies)
         if rezka.ok:
             return rezka, rezka_url
     except Exception:
@@ -258,7 +274,7 @@ def _get_rezka_obj(item_id: int, rezka_url: str):
     new_url = _recover_rezka_url(item_id, rezka_url)
     if new_url:
         try:
-            rezka = HdRezkaApi(new_url, cookies=cookies)
+            rezka = HdRezkaApi(new_url, cookies=cookies, proxy=proxies)
             if rezka.ok:
                 return rezka, new_url
         except Exception:
