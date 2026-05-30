@@ -29,7 +29,7 @@ import threading
 import time
 from urllib.parse import parse_qs, unquote, urlparse
 
-from settings import settings
+import settings as settings_module
 
 logger = logging.getLogger("parsclode.proxy")
 
@@ -51,14 +51,14 @@ class ProxyManager:
     def _service_proxy_url(self, service: str | None) -> str | None:
         if not service:
             return None
-        raw = getattr(settings, f"proxy_{service}", None)
+        raw = getattr(settings_module.settings, f"proxy_{service}", None)
         if raw and str(raw).strip():
             return str(raw).strip()
         return None
 
     # ── binary detection ───────────────────────────────────
     def detect_xray_binary(self) -> str | None:
-        configured = settings.xray_binary
+        configured = settings_module.settings.xray_binary
         if configured:
             found = shutil.which(configured) or (configured if os.path.exists(configured) else None)
             if found:
@@ -171,11 +171,11 @@ class ProxyManager:
                     "Xray/sing-box binary not found. Install xray-core and/or set XRAY_BINARY."
                 )
             vless = self.parse_vless_url(vless_url)
-            base = settings.xray_port_base + len(self._xray)
+            base = settings_module.settings.xray_port_base + len(self._xray)
             port = self._free_port(base)
             config = self._build_xray_config(vless, port)
 
-            cfg_dir = os.path.join(settings.app_data_dir, "xray")
+            cfg_dir = os.path.join(settings_module.settings.app_data_dir, "xray")
             os.makedirs(cfg_dir, exist_ok=True)
             cfg_path = os.path.join(cfg_dir, f"xray_{port}.json")
             with open(cfg_path, "w", encoding="utf-8") as f:
@@ -277,7 +277,7 @@ class ProxyManager:
         return {
             "services": services,
             "xray_binary": self.detect_xray_binary(),
-            "xray_configured": settings.xray_binary,
+            "xray_configured": settings_module.settings.xray_binary,
             "xray_processes": running,
         }
 

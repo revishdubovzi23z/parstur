@@ -36,10 +36,10 @@ def _restore_settings_after_test():
 
 
 def _settings(monkeypatch: pytest.MonkeyPatch, **overrides):
-    """Point proxy_manager's module-level ``settings`` at a fresh,
+    """Point proxy_manager's module-level ``settings_module.settings`` at a fresh,
     env-free Settings instance with the given field overrides."""
     s = Settings(_env_file=None, **overrides)
-    monkeypatch.setattr(pm_mod, "settings", s)
+    monkeypatch.setattr(pm_mod.settings_module, "settings", s)
     return s
 
 
