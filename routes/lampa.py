@@ -160,114 +160,180 @@ def get_lampa_plugin(request: Request, key: str | None = None):
         }});
     }});
 
-    // 4. Добавляем в основное левое меню Lampa
-    if (window.Lampa && Lampa.Menu) {{
-        Lampa.Menu.add({{
-            id: 'antigravity',
-            title: 'Мои коллекции',
-            icon: `<svg height="36" viewBox="0 0 24 24" width="36" xmlns="http://www.w3.org/2000/svg"><path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H8V4h12v12z" fill="currentColor"/></svg>`,
-            onSelect: function () {{
-                Lampa.Activity.push({{
-                    title: '📚 Мои коллекции',
-                    component: 'antigravity_collections',
-                    page: 1
-                }});
-            }}
+    // 4. Добавляем в основное левое меню Lampa через DOM-инъекцию (как в проверенном TMDB плагине)
+    function addMenuButton() {{
+        if ($('.menu .menu__list li[data-action="antigravity_collections"]').length) return;
+
+        var $button = $(
+            '<li class="menu__item selector" data-action="antigravity_collections">' +
+            '<div class="menu__ico">' +
+            '<svg height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg"><path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2z" fill="currentColor"/></svg>' +
+            '</div>' +
+            '<div class="menu__text">Мои коллекции</div>' +
+            '</li>'
+        );
+
+        $button.on('hover:enter', function () {{
+            Lampa.Activity.push({{
+                url: '',
+                title: '📚 Мои коллекции',
+                component: 'antigravity_collections',
+                page: 1
+            }});
         }});
+
+        var $list = $('.menu .menu__list').eq(0);
+        if ($list.length) $list.append($button);
     }}
 
-    // 5. Регистрируем кастомный компонент antigravity_collections
-    Lampa.Component.add('antigravity_collections', function (object) {{
-        var network = new Lampa.Reguest();
-        var scroll  = new Lampa.Scroll({{
-            mask: true,
-            over: true,
-            parent: object.div
-        }});
-        var items   = [];
-        var active  = 0;
+    // Вспомогательный адаптер для папок-коллекций
+    function adaptFolderToCard(folder) {{
+        var name = folder.name;
+        var count = folder.count != null ? folder.count : '';
+        return {{
+            source: 'antigravity',
+            type: 'movie',
+            id: 'antigravity_folder_' + folder.id,
+            title: name,
+            original_title: name,
+            name: name,
+            original_name: name,
+            overview: count ? (count + ' шт.') : '',
+            release_date: '',
+            first_air_date: '',
+            poster_path: folder.cover_poster_url || '',
+            backdrop_path: folder.cover_poster_url || '',
+            vote_average: 0,
+            vote_count: 0,
+            adult: false,
+            genre_ids: [],
+            popularity: 0,
+            media_type: 'movie',
+            _list_id: folder.id,
+            _list_name: name
+        }};
+    }}
 
-        this.create = function () {{
+    // 5. Регистрируем кастомный компонент antigravity_collections (первый уровень — список папок)
+    function foldersComponent(object) {{
+        var comp = new Lampa.InteractionCategory(object);
+
+        comp.create = function () {{
             var self = this;
             this.activity.loader(true);
 
-            var url = buildUrl('/api/lampa/collections');
-            network.silent(url, function (data) {{
-                self.activity.loader(false);
-                if (data && data.collections && data.collections.length) {{
-                    self.build(data.collections);
-                }} else {{
-                    self.empty();
-                }}
-            }}, function () {{
-                self.activity.loader(false);
-                self.empty('Ошибка загрузки данных');
-            }});
-        }};
-
-        this.empty = function (title) {{
-            var empty = new Lampa.Empty({{
-                title: title || 'Нет коллекций',
-                descr: 'Добавьте фильмы или сериалы в коллекции на сайте Antigravity Tracker.'
-            }});
-            scroll.append(empty.render());
-            this.enable();
-        }};
-
-        this.build = function (collections) {{
-            var self = this;
-            var container = $('<div class="category-full"></div>');
-
-            collections.forEach(function (c) {{
-                var card = Lampa.Template.get('card', {{
-                    title: c.name,
-                    release_date: c.count + ' шт.'
+            fetch(buildUrl('/api/lampa/collections'), {{ headers: headers() }})
+                .then(function (r) {{ return r.json(); }})
+                .then(function (data) {{
+                    self.activity.loader(false);
+                    var collections = (data && data.collections) || [];
+                    if (collections.length) {{
+                        var cards = collections.map(adaptFolderToCard);
+                        self.build({{
+                            results: cards,
+                            total_pages: 1,
+                            page: 1
+                        }});
+                    }} else {{
+                        self.empty();
+                    }}
+                }})
+                .catch(function (err) {{
+                    self.activity.loader(false);
+                    self.empty('Не удалось загрузить коллекции');
                 }});
-
-                if (c.cover_poster_url) {{
-                    card.find('img').attr('src', c.cover_poster_url);
-                }} else {{
-                    card.find('.card__img').addClass('card__img--no');
-                }}
-
-                card.on('hover:focus', function () {{
-                    active = items.indexOf(card);
-                }});
-
-                card.on('hover:enter', function () {{
-                    Lampa.Activity.push({{
-                        title: c.name,
-                        component: 'category',
-                        source: 'antigravity',
-                        url: buildUrl('/api/lampa/collection/' + c.id),
-                        page: 1
-                    }});
-                }});
-
-                container.append(card);
-                items.push(card);
-            }});
-
-            scroll.append(container);
-            this.enable();
         }};
 
-        this.enable = function () {{
-            Lampa.Controller.enable('content');
+        comp.nextPageReuest = function (obj, resolve, reject) {{
+            resolve.call(comp, {{ results: [], total_pages: 1, page: 1 }});
         }};
 
-        this.destroy = function () {{
-            network.clear();
-            scroll.destroy();
-            if (items.length) {{
-                items.forEach(function (item) {{ item.remove(); }});
+        comp.cardRender = function (obj, element, card) {{
+            card.onMenu = false;
+            card.onEnter = function () {{
+                Lampa.Activity.push({{
+                    url: '',
+                    title: element._list_name || element.title,
+                    component: 'antigravity_collection_content',
+                    list_id: element._list_id,
+                    page: 1
+                }});
+            }};
+        }};
+
+        return comp;
+    }}
+
+    // Кастомный компонент для содержимого папки (второй уровень)
+    function folderContentComponent(object) {{
+        var comp = new Lampa.InteractionCategory(object);
+
+        function loadPage(page, resolve, reject) {{
+            if (!object.list_id) {{
+                reject.call(comp);
+                return;
             }}
+
+            var url = buildUrl('/api/lampa/collection/' + object.list_id);
+            url += (url.indexOf('?') >= 0 ? '&' : '?') + 'page=' + page;
+
+            fetch(url, {{ headers: headers() }})
+                .then(function (r) {{ return r.json(); }})
+                .then(function (data) {{
+                    var items = ((data && data.results) || [])
+                        .filter(function (c) {{ return c && c.id != null; }});
+
+                    resolve.call(comp, {{
+                        results: items,
+                        page: page,
+                        total_pages: (data && data.total_pages) || 1
+                    }});
+                }})
+                .catch(function (err) {{
+                    reject.call(comp);
+                }});
+        }}
+
+        comp.create = function () {{
+            loadPage(object.page || 1, this.build.bind(this), this.empty.bind(this));
         }};
 
-        this.render = function () {{
-            return scroll.render();
+        comp.nextPageReuest = function (obj, resolve, reject) {{
+            loadPage(obj.page, resolve, reject);
         }};
-    }});
+
+        comp.cardRender = function (obj, element, card) {{
+            card.onMenu = false;
+            card.onEnter = function () {{
+                Lampa.Activity.push({{
+                    url: '',
+                    component: 'full',
+                    id: element.id,
+                    method: element.media_type === 'tv' ? 'tv' : 'movie',
+                    source: 'tmdb',
+                    card: element
+                }});
+            }};
+        }};
+
+        return comp;
+    }}
+
+    // Инициализация плагина
+    function bootstrap() {{
+        Lampa.Component.add('antigravity_collections', foldersComponent);
+        Lampa.Component.add('antigravity_collection_content', folderContentComponent);
+
+        if (window.appready) {{
+            addMenuButton();
+        }} else {{
+            Lampa.Listener.follow('app', function (e) {{
+                if (e.type === 'ready') addMenuButton();
+            }});
+        }}
+    }}
+
+    bootstrap();
 
     // 6. Настройки плагина
     Lampa.SettingsApi.addParam({{
