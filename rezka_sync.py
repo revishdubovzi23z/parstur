@@ -84,9 +84,12 @@ def _login_cookies() -> dict:
     if not REZKA_EMAIL or not REZKA_PASSWORD:
         return dict(REZKA_COOKIES)
     try:
+        from proxy_manager import proxy_manager
+
+        proxies = proxy_manager.get_requests_proxies("rezka") or {}
         from HdRezkaApi.session import HdRezkaSession  # type: ignore
 
-        session = HdRezkaSession(REZKA_ORIGIN)
+        session = HdRezkaSession(REZKA_ORIGIN, proxy=proxies)
         session.login(REZKA_EMAIL, REZKA_PASSWORD)
         cookies = dict(REZKA_COOKIES)
         cookies.update(session.cookies)
@@ -461,7 +464,10 @@ def _sync_search(query):
 
     time.sleep(random.uniform(4.0, 8.0))
     try:
-        results = HdRezkaSearch(REZKA_ORIGIN)(query)
+        from proxy_manager import proxy_manager
+
+        proxies = proxy_manager.get_requests_proxies("rezka") or {}
+        results = HdRezkaSearch(REZKA_ORIGIN, proxy=proxies)(query)
         return [
             {
                 "title": r.get("title", ""),
@@ -482,7 +488,10 @@ def _sync_load_rezka(url):
 
     time.sleep(random.uniform(4.0, 8.0))
     try:
-        rezka = HdRezkaApi(url)
+        from proxy_manager import proxy_manager
+
+        proxies = proxy_manager.get_requests_proxies("rezka") or {}
+        rezka = HdRezkaApi(url, proxy=proxies)
         if rezka.ok:
             return rezka
     except Exception:
@@ -746,11 +755,26 @@ async def _search_rezka_batch(items, db, conn, offset: int = 0, overall_total: i
     semaphore = asyncio.Semaphore(REZKA_CONCURRENCY)
     _reset_batch_errors()
 
+    from proxy_manager import proxy_manager
+
+    proxies = proxy_manager.get_requests_proxies("rezka")
+    proxy_url = proxies.get("http") if proxies else None
+
+    connector = None
+    if proxy_url:
+        try:
+            from aiohttp_socks import ProxyConnector
+
+            connector = ProxyConnector.from_url(proxy_url)
+        except ImportError:
+            logger.warning("[rezka] aiohttp_socks is not installed! Cannot use proxy.")
+
     # 3.15: prefer cookies from a logged-in HdRezka session — anonymous
     # access is rate-limited and often returns empty search payloads.
     async with aiohttp.ClientSession(
         headers=REZKA_HEADERS,
         cookies=_login_cookies(),
+        connector=connector,
     ) as session:
         item_infos = []
         for row in items:

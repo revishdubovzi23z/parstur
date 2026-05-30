@@ -148,3 +148,5 @@ libsql>=0.1.0
     # via -r requirements.in
 
 PySocks
+
+aiohttp-socks

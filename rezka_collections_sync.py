@@ -32,7 +32,11 @@ REZKA_PATH_TO_CATEGORY = {
 def _login():
     from HdRezkaApi import HdRezkaSession
 
-    session = HdRezkaSession(REZKA_ORIGIN)
+    from proxy_manager import proxy_manager
+
+    proxies = proxy_manager.get_requests_proxies("rezka") or {}
+
+    session = HdRezkaSession(REZKA_ORIGIN, proxy=proxies)
     try:
         session.login(REZKA_EMAIL, REZKA_PASSWORD)
     except Exception as e:
@@ -49,11 +53,16 @@ def _get_folders(session):
     import requests
     from bs4 import BeautifulSoup
 
+    from proxy_manager import proxy_manager
+
+    proxies = proxy_manager.get_requests_proxies("rezka") or {}
+
     r = requests.get(
         f"{REZKA_ORIGIN}/favorites/",
         headers=REZKA_PAGE_HEADERS,
         cookies=session.cookies,
-        timeout=20,
+        timeout=15,
+        proxies=proxies,
     )
     soup = BeautifulSoup(r.content, "html.parser")
     sidebar = soup.find("div", class_="b-favorites_content__sidebarbar")
@@ -87,11 +96,16 @@ def _get_folder_items(url, session):
     while True:
         page_url = url if page == 1 else f"{url}page/{page}/"
         logger.info(f"    [fetch] Loading favorites page {page}: {page_url}")
+        from proxy_manager import proxy_manager
+
+        proxies = proxy_manager.get_requests_proxies("rezka") or {}
+
         r = requests.get(
             page_url,
             headers=REZKA_PAGE_HEADERS,
             cookies=session.cookies,
-            timeout=20,
+            timeout=15,
+            proxies=proxies,
         )
         if r.status_code != 200:
             logger.warning(f"      [!] Page {page} returned status {r.status_code}")
@@ -141,12 +155,17 @@ def _get_folder_items(url, session):
 def _add_to_rezka_folder(post_id, cat_id, session):
     import requests
 
+    from proxy_manager import proxy_manager
+
+    proxies = proxy_manager.get_requests_proxies("rezka") or {}
+
     r = requests.post(
         f"{REZKA_ORIGIN}/ajax/favorites/",
         data={"post_id": str(post_id), "cat_id": str(cat_id), "action": "add_post"},
         headers=REZKA_HEADERS,
         cookies=session.cookies,
         timeout=10,
+        proxies=proxies,
     )
     return r.json().get("success", False)
 

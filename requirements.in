@@ -62,3 +62,5 @@ libsql>=0.1.0
 # PySocks>=1.7.1
 
 PySocks
+
+aiohttp-socks
