@@ -144,3 +144,5 @@ websockets==16.0
     # via -r requirements.in
 yarl==1.23.0
     # via aiohttp
+libsql>=0.1.0
+    # via -r requirements.in
