@@ -899,7 +899,10 @@ const externalPlayers = computed(() => {
                 :default="sub.isDefault"
               />
             </video>
-            <div class="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
+          </div>
+
+          <div v-if="player.activeTab !== 'kinohub' && player.streamUrl" class="mt-2">
+            <div class="flex flex-wrap items-center gap-2 text-[11px]">
               <span class="rounded bg-slate-100 px-2 py-0.5 text-slate-600">
                 Качество: {{ player.activeTab === 'kinopub' ? (player.kinopubVideo?.files?.[player.kinopubFileIdx ?? 0]?.quality ?? '—') : (player.streamQuality ?? '—') }}
               </span>
