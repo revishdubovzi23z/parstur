@@ -22,6 +22,7 @@ def get_feed(
     hide_ignored: bool = True,
     hide_rated: bool = False,
     hide_collected: bool = False,
+    sort_by: str = "date_desc",
     page: int = 1,
     limit: int = None,
 ):
@@ -42,6 +43,7 @@ def get_feed(
         hide_ignored=hide_ignored,
         hide_rated=hide_rated,
         hide_collected=hide_collected,
+        sort_by=sort_by,
         page=page,
         limit=limit,
     )

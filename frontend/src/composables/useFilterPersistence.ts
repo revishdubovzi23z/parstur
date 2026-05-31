@@ -32,6 +32,7 @@ export const FILTER_STORAGE_KEYS = {
   maxImdb: 'f_maxImdb',
   hideRated: 'f_hideRated',
   hideCollected: 'f_hideCollected',
+  sortBy: 'f_sortBy',
   page: 'f_page',
 } as const
 
@@ -117,6 +118,7 @@ export function loadPersistedFilters(): FeedFilters {
       read(FILTER_STORAGE_KEYS.hideCollected),
       DEFAULT_FEED_FILTERS.hideCollected,
     ),
+    sortBy: (read(FILTER_STORAGE_KEYS.sortBy) as FeedFilters['sortBy']) ?? DEFAULT_FEED_FILTERS.sortBy,
   }
 }
 
@@ -211,6 +213,11 @@ export function attachFilterPersistence(): () => void {
     () => feed.filters.hideCollected,
     (v) => String(v),
     FILTER_STORAGE_KEYS.hideCollected,
+  )
+  watchField(
+    () => feed.filters.sortBy,
+    (v) => v,
+    FILTER_STORAGE_KEYS.sortBy,
   )
   watchField(
     () => feed.page,

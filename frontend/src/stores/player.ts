@@ -404,7 +404,10 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
       }
 
       // Default source logic based on availability and master switches
-      if (this.rezkaEnabled && (dbItem.item?.rezka_url || !dbItem.item?.kinopub_id)) {
+      if (this.kinohubEnabled) {
+        this.activeTab = 'kinohub'
+        this.source = null
+      } else if (this.rezkaEnabled && (dbItem.item?.rezka_url || !dbItem.item?.kinopub_id)) {
         this.activeTab = 'rezka'
         this.source = 'rezka'
         void this.loadInfo(itemId, 'rezka')
@@ -412,9 +415,6 @@ export const useItemPlayerStore = defineStore('itemPlayer', {
         this.activeTab = 'kinopub'
         this.source = 'kinopub'
         void this.loadKinopubInfo(itemId)
-      } else if (this.kinohubEnabled) {
-        this.activeTab = 'kinohub'
-        this.source = null
       } else if (this.rezkaEnabled) {
         // Fallback to Rezka even if no URL (it might resolve via search)
         this.activeTab = 'rezka'

@@ -177,32 +177,6 @@ const kinopubUrl = computed(() => {
   return null
 })
 
-// PR 6 — Android intent:// deep-link. The official kino.pub app is
-// shipped as `com.kinopub` (verified via 4PDA / Appteka). We use the
-// standard Chrome intent URI with `S.browser_fallback_url` so on
-// browsers that don't honour `intent://` (desktop Chrome, Firefox,
-// Safari) clicking the link still lands on `https://kino.pub/item/…`
-// instead of an error page.
-//
-// Spec: https://developer.chrome.com/docs/multidevice/android/intents
-const kinopubAndroidIntentUrl = computed(() => {
-  const fallback = kinopubUrl.value
-  if (!fallback) return null
-  const it = items.item
-  if (!it?.kinopub_id) return null
-  // `intent://` requires the path/authority of the data URI. We
-  // mirror the canonical `kino.pub/item/<id>` so when the Android
-  // app's intent-filter matches `https://kino.pub/...` it picks it
-  // up; pass `scheme=https` to keep the data URI in step with the
-  // app's manifest filter rather than relying on a custom scheme.
-  const path = `kino.pub/item/${encodeURIComponent(String(it.kinopub_id))}`
-  const encodedFallback = encodeURIComponent(fallback)
-  return (
-    `intent://${path}` +
-    `#Intent;scheme=https;package=com.kinopub;` +
-    `S.browser_fallback_url=${encodedFallback};end`
-  )
-})
 
 // Edit-IDs panel — kino.pub bind state.
 const draftKinopub = ref('')
@@ -807,19 +781,7 @@ function onToggleEditIds(): void {
             >
               ▶ Смотреть на kino.pub
             </button>
-            <!-- PR 6: Android intent:// deep-link. Visible whenever
-                 the row is bound — no auth check, the app handles
-                 its own login. Falls back to the browser kino.pub
-                 URL on non-Android browsers. -->
-            <a
-              v-if="kinopubAndroidIntentUrl"
-              :href="kinopubAndroidIntentUrl"
-              rel="noopener"
-              class="block rounded-md bg-emerald-700 px-3 py-2 text-center text-xs font-medium text-white hover:bg-emerald-800"
-              data-testid="item-modal-watch-kinopub-android"
-            >
-              📱 Открыть в Android-приложении kino.pub
-            </a>
+
           </div>
         </section>
 

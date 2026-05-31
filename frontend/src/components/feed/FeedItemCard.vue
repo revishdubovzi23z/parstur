@@ -141,10 +141,10 @@ function onHoverReset(): void {
           </svg>
         </button>
 
-        <div class="flex flex-col gap-1.5 opacity-0 translate-y-4 pointer-events-none transition-all duration-300 group-hover/actions:opacity-100 group-hover/actions:translate-y-0 group-hover/actions:pointer-events-auto mb-1">
+        <div class="flex flex-col gap-1 opacity-0 translate-y-4 pointer-events-none transition-all duration-300 group-hover/actions:opacity-100 group-hover/actions:translate-y-0 group-hover/actions:pointer-events-auto mb-0.5">
           <button
             type="button"
-            class="flex items-center justify-center w-8 h-8 rounded-full bg-white/95 text-sm font-bold shadow hover:bg-white transition-colors"
+            class="flex items-center justify-center w-7 h-7 rounded-full bg-white/95 text-xs font-bold shadow hover:bg-white transition-colors"
             :class="item.is_watched === 1 ? 'text-emerald-600' : 'text-slate-400'"
             :title="item.is_watched === 1 ? 'Отметить как непросмотренное' : 'Отметить как просмотренное'"
             :aria-label="item.is_watched === 1 ? 'Не просмотрено' : 'Просмотрено'"
@@ -155,7 +155,7 @@ function onHoverReset(): void {
           </button>
           <button
             type="button"
-            class="flex items-center justify-center w-8 h-8 rounded-full bg-white/95 text-sm font-bold shadow hover:bg-white transition-colors disabled:opacity-50"
+            class="flex items-center justify-center w-7 h-7 rounded-full bg-white/95 text-xs font-bold shadow hover:bg-white transition-colors disabled:opacity-50"
             :class="item.is_ignored === 1 ? 'text-emerald-600' : 'text-red-600'"
             :title="item.is_ignored === 1 ? 'Восстановить из корзины' : 'Скрыть (в корзину)'"
             :aria-label="item.is_ignored === 1 ? 'Восстановить' : 'Скрыть'"
@@ -166,7 +166,7 @@ function onHoverReset(): void {
           </button>
           <button
             type="button"
-            class="flex items-center justify-center w-8 h-8 rounded-full bg-white/95 text-sm font-semibold text-slate-700 shadow hover:bg-white transition-colors disabled:opacity-50"
+            class="flex items-center justify-center w-7 h-7 rounded-full bg-white/95 text-xs font-semibold text-slate-700 shadow hover:bg-white transition-colors disabled:opacity-50"
             :disabled="singleUpdateRunning"
             :title="singleUpdateRunning ? 'Уже идёт перепроверка' : 'Обновить метаданные'"
             aria-label="Обновить метаданные"
@@ -177,7 +177,7 @@ function onHoverReset(): void {
           </button>
           <button
             type="button"
-            class="flex items-center justify-center w-8 h-8 rounded-full bg-white/95 text-xs font-semibold text-slate-400 shadow hover:bg-white transition-colors"
+            class="flex items-center justify-center w-7 h-7 rounded-full bg-white/95 text-[10px] font-semibold text-slate-400 shadow hover:bg-white transition-colors"
             title="Сбросить данные…"
             aria-label="Сбросить данные"
             data-testid="feed-item-hover-reset"

@@ -31,6 +31,7 @@ const form = reactive({
   maxImdb: feed.filters.maxImdb,
   hideRated: feed.filters.hideRated,
   hideCollected: feed.filters.hideCollected,
+  sortBy: feed.filters.sortBy,
 })
 
 let syncingFromStore = false
@@ -49,6 +50,7 @@ watch(
     form.maxImdb = next.maxImdb
     form.hideRated = next.hideRated
     form.hideCollected = next.hideCollected
+    form.sortBy = next.sortBy
     // Defer the unset so the form-watcher below sees `syncingFromStore`
     // = true and skips the auto-apply call we'd otherwise loop on.
     queueMicrotask(() => {
@@ -82,6 +84,7 @@ async function apply(): Promise<void> {
     maxImdb: clamp(form.maxImdb, 0, 10),
     hideRated: form.hideRated,
     hideCollected: form.hideCollected,
+    sortBy: form.sortBy,
   })
   await feed.fetchFeed()
   // Re-pull category counts so they reflect the new hide flags.
@@ -117,7 +120,7 @@ function scheduleApply(immediate: boolean): void {
 // filtered results immediately. Text/date/year inputs keep the
 // debounced path so typing doesn't fan out requests.
 watch(
-  () => [form.hideRated, form.hideCollected],
+  () => [form.hideRated, form.hideCollected, form.sortBy],
   () => scheduleApply(true),
 )
 watch(
@@ -179,6 +182,22 @@ onBeforeUnmount(() => {
           class="mt-1 w-full rounded-xl border border-slate-200/80 bg-white/80 px-3 py-2 text-[13px] shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all"
           data-testid="feed-filters-search"
         />
+      </label>
+      <label class="w-48">
+        <span class="block text-xs font-medium uppercase tracking-wide text-slate-500">
+          Сортировка
+        </span>
+        <select
+          v-model="form.sortBy"
+          class="mt-1 w-full rounded-xl border border-slate-200/80 bg-white/80 px-3 py-2 text-[13px] shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all"
+          data-testid="feed-filters-sort-by"
+        >
+          <option value="date_desc">По дате добавления</option>
+          <option value="kp_desc">По рейтингу КП (убывание)</option>
+          <option value="kp_asc">По рейтингу КП (возрастание)</option>
+          <option value="imdb_desc">По рейтингу IMDb (убывание)</option>
+          <option value="imdb_asc">По рейтингу IMDb (возрастание)</option>
+        </select>
       </label>
       <label class="w-24">
         <span class="block text-xs font-medium uppercase tracking-wide text-slate-500">

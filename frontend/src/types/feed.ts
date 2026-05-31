@@ -78,6 +78,7 @@ export interface FeedFilters {
   maxImdb: number
   hideRated: boolean
   hideCollected: boolean
+  sortBy: 'date_desc' | 'kp_desc' | 'kp_asc' | 'imdb_desc' | 'imdb_asc'
 }
 
 export const DEFAULT_FEED_FILTERS: FeedFilters = {
@@ -94,6 +95,7 @@ export const DEFAULT_FEED_FILTERS: FeedFilters = {
   maxImdb: 10,
   hideRated: false,
   hideCollected: false,
+  sortBy: 'date_desc',
 }
 
 // ROADMAP Stage 10.5 — types for the categories and collections side

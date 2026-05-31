@@ -469,6 +469,7 @@ class DbItemsMixin:
         hide_ignored: bool = True,
         hide_rated: bool = False,
         hide_collected: bool = False,
+        sort_by: str = "date_desc",
         page: int = 1,
         limit: int = 20,
     ) -> dict:
@@ -641,6 +642,20 @@ class DbItemsMixin:
                     else "latest_release DESC NULLS LAST"
                 )
             )
+
+            if sort_by == "kp_desc":
+                where_clauses.append("items.kp_rating > 0")
+                order_by = "items.kp_rating DESC, latest_release DESC NULLS LAST"
+            elif sort_by == "kp_asc":
+                where_clauses.append("items.kp_rating > 0")
+                order_by = "items.kp_rating ASC, latest_release DESC NULLS LAST"
+            elif sort_by == "imdb_desc":
+                where_clauses.append("items.imdb_rating > 0")
+                order_by = "items.imdb_rating DESC, latest_release DESC NULLS LAST"
+            elif sort_by == "imdb_asc":
+                where_clauses.append("items.imdb_rating > 0")
+                order_by = "items.imdb_rating ASC, latest_release DESC NULLS LAST"
+
             join = ""
             join_params: list = []
             if collection_id:

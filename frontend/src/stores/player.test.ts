@@ -414,26 +414,17 @@ describe('useItemPlayerStore', () => {
   })
 
   describe('openTrailer / openStream / close', () => {
-    it('openStream defaults to rezka and kicks off the info + sources fetches', async () => {
-      vi.mocked(globalThis.fetch)
-        // openStream first queries `/api/item/<id>` to read the
-        // per-row source-enable flags, then fires loadInfo +
-        // loadSources in parallel. The order they resolve in is
-        // best-effort; we only assert the side effects.
-        .mockResolvedValue(mockJson({}))
+    it('openStream defaults to kinohub', async () => {
+      vi.mocked(globalThis.fetch).mockResolvedValue(mockJson({}))
       authorise()
       const player = useItemPlayerStore()
       const opening = player.openStream(42, 'X')
-      // Synchronous side effects: mode + itemId latch immediately.
       expect(player.mode).toBe('stream')
       expect(player.itemId).toBe(42)
       await opening
       await flushPromises()
-      // Source resolves to rezka once `/api/item/<id>` returns an
-      // empty payload (defaults to the rezka tab when no kinopub_id).
-      expect(player.source).toBe('rezka')
-      // /api/item/<id> + loadInfo + loadSources → at least 3 calls.
-      expect(vi.mocked(globalThis.fetch).mock.calls.length).toBeGreaterThanOrEqual(2)
+      expect(player.activeTab).toBe('kinohub')
+      expect(player.source).toBeNull()
     })
 
     it('close() resets all state', async () => {
