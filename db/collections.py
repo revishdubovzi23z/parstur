@@ -42,6 +42,7 @@ class DbCollectionsMixin:
             is_sys = c.execute("SELECT is_system FROM collections WHERE id = ?", (id,)).fetchone()
             if is_sys and is_sys[0]:
                 raise ValueError("Cannot delete system collection")
+            c.execute("DELETE FROM collection_items WHERE collection_id = ?", (id,))
             c.execute("DELETE FROM collections WHERE id = ?", (id,))
 
     def rename_collection(self, id: int, name: str) -> None:
