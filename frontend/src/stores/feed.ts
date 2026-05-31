@@ -68,6 +68,9 @@ export function buildFeedUrl(
   if (filters.maxImdb < 10) params.set('max_imdb', String(filters.maxImdb))
   if (filters.hideRated) params.set('hide_rated', 'true')
   if (filters.hideCollected) params.set('hide_collected', 'true')
+  if (filters.sortBy && filters.sortBy !== 'date_desc') {
+    params.set('sort_by', filters.sortBy)
+  }
   return `/api/feed?${params.toString()}`
 }
 
