@@ -218,11 +218,12 @@ export const useSyncStore = defineStore('sync', {
      * isolation.
      */
     applyStatusMessage(msg: StatusMessage): void {
-      // Track single_update transitions — we want to nudge the item
+      // Track process transitions — we want to nudge the item
       // detail store to refresh whenever the backend reports a
-      // terminal state for that key (legacy `index.html` re-fetched
-      // the card manually after the user clicked "reprocess").
-      const prevSingleUpdate = this.statuses.single_update
+      // terminal state for any sync process (not just single_update),
+      // so if the user manually started "Rezka Sync" while viewing an
+      // item, the card auto-refreshes when it completes.
+      const prevStatuses = { ...this.statuses }
       if (msg.statuses) {
         for (const key of Object.keys(msg.statuses)) {
           if (isProcessKey(key)) {
@@ -232,12 +233,23 @@ export const useSyncStore = defineStore('sync', {
       } else if (msg.key && msg.value && isProcessKey(msg.key)) {
         this.statuses[msg.key] = msg.value
       }
-      const nextSingleUpdate = this.statuses.single_update
-      if (
-        prevSingleUpdate === 'running' &&
-        (nextSingleUpdate === 'completed' || nextSingleUpdate === 'stopped')
-      ) {
+
+      let anyFinished = false
+      for (const key of PROCESS_KEYS) {
+        if (
+          prevStatuses[key] === 'running' &&
+          (this.statuses[key] === 'completed' || this.statuses[key] === 'stopped')
+        ) {
+          anyFinished = true
+          break
+        }
+      }
+      if (anyFinished) {
+        // Nudge the currently open modal card to fetch the new metadata.
         useItemsStore().onSingleUpdateCompleted()
+        // Nudge the feed to redraw the current page so we see new posters/badges.
+        // fetchFeed() respects the current page and filters.
+        void useFeedStore().fetchFeed()
       }
       if (msg.progress) {
         for (const key of Object.keys(msg.progress)) {

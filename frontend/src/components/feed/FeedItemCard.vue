@@ -121,57 +121,71 @@ function onHoverReset(): void {
           NEW
         </span>
       </div>
-      <!-- Hover-only action shelf: «🔄 Обновить» + «🗑️ Сброс» sit
-           next to the always-visible bookmark FAB. Visible only on
-           hover (and on focus-within so keyboard users can reach
-           them) so they don't clutter the grid layout. -->
+      <!-- Hover-only action menu: groups all operations into a single
+           expandable dial to keep the UI clean. -->
       <div
-        class="absolute bottom-2 left-2 z-10 flex flex-col gap-1.5 opacity-0 translate-y-2 transition-all duration-300 group-hover:opacity-100 group-hover:translate-y-0 group-focus-within:opacity-100 group-focus-within:translate-y-0"
-        data-testid="feed-item-hover-actions"
+        class="absolute bottom-2 left-2 z-10 flex flex-col-reverse items-center gap-1.5 group/actions"
+        data-testid="feed-item-hover-actions-menu"
       >
         <button
           type="button"
-          class="flex items-center justify-center w-7 h-7 rounded-lg bg-white/90 text-sm font-bold shadow hover:bg-white"
-          :class="item.is_watched === 1 ? 'text-emerald-600' : 'text-slate-400'"
-          :title="item.is_watched === 1 ? 'Отметить как непросмотренное' : 'Отметить как просмотренное'"
-          :aria-label="item.is_watched === 1 ? 'Не просмотрено' : 'Просмотрено'"
-          data-testid="feed-item-hover-watched"
-          @click.stop="items.toggleWatchedById(item.id)"
+          class="flex items-center justify-center w-8 h-8 rounded-full bg-white/90 text-slate-700 shadow-md hover:bg-white opacity-0 translate-y-2 transition-all duration-300 group-hover:opacity-100 group-hover:translate-y-0 group-focus-within:opacity-100 group-focus-within:translate-y-0"
+          title="Действия"
+          aria-label="Действия"
+          @click.stop
         >
-          ✓
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <circle cx="12" cy="12" r="1"></circle>
+            <circle cx="12" cy="5" r="1"></circle>
+            <circle cx="12" cy="19" r="1"></circle>
+          </svg>
         </button>
-        <button
-          type="button"
-          class="flex items-center justify-center w-7 h-7 rounded-lg bg-white/90 text-sm font-bold shadow hover:bg-white disabled:opacity-50"
-          :class="item.is_ignored === 1 ? 'text-emerald-600' : 'text-red-600'"
-          :title="item.is_ignored === 1 ? 'Восстановить из корзины' : 'Скрыть (в корзину)'"
-          :aria-label="item.is_ignored === 1 ? 'Восстановить' : 'Скрыть'"
-          data-testid="feed-item-hover-ignore"
-          @click.stop="items.toggleIgnoreById(item.id)"
-        >
-          {{ item.is_ignored === 1 ? '↩' : '✕' }}
-        </button>
-        <button
-          type="button"
-          class="flex items-center justify-center w-7 h-7 rounded-lg bg-white/90 text-sm font-semibold text-slate-700 shadow hover:bg-white disabled:opacity-50"
-          :disabled="singleUpdateRunning"
-          :title="singleUpdateRunning ? 'Уже идёт перепроверка' : 'Обновить метаданные'"
-          aria-label="Обновить метаданные"
-          data-testid="feed-item-hover-reprocess"
-          @click.stop="onHoverReprocess"
-        >
-          🔄
-        </button>
-        <button
-          type="button"
-          class="flex items-center justify-center w-7 h-7 rounded-lg bg-white/90 text-xs font-semibold text-slate-400 shadow hover:bg-white"
-          title="Сбросить данные…"
-          aria-label="Сбросить данные"
-          data-testid="feed-item-hover-reset"
-          @click.stop="onHoverReset"
-        >
-          🗑️
-        </button>
+
+        <div class="flex flex-col gap-1.5 opacity-0 translate-y-4 pointer-events-none transition-all duration-300 group-hover/actions:opacity-100 group-hover/actions:translate-y-0 group-hover/actions:pointer-events-auto mb-1">
+          <button
+            type="button"
+            class="flex items-center justify-center w-8 h-8 rounded-full bg-white/95 text-sm font-bold shadow hover:bg-white transition-colors"
+            :class="item.is_watched === 1 ? 'text-emerald-600' : 'text-slate-400'"
+            :title="item.is_watched === 1 ? 'Отметить как непросмотренное' : 'Отметить как просмотренное'"
+            :aria-label="item.is_watched === 1 ? 'Не просмотрено' : 'Просмотрено'"
+            data-testid="feed-item-hover-watched"
+            @click.stop="items.toggleWatchedById(item.id)"
+          >
+            ✓
+          </button>
+          <button
+            type="button"
+            class="flex items-center justify-center w-8 h-8 rounded-full bg-white/95 text-sm font-bold shadow hover:bg-white transition-colors disabled:opacity-50"
+            :class="item.is_ignored === 1 ? 'text-emerald-600' : 'text-red-600'"
+            :title="item.is_ignored === 1 ? 'Восстановить из корзины' : 'Скрыть (в корзину)'"
+            :aria-label="item.is_ignored === 1 ? 'Восстановить' : 'Скрыть'"
+            data-testid="feed-item-hover-ignore"
+            @click.stop="items.toggleIgnoreById(item.id)"
+          >
+            {{ item.is_ignored === 1 ? '↩' : '✕' }}
+          </button>
+          <button
+            type="button"
+            class="flex items-center justify-center w-8 h-8 rounded-full bg-white/95 text-sm font-semibold text-slate-700 shadow hover:bg-white transition-colors disabled:opacity-50"
+            :disabled="singleUpdateRunning"
+            :title="singleUpdateRunning ? 'Уже идёт перепроверка' : 'Обновить метаданные'"
+            aria-label="Обновить метаданные"
+            data-testid="feed-item-hover-reprocess"
+            @click.stop="onHoverReprocess"
+          >
+            🔄
+          </button>
+          <button
+            type="button"
+            class="flex items-center justify-center w-8 h-8 rounded-full bg-white/95 text-xs font-semibold text-slate-400 shadow hover:bg-white transition-colors"
+            title="Сбросить данные…"
+            aria-label="Сбросить данные"
+            data-testid="feed-item-hover-reset"
+            @click.stop="onHoverReset"
+          >
+            🗑️
+          </button>
+        </div>
       </div>
       <button
         type="button"

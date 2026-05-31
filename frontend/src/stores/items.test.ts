@@ -193,16 +193,10 @@ describe('useItemsStore', () => {
       )
     })
 
-    it('toggleIgnore POSTs to /api/ignore and propagates to the feed store', async () => {
+    it('toggleIgnore POSTs to /api/ignore and removes the item from the feed store', async () => {
       vi.mocked(globalThis.fetch)
         .mockResolvedValueOnce(mockJson(DETAIL_PAYLOAD)) // open
         .mockResolvedValueOnce(mockJson({ status: 'success' })) // ignore
-        .mockResolvedValueOnce(
-          mockJson({
-            ...DETAIL_PAYLOAD,
-            item: baseItem({ is_ignored: 1 }),
-          }),
-        ) // refresh
       authorise()
       const feed = useFeedStore()
       feed.items.push(baseItem())
@@ -212,9 +206,11 @@ describe('useItemsStore', () => {
       expect(ok).toBe(true)
       const ignoreCall = vi.mocked(globalThis.fetch).mock.calls[1]
       expect(String(ignoreCall[0])).toBe('/api/ignore/42')
-      expect(items.isIgnored).toBe(true)
-      // Feed entry mirrored the new flag.
-      expect(feed.items[0].is_ignored).toBe(1)
+
+      // Modal should be closed now
+      expect(items.isOpen).toBe(false)
+      // Feed entry should be removed
+      expect(feed.items).toHaveLength(0)
     })
 
     it('reprocess POSTs to /api/update_item', async () => {

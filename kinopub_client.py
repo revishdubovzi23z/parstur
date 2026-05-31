@@ -311,9 +311,25 @@ class KinopubClient:
         inside one folder. Returns the raw `items[]` array; callers
         only care about `id` / `title` / `year` / `type` for matching.
         """
-        body = self._request("GET", f"/v1/bookmarks/{int(folder_id)}")
-        items = body.get("items") or []
-        return list(items) if isinstance(items, list) else []
+        all_items = []
+        page = 1
+        while True:
+            body = self._request(
+                "GET", f"/v1/bookmarks/{int(folder_id)}", params={"page": page, "perpage": 100}
+            )
+            items = body.get("items") or []
+            if isinstance(items, list):
+                all_items.extend(items)
+
+            pagination = body.get("pagination") or {}
+            current = int(pagination.get("current") or 1)
+            total = int(pagination.get("total") or 1)
+
+            if current >= total:
+                break
+            page += 1
+
+        return all_items
 
     def create_bookmark_folder(self, title: str) -> dict:
         """`POST /v1/bookmarks/create` — create a folder with the

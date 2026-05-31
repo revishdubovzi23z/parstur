@@ -34,12 +34,14 @@ import {
   useKinopubStore,
   type KinopubSearchResult,
 } from '../stores/kinopub'
+import { useCollectionsStore } from '../stores/collections'
 import { useSyncStore } from '../stores/sync'
 import { useToastStore } from '../stores/toast'
 import PlayerModal from './PlayerModal.vue'
 
 const items = useItemsStore()
 const player = useItemPlayerStore()
+const collections = useCollectionsStore()
 const sync = useSyncStore()
 const kinopub = useKinopubStore()
 const toast = useToastStore()
@@ -60,6 +62,22 @@ async function onToggleWatched(): Promise<void> {
   const cur = items.item
   if (!cur) return
   await items.setWatched(!(cur.is_watched === 1))
+}
+
+const collectionsMenuOpen = ref(false)
+const memberCollections = computed(() => {
+  if (!items.item) return []
+  return collections.collectionsForItem(items.item.id)
+})
+const isBookmarked = computed(() => memberCollections.value.length > 0)
+
+async function onToggleCollection(collectionId: number): Promise<void> {
+  if (!items.item) return
+  await collections.toggleItem(items.item.id, collectionId)
+}
+
+function isCollectionMember(collectionId: number): boolean {
+  return memberCollections.value.includes(collectionId)
 }
 
 // Edit-IDs draft state. Re-seeded from store whenever the open item
@@ -99,6 +117,7 @@ watch(
       showResetDialog.value = honourPending
       if (honourPending) items.pendingResetDialog = false
       showEditIds.value = false
+      collectionsMenuOpen.value = false
       seedDraftsFromItem()
     }
   },
@@ -436,6 +455,63 @@ function onToggleEditIds(): void {
         data-testid="item-modal-header"
       >
         <div class="flex flex-shrink-0 items-center gap-2">
+          <!-- Collections dropdown menu -->
+          <div class="relative">
+            <button
+              type="button"
+              class="rounded-md px-2.5 py-1.5 text-xs font-medium border flex items-center gap-1.5 transition-colors"
+              :class="isBookmarked ? 'bg-indigo-600 text-white border-indigo-600 hover:bg-indigo-700' : 'bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200'"
+              @click="collectionsMenuOpen = !collectionsMenuOpen"
+            >
+              <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+              </svg>
+              {{ memberCollections.length }}
+            </button>
+            <div
+              v-if="collectionsMenuOpen"
+              class="absolute left-0 top-full mt-1 w-56 z-50 max-h-56 overflow-y-auto rounded-xl border border-slate-200 bg-white p-2 shadow-xl"
+            >
+              <div class="mb-2 flex items-center justify-between">
+                <p class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                  Закладки
+                </p>
+                <button
+                  type="button"
+                  class="text-xs text-slate-400 hover:text-slate-900"
+                  @click="collectionsMenuOpen = false"
+                >
+                  ✕
+                </button>
+              </div>
+              <ul v-if="collections.items.length" class="flex flex-col gap-0.5">
+                <li
+                  v-for="coll in collections.items"
+                  :key="coll.id"
+                >
+                  <button
+                    type="button"
+                    class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-slate-100 transition-colors"
+                    @click="onToggleCollection(coll.id)"
+                  >
+                    <span
+                      class="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border"
+                      :class="isCollectionMember(coll.id) ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-slate-300 text-transparent'"
+                    >
+                      ✓
+                    </span>
+                    <span class="truncate" :class="isCollectionMember(coll.id) ? 'text-indigo-700 font-semibold' : 'text-slate-700'">
+                      {{ coll.name }}
+                    </span>
+                  </button>
+                </li>
+              </ul>
+              <p v-else class="text-xs text-slate-400">
+                Создайте коллекцию в боковой панели.
+              </p>
+            </div>
+          </div>
+
           <button
             type="button"
             class="rounded-md bg-indigo-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
@@ -650,7 +726,7 @@ function onToggleEditIds(): void {
 
             <!-- 10.7g — primary playback actions, always visible -->
             <div
-              class="grid grid-cols-3 gap-2"
+              class="grid grid-cols-2 sm:grid-cols-4 gap-2"
               data-testid="item-modal-play-actions"
             >
               <button
@@ -681,6 +757,17 @@ function onToggleEditIds(): void {
                 @click="onToggleWatched"
               >
                 {{ items.item?.is_watched === 1 ? '✓ Просмотрено' : '👁 Просмотрено' }}
+              </button>
+              <button
+                type="button"
+                class="rounded-md px-3 py-2 text-xs font-medium border transition-colors"
+                :class="items.item?.is_ignored === 1
+                  ? 'bg-red-50 text-red-700 border-red-300 hover:bg-red-100'
+                  : 'bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200'"
+                data-testid="item-modal-ignore-toggle"
+                @click="onToggleIgnore"
+              >
+                {{ items.item?.is_ignored === 1 ? '↩ Вернуть' : '✕ В корзину' }}
               </button>
             </div>
             <p v-if="items.item?.is_watched === 1 && items.item?.watched_at" class="text-[10px] text-slate-400 italic mt-1">

@@ -199,21 +199,26 @@ async def lifespan(_app):
         logger.warning(f"[PROXY] shutdown stop_all skipped: {type(e).__name__}: {e}")
     config = load_config()
     graceful_timeout = config.get("shutdown", {}).get("graceful_timeout", 5)
+    any_running = False
     for key, proc in running_processes.items():
         if key in ("active_pipeline_proc", "active_pipeline_key"):
             continue
         if proc and proc.returncode is None:
+            any_running = True
             logger.info(f"[SHUTDOWN] Writing stop flag for: {key}")
             flag_path = os.path.join(settings.app_data_dir, f"stop_{key}.flag")
             with open(flag_path, "w") as f:
                 f.write("stop")
-    await asyncio.sleep(min(graceful_timeout, 2))
-    for key, proc in running_processes.items():
-        if key in ("active_pipeline_proc", "active_pipeline_key"):
-            continue
-        if proc and proc.returncode is None:
-            logger.info(f"[SHUTDOWN] Force terminating: {key}")
-            proc.terminate()
+
+    if any_running:
+        await asyncio.sleep(min(graceful_timeout, 2))
+        for key, proc in running_processes.items():
+            if key in ("active_pipeline_proc", "active_pipeline_key"):
+                continue
+            if proc and proc.returncode is None:
+                logger.info(f"[SHUTDOWN] Force terminating: {key}")
+                proc.terminate()
+
     task_queue.stop()
     set_main_loop(None)
 

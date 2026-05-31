@@ -1,4 +1,5 @@
 @echo off
+setlocal enabledelayedexpansion
 echo =======================================
 echo     Antigravity Git Auto-Pusher
 echo =======================================
@@ -15,9 +16,28 @@ echo.
 echo [2/4] Committing changes (git commit)...
 git commit -m "%msg%"
 
+if %ERRORLEVEL% neq 0 (
+    echo.
+    echo [!] Commit failed. Pre-commit hooks might have auto-fixed some files.
+    echo [!] Automatically adding changes and retrying commit...
+    git add .
+    git commit -m "%msg%"
+    if !ERRORLEVEL! neq 0 (
+        echo.
+        echo [ERROR] Commit failed again! Please fix the errors (e.g. failing tests) and try again.
+        pause
+        exit /b 1
+    )
+)
+
 echo.
 echo [3/4] Pushing to main repository (origin)...
 git push origin main
+if %ERRORLEVEL% neq 0 (
+    echo [ERROR] Failed to push to origin main.
+    pause
+    exit /b 1
+)
 
 echo.
 echo [4/4] Pushing to your fork (myfork)...

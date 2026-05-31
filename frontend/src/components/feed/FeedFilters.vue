@@ -10,9 +10,11 @@
 // fallback for Enter on number/date fields in browsers that don't
 // emit change events until blur.
 
-import { onBeforeUnmount, reactive, watch } from 'vue'
+import { onBeforeUnmount, reactive, watch, ref } from 'vue'
 import { useFeedStore } from '../../stores/feed'
 import { useCategoriesStore } from '../../stores/categories'
+
+const showAdvancedFilters = ref(false)
 
 const feed = useFeedStore()
 const categories = useCategoriesStore()
@@ -152,6 +154,19 @@ onBeforeUnmount(() => {
     data-testid="feed-filters"
     @submit.prevent="apply"
   >
+    <!-- Add CSS fix for range sliders so they only respond to thumb drag, not track clicks -->
+    <component is="style">
+      .drag-only-slider {
+        pointer-events: none;
+      }
+      .drag-only-slider::-webkit-slider-thumb {
+        pointer-events: auto;
+      }
+      .drag-only-slider::-moz-range-thumb {
+        pointer-events: auto;
+      }
+    </component>
+
     <div class="flex flex-wrap items-end gap-3">
       <label class="flex-1 min-w-[180px]">
         <span class="block text-xs font-medium uppercase tracking-wide text-slate-500">
@@ -217,7 +232,24 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <div class="mt-3 flex flex-wrap items-end gap-3 border-t border-slate-100 pt-3">
+    <!-- Mobile collapsible toggle -->
+    <div class="mt-3 flex sm:hidden border-t border-slate-100 pt-3">
+      <button
+        type="button"
+        class="flex w-full items-center justify-between text-[13px] font-semibold text-slate-600 hover:text-slate-900 focus:outline-none"
+        @click="showAdvancedFilters = !showAdvancedFilters"
+      >
+        <span>Настройки фильтров</span>
+        <svg class="w-4 h-4 transition-transform duration-200" :class="showAdvancedFilters ? 'rotate-180' : ''" viewBox="0 0 20 20" fill="currentColor">
+          <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
+        </svg>
+      </button>
+    </div>
+
+    <div
+      class="flex-wrap items-end gap-3 border-t border-slate-100 pt-3"
+      :class="showAdvancedFilters ? 'flex mt-3 sm:border-t-0 sm:pt-0' : 'hidden sm:flex mt-3'"
+    >
       <fieldset class="flex min-w-[220px] flex-1 flex-col gap-2">
         <legend class="flex items-center justify-between gap-3 text-xs font-medium uppercase tracking-wide text-slate-500">
           <span>Рейтинг КП</span>
@@ -232,7 +264,7 @@ onBeforeUnmount(() => {
             min="0"
             max="10"
             step="0.1"
-            class="w-full accent-slate-900"
+            class="w-full accent-slate-900 drag-only-slider"
             data-testid="feed-filters-min-kp"
             aria-label="Минимальный рейтинг КП"
           />
@@ -242,7 +274,7 @@ onBeforeUnmount(() => {
             min="0"
             max="10"
             step="0.1"
-            class="w-full accent-slate-900"
+            class="w-full accent-slate-900 drag-only-slider"
             data-testid="feed-filters-max-kp"
             aria-label="Максимальный рейтинг КП"
           />
@@ -262,7 +294,7 @@ onBeforeUnmount(() => {
             min="0"
             max="10"
             step="0.1"
-            class="w-full accent-slate-900"
+            class="w-full accent-slate-900 drag-only-slider"
             data-testid="feed-filters-min-imdb"
             aria-label="Минимальный рейтинг IMDB"
           />
@@ -272,7 +304,7 @@ onBeforeUnmount(() => {
             min="0"
             max="10"
             step="0.1"
-            class="w-full accent-slate-900"
+            class="w-full accent-slate-900 drag-only-slider"
             data-testid="feed-filters-max-imdb"
             aria-label="Максимальный рейтинг IMDB"
           />

@@ -273,14 +273,14 @@ export const useItemsStore = defineStore('items', {
       if (id === undefined) return false
       const ok = await this._post(`/api/ignore/${id}`, null, 'Игнор')
       if (ok) {
-        // Backend doesn't echo the new state, so reload to be safe.
-        await this.refresh()
-        // Bubble the flag flip to the feed list too — otherwise the
-        // dimmed/hidden visual on the card wouldn't update without
-        // a full feed refetch.
         const feed = useFeedStore()
-        const cached = feed.items.find((it) => it.id === id)
-        if (cached && this.item) cached.is_ignored = this.item.is_ignored
+        // Remove from current view immediately to reflect the change
+        feed.items = feed.items.filter((it) => it.id !== id)
+        feed.onItemRemoved()
+
+        // Close the modal since the item is no longer in the active view
+        this.close()
+        useToastStore().success('Статус "В корзине" изменен')
       }
       return ok
     },
