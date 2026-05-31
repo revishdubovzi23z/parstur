@@ -438,10 +438,10 @@ function onToggleEditIds(): void {
     >
       <!-- ── Header: two action buttons (left) · title · ✕ (right) ── -->
       <header
-        class="flex items-center gap-3 border-b border-slate-200 px-5 py-3"
+        class="flex flex-wrap sm:flex-nowrap items-center gap-x-3 gap-y-3 border-b border-slate-200 px-4 py-3 sm:px-5"
         data-testid="item-modal-header"
       >
-        <div class="flex flex-shrink-0 items-center gap-2">
+        <div class="flex flex-shrink-0 items-center gap-2 order-2 sm:order-1 w-full sm:w-auto overflow-x-auto pb-1 sm:pb-0 hide-scrollbar">
           <!-- Collections dropdown menu -->
           <div class="relative">
             <button
@@ -523,7 +523,7 @@ function onToggleEditIds(): void {
         </div>
         <h2
           id="item-modal-title"
-          class="flex-1 truncate text-center text-base font-semibold text-slate-900 sm:text-left"
+          class="flex-1 truncate text-left text-base font-semibold text-slate-900 order-1 sm:order-2"
           data-testid="item-modal-title"
         >
           {{ items.item?.title ?? '—' }}
@@ -533,7 +533,7 @@ function onToggleEditIds(): void {
         </h2>
         <button
           type="button"
-          class="rounded-md p-1 text-slate-500 hover:bg-rose-100 hover:text-rose-700"
+          class="rounded-md p-1 text-slate-500 hover:bg-rose-100 hover:text-rose-700 order-1 sm:order-3 shrink-0 ml-auto sm:ml-0"
           :aria-label="items.isIgnored ? 'Восстановить и закрыть' : 'Скрыть и закрыть'"
           data-testid="item-modal-close"
           :title="items.isIgnored ? 'Уже скрыто — нажмите чтобы вернуть и закрыть' : 'Скрыть и закрыть'"
