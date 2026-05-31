@@ -19,6 +19,7 @@ __pycache__/
 *.sqlite3
 *.sqlite-wal
 *.sqlite-shm
+*_dump.sql
 
 # Logs
 *.log

@@ -188,6 +188,12 @@ def score_candidate(
             title_matched = True
             break
 
+        # 4. Partial match against any piece of candidate title
+        if any(piece_norm in cp_norm or cp_norm in piece_norm for cp_norm in cand_pieces_norm):
+            score += SCORE_TITLE_PARTIAL
+            title_matched = True
+            break
+
     # If the title didn't match at all, we reject the candidate immediately
     # (unless it was an exact ID match, which is handled above).
     if not title_matched:
@@ -386,14 +392,31 @@ def run(
                     year=api_year,
                     limit=SEARCH_LIMIT,
                 )
-                if not results and api_year is not None:
-                    # Fallback search without a strict year parameter in case of a year mismatch on kino.pub
-                    results = client.search(
+
+                # Check if we found a good title match. If not, the strict year filter
+                # might be hiding the actual movie (e.g. if it has a different year on kino.pub)
+                has_strong_title_match = False
+                clean_q_norm = _normalise_title(clean_q)
+                for r in results:
+                    if not isinstance(r, dict):
+                        continue
+                    r_title = str(r.get("title") or "")
+                    r_title_norm = _normalise_title(r_title)
+                    r_pieces = [_normalise_title(p) for p in r_title.split("/") if p.strip()]
+                    if clean_q_norm == r_title_norm or any(clean_q_norm == p for p in r_pieces):
+                        has_strong_title_match = True
+                        break
+
+                if not has_strong_title_match and api_year is not None:
+                    # Fallback search without a strict year parameter
+                    fallback_results = client.search(
                         clean_q,
                         type_=None,
                         year=None,
                         limit=SEARCH_LIMIT,
                     )
+                    results.extend(fallback_results)
+
                 for entry in results:
                     if not isinstance(entry, dict) or entry.get("id") is None:
                         raw.append(entry)
