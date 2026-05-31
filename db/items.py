@@ -595,12 +595,17 @@ class DbItemsMixin:
             if hide_collected and not collection_id:
                 where_clauses.append("items.id NOT IN (SELECT item_id FROM collection_items)")
 
+            if min_kp > 0 or max_kp < 10:
+                where_clauses.append("items.kp_rating > 0")
             if min_kp > 0:
                 where_clauses.append("items.kp_rating >= ?")
                 params.append(min_kp)
             if max_kp < 10:
                 where_clauses.append("items.kp_rating <= ?")
                 params.append(max_kp)
+
+            if min_imdb > 0 or max_imdb < 10:
+                where_clauses.append("items.imdb_rating > 0")
             if min_imdb > 0:
                 where_clauses.append("items.imdb_rating >= ?")
                 params.append(min_imdb)
@@ -644,17 +649,13 @@ class DbItemsMixin:
             )
 
             if sort_by == "kp_desc":
-                where_clauses.append("items.kp_rating > 0")
-                order_by = "items.kp_rating DESC, latest_release DESC NULLS LAST"
+                order_by = "CASE WHEN items.kp_rating > 0 THEN 0 ELSE 1 END ASC, items.kp_rating DESC, latest_release DESC NULLS LAST"
             elif sort_by == "kp_asc":
-                where_clauses.append("items.kp_rating > 0")
-                order_by = "items.kp_rating ASC, latest_release DESC NULLS LAST"
+                order_by = "CASE WHEN items.kp_rating > 0 THEN 0 ELSE 1 END ASC, items.kp_rating ASC, latest_release DESC NULLS LAST"
             elif sort_by == "imdb_desc":
-                where_clauses.append("items.imdb_rating > 0")
-                order_by = "items.imdb_rating DESC, latest_release DESC NULLS LAST"
+                order_by = "CASE WHEN items.imdb_rating > 0 THEN 0 ELSE 1 END ASC, items.imdb_rating DESC, latest_release DESC NULLS LAST"
             elif sort_by == "imdb_asc":
-                where_clauses.append("items.imdb_rating > 0")
-                order_by = "items.imdb_rating ASC, latest_release DESC NULLS LAST"
+                order_by = "CASE WHEN items.imdb_rating > 0 THEN 0 ELSE 1 END ASC, items.imdb_rating ASC, latest_release DESC NULLS LAST"
 
             join = ""
             join_params: list = []
