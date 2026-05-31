@@ -39,6 +39,7 @@ export const RESETTABLE_FIELDS = [
   'poster_url',
   'description',
   'kinopub_id',
+  'title_norm',
 ] as const
 
 export type ResettableField = (typeof RESETTABLE_FIELDS)[number]
@@ -236,6 +237,7 @@ export const useItemsStore = defineStore('items', {
         kp_id?: string | null
         imdb_id?: string | null
         rezka_url?: string | null
+        title_norm?: string | null
       },
     ): Promise<boolean> {
       const id = this.item?.id
@@ -418,6 +420,48 @@ export const useItemsStore = defineStore('items', {
           feed.onItemRemoved()
         }
         useToastStore().success(nextWatched ? 'Отмечено как просмотренное' : 'Отмечено как непросмотренное')
+      }
+    },
+
+    async deleteItem(): Promise<boolean> {
+      const id = this.item?.id
+      if (id === undefined) return false
+      const session = useSessionStore()
+      if (!session.canCallApi) return false
+      this.actionError = null
+      const toast = useToastStore()
+      try {
+        const res = await apiFetch(`/api/item/${id}`, { method: 'DELETE' })
+        if (res.status === 404) {
+          this.actionError = `Удаление: item не найден`
+          toast.error(this.actionError)
+          return false
+        }
+        if (!res.ok) {
+          this.actionError = `Удаление: HTTP ${res.status}`
+          toast.error(this.actionError)
+          return false
+        }
+        const feed = useFeedStore()
+        // Remove from current view immediately to reflect the change
+        feed.items = feed.items.filter((it) => it.id !== id)
+        feed.onItemRemoved()
+
+        // Close the modal since the item is deleted
+        this.close()
+        toast.success('Карточка удалена')
+        return true
+      } catch (err) {
+        if (err instanceof UnauthorizedError) {
+          session.handleUnauthorized(err)
+          this.actionError = 'Требуется вход'
+          toast.error(this.actionError)
+          return false
+        }
+        const msg = err instanceof Error ? err.message : String(err)
+        this.actionError = `Удаление: ${msg}`
+        toast.error(this.actionError)
+        return false
       }
     },
   },

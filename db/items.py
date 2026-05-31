@@ -213,6 +213,7 @@ class DbItemsMixin:
             "kp_rating": "kp_rating = 0",
             "imdb_rating": "imdb_rating = 0",
             "kinopub_id": "kinopub_id = NULL, kinopub_url = NULL, kinopub_type = NULL, checked_kinopub = 0",
+            "title_norm": "title_norm = NULL",
         }
         updates = [field_map[f] for f in fields if f in field_map]
         if not updates:

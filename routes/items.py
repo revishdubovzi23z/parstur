@@ -21,6 +21,7 @@ class RebindRequest(BaseModel):
     kp_id: str | None = None
     imdb_id: str | None = None
     rezka_url: str | None = None
+    title_norm: str | None = None
 
 
 @router.get("/api/item/{item_id}")
@@ -108,7 +109,7 @@ def rebind_item(item_id: int, data: RebindRequest):
 
     with db._conn() as c:
         row = c.execute(
-            "SELECT kp_id, imdb_id, rezka_url FROM items WHERE id = ?",
+            "SELECT kp_id, imdb_id, rezka_url, title_norm FROM items WHERE id = ?",
             (item_id,),
         ).fetchone()
         if row is None:
@@ -117,6 +118,7 @@ def rebind_item(item_id: int, data: RebindRequest):
             "kp_id": row["kp_id"],
             "imdb_id": row["imdb_id"],
             "rezka_url": row["rezka_url"],
+            "title_norm": row["title_norm"],
         }
 
     after = {**before}
@@ -136,6 +138,10 @@ def rebind_item(item_id: int, data: RebindRequest):
         after["rezka_url"] = data.rezka_url.strip() or None
         sets.append("rezka_url = ?")
         params.append(after["rezka_url"])
+    if data.title_norm is not None:
+        after["title_norm"] = data.title_norm.strip() or None
+        sets.append("title_norm = ?")
+        params.append(after["title_norm"])
     if not sets:
         return {"status": "noop"}
     sets.extend(["is_metadata_fixed = 0", "is_reprocessed = 0"])
@@ -146,7 +152,7 @@ def rebind_item(item_id: int, data: RebindRequest):
     db.append_audit(
         action="rebind",
         item_id=item_id,
-        field="kp_id,imdb_id,rezka_url",
+        field="kp_id,imdb_id,rezka_url,title_norm",
         old_value=_json.dumps(before, ensure_ascii=False),
         new_value=_json.dumps(after, ensure_ascii=False),
     )
@@ -172,4 +178,13 @@ def rate_item_endpoint(item_id: int, data: RateRequest):
 @router.post("/api/item/{item_id}/watched")
 def mark_watched_endpoint(item_id: int, data: WatchedRequest):
     db.mark_watched(item_id, data.watched)
+    return {"status": "success"}
+
+
+@router.delete("/api/item/{item_id}")
+async def delete_item_endpoint(item_id: int):
+    db.delete_item(item_id)
+    from runtime.ws import ws_manager
+
+    await ws_manager.broadcast({"type": "item_deleted", "item_id": item_id})
     return {"status": "success"}

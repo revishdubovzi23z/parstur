@@ -29,6 +29,7 @@ export interface FeedItem {
   category_id: number
   poster_url: string | null
   description: string | null
+  title_norm?: string | null
   kp_rating: number | null
   imdb_rating: number | null
   kp_id: string | null

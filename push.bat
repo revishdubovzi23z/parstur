@@ -24,7 +24,7 @@ if %ERRORLEVEL% neq 0 (
     git commit -m "%msg%"
     if !ERRORLEVEL! neq 0 (
         echo.
-        echo [ERROR] Commit failed again! Please fix the errors (e.g. failing tests) and try again.
+        echo [ERROR] Commit failed again! Please fix the errors like failing tests and try again.
         pause
         exit /b 1
     )

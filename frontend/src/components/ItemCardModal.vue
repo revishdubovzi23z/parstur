@@ -86,6 +86,7 @@ function isCollectionMember(collectionId: number): boolean {
 const draftKp = ref('')
 const draftImdb = ref('')
 const draftRezka = ref('')
+const draftTitleNorm = ref('')
 const useFullRebind = ref(false)
 const resetSelection = ref<Record<ResettableField, boolean>>(
   Object.fromEntries(
@@ -98,6 +99,7 @@ function seedDraftsFromItem(): void {
   draftKp.value = it?.kp_id ?? ''
   draftImdb.value = it?.imdb_id ?? ''
   draftRezka.value = it?.rezka_url ?? ''
+  draftTitleNorm.value = it?.title_norm ?? ''
   useFullRebind.value = false
   for (const field of RESETTABLE_FIELDS) {
     resetSelection.value[field] = false
@@ -316,10 +318,12 @@ async function onRebind(): Promise<void> {
     kp_id?: string | null
     imdb_id?: string | null
     rezka_url?: string | null
+    title_norm?: string | null
   } = {}
   const trimmedKp = draftKp.value.trim()
   const trimmedImdb = draftImdb.value.trim()
   const trimmedRezka = draftRezka.value.trim()
+  const trimmedTitleNorm = draftTitleNorm.value.trim()
   if (trimmedKp !== (cur.kp_id ?? '')) {
     payload.kp_id = trimmedKp.length > 0 ? trimmedKp : null
   }
@@ -328,6 +332,9 @@ async function onRebind(): Promise<void> {
   }
   if (trimmedRezka !== (cur.rezka_url ?? '')) {
     payload.rezka_url = trimmedRezka.length > 0 ? trimmedRezka : null
+  }
+  if (trimmedTitleNorm !== (cur.title_norm ?? '')) {
+    payload.title_norm = trimmedTitleNorm.length > 0 ? trimmedTitleNorm : null
   }
   if (Object.keys(payload).length === 0) return
   await items.rebind(payload)
@@ -349,6 +356,12 @@ async function onResetSelected(): Promise<void> {
 
 async function onToggleIgnore(): Promise<void> {
   await items.toggleIgnore()
+}
+
+async function onDelete(): Promise<void> {
+  if (confirm('Вы уверены, что хотите полностью удалить карточку? Это действие нельзя отменить.')) {
+    await items.deleteItem()
+  }
 }
 
 async function onReprocess(): Promise<void> {
@@ -726,7 +739,7 @@ function onToggleEditIds(): void {
 
             <!-- 10.7g — primary playback actions, always visible -->
             <div
-              class="grid grid-cols-2 sm:grid-cols-4 gap-2"
+              class="grid grid-cols-2 sm:grid-cols-5 gap-2"
               data-testid="item-modal-play-actions"
             >
               <button
@@ -768,6 +781,15 @@ function onToggleEditIds(): void {
                 @click="onToggleIgnore"
               >
                 {{ items.item?.is_ignored === 1 ? '↩ Вернуть' : '✕ В корзину' }}
+              </button>
+              <button
+                type="button"
+                class="rounded-md bg-red-600 px-3 py-2 text-xs font-medium text-white hover:bg-red-700 transition-colors"
+                data-testid="item-modal-delete"
+                title="Полностью удалить карточку"
+                @click="onDelete"
+              >
+                🗑 Удалить
               </button>
             </div>
             <p v-if="items.item?.is_watched === 1 && items.item?.watched_at" class="text-[10px] text-slate-400 italic mt-1">
@@ -873,6 +895,16 @@ function onToggleEditIds(): void {
               type="text"
               class="mt-1 w-full rounded-md border border-slate-300 px-2 py-1 text-sm focus:border-indigo-500 focus:outline-none"
               data-testid="item-modal-input-rezka"
+            />
+          </label>
+          <label class="block">
+            <span class="block text-xs font-medium text-slate-500">Норм. название (title_norm)</span>
+            <input
+              v-model="draftTitleNorm"
+              type="text"
+              class="mt-1 w-full rounded-md border border-slate-300 px-2 py-1 text-sm focus:border-indigo-500 focus:outline-none"
+              data-testid="item-modal-input-title-norm"
+              placeholder="Для поиска по торрентам"
             />
           </label>
 
@@ -1105,6 +1137,7 @@ function onToggleEditIds(): void {
                   kp_rating: 'Рейтинг КП',
                   imdb_rating: 'Рейтинг IMDb',
                   kinopub_id: 'ID Kino.pub',
+                  title_norm: 'Норм. название',
                 } as Record<string, string>
               )[f] || f
             }}
